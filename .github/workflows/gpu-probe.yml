@@ -25,6 +25,12 @@ on:
           image's driver.
         type: string
         default: ""
+      tests:
+        description: >-
+          Build the compositor, run the self test on vkms and run the tests.
+          Off, the job only describes the driver and the devices.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -248,6 +254,21 @@ jobs:
             grep -v nvidia "$OUT/ldd-$name.txt" || true
           done
 
+      # The same loader and libraries of the image as above, with the
+      # manifest that names the EGL library: whether that library offers
+      # what the GLX one does.
+      - name: Describe the Vulkan driver, outside the dev shell, through its EGL library
+        id: vulkan-system-egl
+        continue-on-error: true
+        run: |
+          manifest="$RUNNER_TEMP/nvidia/nvidia_icd_egl.json"
+          if ! [ -f "$manifest" ]; then
+            echo "the manifest that names the EGL library was not written" >&2
+            exit 1
+          fi
+          VK_DRIVER_FILES="$manifest" tools/gpu-report.sh "$OUT/system-egl"
+          cat "$OUT/system-egl/vulkan-summary.md"
+
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
 
       # From the nixpkgs that flake.lock pins.
@@ -261,81 +282,164 @@ jobs:
       - name: Fetch the dev shell
         run: nix develop .#ci --command true
 
-      - name: Describe the Vulkan driver, inside the dev shell, through its EGL library
+      # Libraries that the driver may open besides its own (libdrm, libgbm,
+      # the Wayland client), and the X11 libraries that its GLX library
+      # needs. They come from the nixpkgs that flake.lock pins, so no library
+      # of the system other than the driver's is loaded. `^out` is the output
+      # with the libraries; without it, nix builds the outputs a package
+      # installs, which for some leave out `out`.
+      - name: Fetch the libraries of nixpkgs that the driver may need
+        id: nix-libraries
+        continue-on-error: true
+        run: |
+          paths=()
+          while IFS= read -r path; do
+            paths+=("$path/lib")
+          done < <(nix build --inputs-from . --no-link --print-out-paths \
+            'nixpkgs#libdrm^out' 'nixpkgs#libgbm^out' 'nixpkgs#libx11^out' \
+            'nixpkgs#libxext^out' 'nixpkgs#wayland^out')
+          # The status of nix build is lost in the substitution above.
+          if [ "${#paths[@]}" -ne 5 ]; then
+            echo "nix build gave ${#paths[@]} paths, not 5" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/nvidia"
+          (IFS=:; echo "${paths[*]}") > "$RUNNER_TEMP/nvidia/nix-libraries"
+          cat "$RUNNER_TEMP/nvidia/nix-libraries"
+
+      # What the three steps below share. Each sets LD_LIBRARY_PATH and
+      # VK_DRIVER_FILES for one way to reach the driver, then calls
+      # `describe WAY`: the report of tools/gpu-report.sh in $OUT/WAY, and
+      # the names of the libraries that the dynamic linker was asked for
+      # while vulkaninfo ran (the full output of LD_DEBUG is too large to
+      # keep). It fails when the loader found no device.
+      - name: Write how a way to reach the driver is described
+        run: |
+          mkdir -p "$RUNNER_TEMP/nvidia"
+          cat > "$RUNNER_TEMP/nvidia/describe.sh" << 'EOF'
+          libraries_searched() { # way
+            local log
+            log="$(mktemp "$RUNNER_TEMP/ld-debug-XXXXXX")"
+            LD_DEBUG=libs vulkaninfo --summary > /dev/null 2> "$log"
+            grep -o 'find library=[^ ]*' "$log" | sed 's/^find library=//' | sort -u \
+              > "$OUT/$1/libraries-searched.txt"
+            rm -f "$log"
+          }
+          describe() { # way
+            # The loader then says why a driver could not be loaded.
+            VK_LOADER_DEBUG=error,warn tools/gpu-report.sh "$OUT/$1"
+            cat "$OUT/$1/vulkan-summary.md"
+            libraries_searched "$1" || echo "the libraries searched for were not all recorded"
+            # The report is written even when no device was found.
+            grep -q '^GPU[0-9]*:$' "$OUT/$1/vulkaninfo.txt"
+          }
+          EOF
+
+      # The libraries of the driver only, and the manifest that names its
+      # EGL library.
+      - name: Describe the Vulkan driver, inside the dev shell (egl)
         id: vulkan-egl
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: |
           export LD_LIBRARY_PATH="$RUNNER_TEMP/nvidia/lib"
           export VK_DRIVER_FILES="$RUNNER_TEMP/nvidia/nvidia_icd_egl.json"
-          # The loader then says why a driver could not be loaded.
-          export VK_LOADER_DEBUG=error,warn
-          tools/gpu-report.sh "$OUT/devshell-egl"
-          cat "$OUT/devshell-egl/vulkan-summary.md"
-          # The report is written even when no device was found.
-          grep -q '^GPU[0-9]*:$' "$OUT/devshell-egl/vulkaninfo.txt"
+          source "$RUNNER_TEMP/nvidia/describe.sh"
+          describe egl
 
-      # The X11 libraries come from the nixpkgs that flake.lock pins, so no
-      # library of the system other than the driver's is loaded.
-      - name: Describe the Vulkan driver, inside the dev shell, through its GLX library
-        id: vulkan-glx
+      # The same, with the libraries of nixpkgs.
+      - name: Describe the Vulkan driver, inside the dev shell (egl-nix)
+        id: vulkan-egl-nix
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: |
-          x11=""
-          while IFS= read -r path; do
-            x11="$x11:$path/lib"
-          done < <(nix build --inputs-from . --no-link --print-out-paths nixpkgs#libxext nixpkgs#libx11)
-          echo "$x11" > "$RUNNER_TEMP/nvidia/x11-path"
-          export LD_LIBRARY_PATH="$RUNNER_TEMP/nvidia/lib$x11"
-          export VK_DRIVER_FILES="$NVIDIA_ICD"
-          export VK_LOADER_DEBUG=error,warn
-          tools/gpu-report.sh "$OUT/devshell-glx"
-          cat "$OUT/devshell-glx/vulkan-summary.md"
-          grep -q '^GPU[0-9]*:$' "$OUT/devshell-glx/vulkaninfo.txt"
+          nix_libraries="$(cat "$RUNNER_TEMP/nvidia/nix-libraries")"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/nvidia/lib:$nix_libraries"
+          export VK_DRIVER_FILES="$RUNNER_TEMP/nvidia/nvidia_icd_egl.json"
+          source "$RUNNER_TEMP/nvidia/describe.sh"
+          describe egl-nix
 
-      # The steps below use the driver the way that worked, the EGL library
-      # first. Variables that are set outside the dev shell do not reach it
-      # (it drops LD_LIBRARY_PATH and sets VK_DRIVER_FILES when it starts),
-      # so they are written to a file that those steps read.
+      # The driver's own manifest, which names its GLX library, with the
+      # libraries of nixpkgs.
+      - name: Describe the Vulkan driver, inside the dev shell (glx-nix)
+        id: vulkan-glx-nix
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          nix_libraries="$(cat "$RUNNER_TEMP/nvidia/nix-libraries")"
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/nvidia/lib:$nix_libraries"
+          export VK_DRIVER_FILES="${NVIDIA_ICD:?the manifest of the NVIDIA driver was not found}"
+          source "$RUNNER_TEMP/nvidia/describe.sh"
+          describe glx-nix
+
+      # Of the ways that found a device, in the order egl, egl-nix, glx-nix,
+      # the first that offers dma-bufs, or else the first. Variables that
+      # are set outside the dev shell do not reach it (it drops
+      # LD_LIBRARY_PATH and sets VK_DRIVER_FILES when it starts), so the
+      # settings of the way are written to a file that the steps below read.
       - name: Choose how the dev shell reaches the driver
         id: reach
         env:
           EGL: ${{ steps.vulkan-egl.outcome }}
-          GLX: ${{ steps.vulkan-glx.outcome }}
+          EGL_NIX: ${{ steps.vulkan-egl-nix.outcome }}
+          GLX_NIX: ${{ steps.vulkan-glx-nix.outcome }}
         run: |
-          settings="$RUNNER_TEMP/nvidia/settings.sh"
-          if [ "$EGL" = success ]; then
-            way=egl
+          way=""
+          dmabuf=false
+          first=""
+          for candidate in egl egl-nix glx-nix; do
+            case "$candidate" in
+              egl) outcome="$EGL" ;;
+              egl-nix) outcome="$EGL_NIX" ;;
+              glx-nix) outcome="$GLX_NIX" ;;
+            esac
+            [ "$outcome" = success ] || continue
+            first="${first:-$candidate}"
+            if grep -qE '^[[:space:]]+VK_EXT_external_memory_dma_buf[[:space:]]+: extension revision' \
+              "$OUT/$candidate/vulkaninfo.txt"; then
+              way="$candidate"
+              dmabuf=true
+              break
+            fi
+          done
+          way="${way:-$first}"
+
+          libraries="$RUNNER_TEMP/nvidia/lib"
+          case "$way" in
+            egl-nix | glx-nix) libraries="$libraries:$(cat "$RUNNER_TEMP/nvidia/nix-libraries")" ;;
+          esac
+          manifest="$RUNNER_TEMP/nvidia/nvidia_icd_egl.json"
+          if [ "$way" = glx-nix ]; then
+            manifest="$NVIDIA_ICD"
+          fi
+          if [ -n "$way" ]; then
             {
-              echo "export LD_LIBRARY_PATH='$RUNNER_TEMP/nvidia/lib'"
-              echo "export VK_DRIVER_FILES='$RUNNER_TEMP/nvidia/nvidia_icd_egl.json'"
-            } > "$settings"
-          elif [ "$GLX" = success ]; then
-            way=glx
-            {
-              echo "export LD_LIBRARY_PATH='$RUNNER_TEMP/nvidia/lib$(cat "$RUNNER_TEMP/nvidia/x11-path")'"
-              echo "export VK_DRIVER_FILES='$NVIDIA_ICD'"
-            } > "$settings"
+              echo "export LD_LIBRARY_PATH='$libraries'"
+              echo "export VK_DRIVER_FILES='$manifest'"
+            } > "$RUNNER_TEMP/nvidia/settings.sh"
+            cat "$RUNNER_TEMP/nvidia/settings.sh"
           else
-            way=""
             echo "the dev shell cannot reach the NVIDIA driver; the steps that need it are skipped"
           fi
-          echo "way=$way" >> "$GITHUB_OUTPUT"
-          echo "way: ${way:-none}"
+          {
+            echo "way=$way"
+            echo "dmabuf=$dmabuf"
+          } >> "$GITHUB_OUTPUT"
+          echo "way: ${way:-none}, dma-bufs: $dmabuf"
 
       # With the profile of the tests, so that the tests below reuse what is
-      # built here.
+      # built here. This step and those up to the tests run only when the
+      # input `tests` is on.
       - name: Build the compositor
         id: build
-        if: steps.reach.outputs.way != ''
+        if: inputs.tests && steps.reach.outputs.way != ''
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: cargo build --profile test -p hizukuri
 
       - name: Describe the KMS devices
         id: kms-info
-        if: steps.reach.outputs.way != ''
+        if: inputs.tests && steps.reach.outputs.way != ''
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: |
@@ -347,7 +451,7 @@ jobs:
       # into dumb buffers.
       - name: Self test on vkms, CPU copy
         id: selftest-vkms-cpu
-        if: steps.reach.outputs.way != ''
+        if: inputs.tests && steps.reach.outputs.way != ''
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: |
@@ -368,7 +472,7 @@ jobs:
       # The same, with the GPU's images handed to vkms as dma-bufs.
       - name: Self test on vkms, dma-buf
         id: selftest-vkms-dmabuf
-        if: steps.reach.outputs.way != ''
+        if: inputs.tests && steps.reach.outputs.way != ''
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: |
@@ -389,7 +493,7 @@ jobs:
       # As in the CI workflow: the tests that always run on lavapipe export
       # dma-bufs through /dev/udmabuf.
       - name: Make /dev/udmabuf usable, or leave its tests out
-        if: steps.reach.outputs.way != ''
+        if: inputs.tests && steps.reach.outputs.way != ''
         run: |
           if [ -e /dev/udmabuf ]; then
             sudo chmod a+rw /dev/udmabuf || true
@@ -401,21 +505,35 @@ jobs:
           echo "HIZUKURI_TEST_SKIP_UDMABUF=1" >> "$GITHUB_ENV"
           echo "::warning title=dma-buf tests left out::This runner has no usable /dev/udmabuf, so the tests that need it were left out."
 
+      # Through cargo-nextest, not tools/ci.sh: under cargo test, a test that
+      # stops responding uses up the time of the job, and nothing after it
+      # is learned. nextest ends a test that runs longer than the limit
+      # below and goes on with the others. The check of tools/ci.sh for
+      # processes that the tests left running is therefore not made here.
       - name: Run the tests on the GPU
         id: tests
-        if: steps.reach.outputs.way != ''
+        if: inputs.tests && steps.reach.outputs.way != ''
         continue-on-error: true
         shell: nix develop .#ci --command bash -euo pipefail {0}
         env:
           HIZUKURI_TEST_DEVICES: gpu
         run: |
           source "$RUNNER_TEMP/nvidia/settings.sh"
-          tools/ci.sh test 2>&1 | tee "$OUT/tests.log"
+          # A test is ended after 5 periods of 60 seconds.
+          cat > "$RUNNER_TEMP/nextest.toml" << 'EOF'
+          [profile.default]
+          slow-timeout = { period = "60s", terminate-after = 5 }
+          fail-fast = false
+          EOF
+          cargo nextest run --workspace --no-fail-fast --config-file "$RUNNER_TEMP/nextest.toml" 2>&1 \
+            | tee "$OUT/tests.log"
 
       - name: Summary
         if: always()
         env:
+          TESTS_INPUT: ${{ inputs.tests }}
           WAY: ${{ steps.reach.outputs.way }}
+          DMABUF: ${{ steps.reach.outputs.dmabuf }}
           MACHINE: ${{ steps.machine.outcome }}
           IMAGE_DRIVER: ${{ steps.image-driver.outcome }}
           REPLACE_DRIVER: ${{ steps.replace-driver.outcome }}
@@ -424,9 +542,13 @@ jobs:
           NODES: ${{ steps.nodes.outcome }}
           VULKAN_SYSTEM: ${{ steps.vulkan-system.outcome }}
           GATHER: ${{ steps.gather.outcome }}
+          VULKAN_SYSTEM_EGL: ${{ steps.vulkan-system-egl.outcome }}
           DRM_INFO: ${{ steps.drm-info.outcome }}
+          NIX_LIBRARIES: ${{ steps.nix-libraries.outcome }}
           VULKAN_EGL: ${{ steps.vulkan-egl.outcome }}
-          VULKAN_GLX: ${{ steps.vulkan-glx.outcome }}
+          VULKAN_EGL_NIX: ${{ steps.vulkan-egl-nix.outcome }}
+          VULKAN_GLX_NIX: ${{ steps.vulkan-glx-nix.outcome }}
+          REACH: ${{ steps.reach.outcome }}
           BUILD: ${{ steps.build.outcome }}
           KMS_INFO: ${{ steps.kms-info.outcome }}
           SELFTEST_VKMS_CPU: ${{ steps.selftest-vkms-cpu.outcome }}
@@ -439,13 +561,18 @@ jobs:
             echo "#### $1"
             echo
             echo '```'
-            tail -n "$3" "$2"
+            # Without the escape sequences of colored output.
+            tail -n "$3" "$2" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g'
             echo '```'
           }
           {
             echo "### GPU probe: NVIDIA (g4dn.xlarge)"
             echo
             echo "The dev shell reaches the driver through: ${WAY:-nothing that was tried}"
+            echo
+            echo "That way offers dma-bufs (VK_EXT_external_memory_dma_buf): ${DMABUF:-false}"
+            echo
+            echo "Build, self test and tests asked for: $TESTS_INPUT"
             echo
             echo "| step | outcome |"
             echo "| --- | --- |"
@@ -457,9 +584,13 @@ jobs:
             echo "| Make the DRM nodes usable | $NODES |"
             echo "| Describe the Vulkan driver, outside the dev shell | $VULKAN_SYSTEM |"
             echo "| Gather the libraries of the NVIDIA driver | $GATHER |"
+            echo "| Describe the Vulkan driver, outside the dev shell, through its EGL library | $VULKAN_SYSTEM_EGL |"
             echo "| Describe the KMS devices with drm_info | $DRM_INFO |"
-            echo "| Describe the Vulkan driver, inside the dev shell, through its EGL library | $VULKAN_EGL |"
-            echo "| Describe the Vulkan driver, inside the dev shell, through its GLX library | $VULKAN_GLX |"
+            echo "| Fetch the libraries of nixpkgs that the driver may need | $NIX_LIBRARIES |"
+            echo "| Describe the Vulkan driver, inside the dev shell (egl) | $VULKAN_EGL |"
+            echo "| Describe the Vulkan driver, inside the dev shell (egl-nix) | $VULKAN_EGL_NIX |"
+            echo "| Describe the Vulkan driver, inside the dev shell (glx-nix) | $VULKAN_GLX_NIX |"
+            echo "| Choose how the dev shell reaches the driver | $REACH |"
             echo "| Build the compositor | $BUILD |"
             echo "| Describe the KMS devices | $KMS_INFO |"
             echo "| Self test on vkms, CPU copy | $SELFTEST_VKMS_CPU |"
@@ -476,7 +607,7 @@ jobs:
             block "NVIDIA driver" "$OUT/nvidia-driver.txt" 30
             block "The end of the installer's log" "$OUT/nvidia-installer.log" 20
             block "DRM nodes" "$OUT/dri-nodes.txt" 20
-            for name in system devshell-egl devshell-glx; do
+            for name in system system-egl egl egl-nix glx-nix; do
               if [ -s "$OUT/$name/vulkan-summary.md" ]; then
                 echo
                 echo "#### Vulkan: $name"
@@ -484,12 +615,26 @@ jobs:
                 cat "$OUT/$name/vulkan-summary.md"
               fi
             done
+            # What the dynamic linker was asked for, inside the dev shell.
+            for name in egl egl-nix glx-nix; do
+              if [ -s "$OUT/$name/libraries-searched.txt" ]; then
+                echo
+                echo "<details><summary>Libraries searched for: $name</summary>"
+                echo
+                echo '```'
+                cat "$OUT/$name/libraries-searched.txt"
+                echo '```'
+                echo
+                echo "</details>"
+              fi
+            done
             block "kms-info --summary" "$OUT/kms-info-summary.txt" 30
             for name in selftest-vkms-cpu selftest-vkms-dmabuf; do
               block "$name: summary.txt" "$OUT/$name/summary.txt" 40
               [ -s "$OUT/$name/summary.txt" ] || block "$name: the end of the log" "$OUT/$name.log" 15
             done
-            block "The end of the tests' output" "$OUT/tests.log" 40
+            # nextest ends with the passed, failed and timed out tests.
+            block "The end of the tests' output" "$OUT/tests.log" 60
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Everything that was written, and the screenshots and logs of the

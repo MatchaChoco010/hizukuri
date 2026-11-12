@@ -215,22 +215,37 @@ workflow は、3 つある。
 - runner は、[RunsOn](https://runs-on.com) が、ジョブごとに起動して、終わると消す、AWS のインスタンスである。
   ジョブの `runs-on` のラベルで、インスタンスの種類、image、ディスクの大きさを指定している。秘密の値は、使わない。
 - ジョブは、`nvidia` の 1 つである。インスタンスは `g4dn.xlarge`（NVIDIA T4）、image は `ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている）。
-- 入力の `nvidia_driver` に、NVIDIA のドライバーの版（`download.nvidia.com` にあるもの）を入れると、image のドライバーを、その版に入れ替えてから調べる。
-  空なら、image のドライバーのまま調べる。
+- 入力は、2 つある。
+
+  | 入力 | 既定 | 内容 |
+  | --- | --- | --- |
+  | `nvidia_driver` | 空 | NVIDIA のドライバーの版（`download.nvidia.com` にあるもの）。入れると、image のドライバーを、その版に入れ替えてから調べる。空なら、image のドライバーのまま調べる |
+  | `tests` | `true` | compositor のビルド、vkms での自己診断、テストを回す。`false` なら、ドライバーとデバイスを調べるだけで、ジョブは、短く終わる |
+
 - キャッシュは、使わない。step ごとの時間が、何も無い状態から始めた機械での時間になる。
 - 準備のうち、システムを変えるもの（パッケージの導入、ドライバーの入れ替え、kernel の module の読み込み、`/dev/dri/` のノードの権限）は、
   workflow の step が行う。インスタンスは、そのジョブのためだけにある。`tools/gpu-report.sh` は、システムを変えない。
 
 devShell は、NVIDIA のドライバーを持たない。ドライバーは、インスタンスの kernel の module と、版が合っている必要がある。
 そこで、インスタンスに入っている NVIDIA のライブラリだけを、1 つのディレクトリに集め、devShell の中で、`LD_LIBRARY_PATH` をそこに向ける。
-ドライバーの manifest は GLX のライブラリ（`libGLX_nvidia.so.0`）を指していて、これは X11 のライブラリを要る。次の 2 通りを、順に試す。
+ドライバーの manifest は GLX のライブラリ（`libGLX_nvidia.so.0`）を指していて、これは X11 のライブラリを要る。
+ドライバーは、動いているあいだに、自分のもののほかのライブラリ（`libdrm`、`libgbm` など）を開くこともある。devShell の中では、次の 3 通りを試す。
 
 | 方法 | `VK_DRIVER_FILES` | 足すライブラリ |
 | --- | --- | --- |
-| EGL | ドライバーの manifest の、ライブラリの名前を `libEGL_nvidia.so.0` に替えたもの | なし |
-| GLX | ドライバーの manifest | `flake.lock` の nixpkgs の `libxext` と `libx11` |
+| `egl` | ドライバーの manifest の、ライブラリの名前を `libEGL_nvidia.so.0` に替えたもの | なし |
+| `egl-nix` | `egl` と同じ | `flake.lock` の nixpkgs の `libdrm`、`libgbm`、`libx11`、`libxext`、`wayland` |
+| `glx-nix` | ドライバーの manifest | `egl-nix` と同じ |
 
-どちらかで、Vulkan のデバイスが見えたら、その方法で、後の step（ビルド、自己診断、テスト）を回す。見えなければ、それらの step は、飛ばす。
+- 足すライブラリは、`flake.lock` の nixpkgs から取る。ドライバーのほかに、システムのライブラリを読み込まないためである。
+- 方法ごとに、`tools/gpu-report.sh` の報告と、`vulkaninfo` を動かしたときに、dynamic linker が探したライブラリの名前（`LD_DEBUG=libs` から取ったもの）を残す。
+- 後の step で使う方法は、Vulkan のデバイスが見えた方法のうち、上の表の順で、`VK_EXT_external_memory_dma_buf` がある最初のものである。
+  どれにも無ければ、デバイスが見えた最初のものを使う。どれでも見えなければ、ビルド、自己診断、テストの step は、飛ばす。
+- 比べるために、image の loader とライブラリのまま、`libEGL_nvidia.so.0` を指す manifest でも、`tools/gpu-report.sh` を走らせる。
+
+テストは、`tools/ci.sh test` ではなく、cargo-nextest で回す。テストごとに、時間の上限がある（60 秒を 5 回、つまり 5 分）。
+`cargo test` では、応答しなくなったテストが 1 つあると、ジョブの時間を使い切って、その後のテストの結果が得られない。
+nextest は、上限を超えたテストを終わらせて、残りのテストを続ける。そのため、`tools/ci.sh` が行う、テストが残したプロセスの検査は、ここでは行わない。
 
 | step | 内容 |
 | --- | --- |
@@ -238,10 +253,17 @@ devShell は、NVIDIA のドライバーを持たない。ドライバーは、�
 | Replace the NVIDIA driver | 入力の `nvidia_driver` があるときだけ。古いドライバーを外し、NVIDIA の installer で、指定の版を入れる |
 | Load vkms | 仮想の KMS のドライバー（vkms）を読み込む |
 | Describe the Vulkan driver, outside the dev shell | image の loader と `vulkaninfo` で、`tools/gpu-report.sh` |
-| Describe the Vulkan driver, inside the dev shell | 上の 2 通りの方法で、それぞれ、`tools/gpu-report.sh` |
-| Describe the KMS devices | `drm_info` と、`hizukuri kms-info --summary`、`kms-info --anonymize` |
+| Gather the libraries of the NVIDIA driver | ドライバーのライブラリを 1 つのディレクトリに集め、`libEGL_nvidia.so.0` を指す manifest を書く |
+| Describe the Vulkan driver, outside the dev shell, through its EGL library | image の loader で、`libEGL_nvidia.so.0` を指す manifest を使って、`tools/gpu-report.sh` |
+| Describe the KMS devices with drm_info | `flake.lock` の nixpkgs の `drm_info` |
+| Fetch the libraries of nixpkgs that the driver may need | 上の表の、足すライブラリを取ってくる |
+| Describe the Vulkan driver, inside the dev shell | 上の 3 通りの方法で、それぞれ、`tools/gpu-report.sh` と、探したライブラリの一覧 |
+| Choose how the dev shell reaches the driver | 後の step で使う方法を選ぶ |
+| Build the compositor | 入力の `tests` が `true` のときだけ（以下、テストまで同じ）。テストのプロファイルで、`hizukuri` をビルドする |
+| Describe the KMS devices | `hizukuri kms-info --summary`、`kms-info --anonymize` |
 | Self test on vkms | GPU で描いて、vkms に出す `hizukuri kms-selftest`。`--scanout cpu` と `--scanout dmabuf` の 2 回。seat は、libseat の `noop` を使う |
-| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test` |
+| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`cargo nextest run --workspace` |
+| Summary | step ごとの結果、選んだ方法と、それが dma-buf を扱えるか、方法ごとの Vulkan の報告、探したライブラリ、テストの出力の終わりを、ジョブの要約に書く |
 
 ### 共通のこと
 
