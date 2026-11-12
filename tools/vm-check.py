@@ -1766,23 +1766,38 @@ def check_script(out, uid, results):
             raise Failed("the wider gap does not show the background")
         if clients() != len(apps):
             raise Failed("an application went away over the reload")
-        # A mistake in the file: the session stays usable, and fixing the
-        # file brings the script back.
+        # A syntax error in a module: the reload is refused before the
+        # running script goes. The script stays in charge with the gap it
+        # had, and the failure names the file.
+        before = script_state()
         guest(f"echo 'this is not luau (' >> {project}/tile.luau")
         vm("key", "ctrl-alt-shift-r")
-        time.sleep(1.5)
-        broken = script_state()
-        if not part.unit_active() or len(state()["windows"]) != len(apps):
-            raise Failed("the compositor did not survive a script with a syntax error")
+        broken = wait_for("the refused reload to be recorded", lambda: (lambda sc: sc if
+                          sc["failures"] > before["failures"] else None)(script_state()),
+                          seconds=8)
+        last = broken["last_failures"][-1]
+        if (last["what"], last["kind"]) != ("load", "syntax") or \
+                "tile.luau" not in last["message"]:
+            raise Failed(f"the syntax error was recorded as {last}")
+        if broken["mode"] != "running" or broken["reloads"] != before["reloads"]:
+            raise Failed(f"a module with a syntax error replaced the running script: mode "
+                         f"{broken['mode']}, reloads {before['reloads']} to "
+                         f"{broken['reloads']}")
+        if not part.unit_active() or clients() != len(apps) or not tiled(40):
+            raise Failed("the running script did not stay in charge over the syntax error")
+        if pixels([(20, 1)])[0][0] >= 200:
+            raise Failed("the fallback's marker is on screen after the syntax error")
+        # Fixed: the reload goes through.
         guest(f"sed -i '$d' {project}/tile.luau && "
               f"sed -i 's/^T.gap = 40$/T.gap = 8/' {project}/tile.luau")
         vm("key", "ctrl-alt-shift-r")
-        wait_for("the script after the fix", lambda: script_state()["mode"] == "running",
-                 seconds=8)
+        wait_for("the script after the fix", lambda: (lambda sc: sc["mode"] == "running" and
+                 sc["reloads"] > before["reloads"])(script_state()), seconds=8)
         wait_for("the tiles with the old gap", lambda: tiled(8), seconds=10)
         return (f"edited tile.luau in the guest (gap 8 to 40), Ctrl+Alt+Shift+R: tiles at "
                 f"{[w['position'][0] for w in windows]}, applications kept; a syntax error "
-                f"left the session usable (mode {broken['mode']}); fixed and reloaded")
+                f"in tile.luau was refused and the running script stayed (mode "
+                f"{broken['mode']}, {last['message']}); fixed and reloaded")
 
     def vt_switch():
         points = [(3, 400), (200, 400), (640, 400), (1064, 400)]

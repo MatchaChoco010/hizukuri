@@ -71,14 +71,18 @@ const BUILTIN: &[(&str, &str)] = &[
     ("tile", include_str!("../../scripts/tile.luau")),
 ];
 
+/// Whether `name` can name a module (`hz.include(name)`).
+fn is_module_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 impl Project {
     /// The source of a module of the project.
     pub fn read(&self, name: &str) -> Result<String, String> {
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
+        if !is_module_name(name) {
             return Err(format!("invalid module name {name:?}"));
         }
         match self {
@@ -92,6 +96,41 @@ impl Project {
                 std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
             }
         }
+    }
+
+    /// The names of every module the project has: `main` first, then the
+    /// others in order of name. For a directory, these are the files
+    /// `hz.include` can read from it (`NAME.luau` right in the directory,
+    /// with `NAME` a module name), whether `main` includes them or not.
+    /// Modules a directory does not have come from the built-in project.
+    pub fn modules(&self) -> Result<Vec<String>, String> {
+        let mut names: Vec<String> = match self {
+            Project::Builtin => BUILTIN.iter().map(|(n, _)| (*n).to_owned()).collect(),
+            Project::Dir(dir) => {
+                let entries =
+                    std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+                let mut names = Vec::new();
+                for entry in entries {
+                    let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+                    if path.extension().is_none_or(|e| e != "luau") || !path.is_file() {
+                        continue;
+                    }
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str())
+                        && is_module_name(name)
+                    {
+                        names.push(name.to_owned());
+                    }
+                }
+                names
+            }
+        };
+        names.sort_by(|a, b| (a != "main", a).cmp(&(b != "main", b)));
+        if names.first().is_none_or(|n| n != "main") {
+            // Reading it says what is wrong (a missing or unreadable file).
+            self.read("main")?;
+            names.insert(0, "main".to_owned());
+        }
+        Ok(names)
     }
 
     fn describe(&self) -> String {
@@ -414,29 +453,36 @@ impl ScriptRuntime {
         Ok(())
     }
 
+    /// Compiles every module of `project` without running any of them.
+    /// Fails with the first one that does not compile (`main` first). The
+    /// chunk names are the ones the modules get when they are loaded, so
+    /// that the error names the file.
+    fn compile(&self, project: &Project) -> Result<(), ScriptError> {
+        for name in project.modules().map_err(ScriptError::Runtime)? {
+            let source = project.read(&name).map_err(ScriptError::Runtime)?;
+            self.host.run(None, |lua| {
+                lua.load(source.as_str())
+                    .set_name(format!("{name}.luau"))
+                    .into_function()
+                    .map(|_| ())
+            })?;
+        }
+        Ok(())
+    }
+
     /// Replaces the running script with a fresh load of the project (or of
     /// `project`, when given): the script's state and GPU objects are
     /// dropped, the windows and their textures stay. Returns to
     /// [`Mode::Running`] when the new script loads.
     pub fn reload(&self, project: Option<Project>) -> Result<(), String> {
         // A script that does not even compile never replaces the one that
-        // runs. (Only `main` can be checked this way: its modules are read
-        // when it runs.)
+        // runs. Every module of the project is checked, not only the ones
+        // `main` includes: which ones it includes is known only by running
+        // it.
         let candidate = project
             .clone()
             .unwrap_or_else(|| self.shared.borrow().project.clone());
-        let checked = candidate
-            .read("main")
-            .map_err(ScriptError::Runtime)
-            .and_then(|source| {
-                self.host.run(None, |lua| {
-                    lua.load(source.as_str())
-                        .set_name("main.luau")
-                        .into_function()
-                        .map(|_| ())
-                })
-            });
-        if let Err(error) = checked {
+        if let Err(error) = self.compile(&candidate) {
             self.record("load", &error);
             return Err(format!(
                 "the script does not compile; the running one was kept: {error}"
