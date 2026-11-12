@@ -21,8 +21,8 @@ use hizukuri_color::{
 };
 use hizukuri_render::{
     Background, DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_XRGB8888, DeviceKind, DeviceSelector, Element,
-    Frame, OutputFormat, PixelFormat, Rect, Renderer, RendererOptions, TargetDesc, TargetId,
-    TextureDesc, TextureId, find_icd_manifest,
+    Frame, OutputFormat, PixelFormat, Rect, RenderError, Renderer, RendererOptions, TargetDesc,
+    TargetId, TextureDesc, TextureId, find_icd_manifest,
 };
 
 const SPACE: CompositeSpace = CompositeSpace::BT2020_LINEAR;
@@ -858,11 +858,13 @@ fn bgra_target_and_readback_into_strided_memory(renderer: &mut Renderer) {
 /// A scanout target is a dma-buf that someone else (KMS) reads. Map the
 /// dma-buf like that someone would and check that the frame is in it.
 fn scanout_target_exports_a_dmabuf_with_the_frame(renderer: &mut Renderer) {
+    // The modifiers depend on the driver: lavapipe offers linear memory,
+    // other drivers may offer only their own tiled layouts. The test uses
+    // whatever the renderer says it can export.
+    let offered = renderer.scanout_modifiers();
     let supported = renderer.supports_scanout_export();
-    println!(
-        "scanout export: supported={supported} modifiers={:x?}",
-        renderer.scanout_modifiers()
-    );
+    assert_eq!(supported, !offered.is_empty());
+    println!("scanout export: supported={supported} modifiers={offered:x?}");
     let desc = TargetDesc {
         width: 64,
         height: 32,
@@ -870,39 +872,54 @@ fn scanout_target_exports_a_dmabuf_with_the_frame(renderer: &mut Renderer) {
         image_description: ImageDescription::SRGB_GAMMA22,
         composite_space: SPACE,
     };
-    if !supported {
-        // The CPU copy path is what such a device gets (lavapipe).
+    // Consumers that take none of the modifiers the device offers: one with
+    // a modifier no driver has, and one with linear memory where the device
+    // does not offer it.
+    let foreign = 0x00ff_ffff_ffff_fffe_u64;
+    assert!(!offered.contains(&foreign));
+    for allowed in [&[foreign][..], &[DRM_FORMAT_MOD_LINEAR][..]] {
+        if allowed.iter().any(|m| offered.contains(m)) {
+            continue;
+        }
         assert!(
-            renderer
-                .create_scanout_target(&desc, &[DRM_FORMAT_MOD_LINEAR])
-                .is_err()
+            matches!(
+                renderer.create_scanout_target(&desc, allowed),
+                Err(RenderError::ScanoutUnsupported)
+            ),
+            "a scanout target with modifiers {allowed:x?}, none of them offered"
         );
+    }
+    if !supported {
+        // The CPU copy path is what such a device gets.
         return;
     }
-    // A consumer that takes none of the modifiers the device offers.
-    assert!(
-        renderer
-            .create_scanout_target(&desc, &[0x1234_5678_9abc])
-            .is_err()
-    );
     // Scanout targets are XRGB8888 only.
-    assert!(
-        renderer
-            .create_scanout_target(
-                &TargetDesc {
-                    format: OutputFormat::Rgba8Unorm,
-                    ..desc
-                },
-                &[DRM_FORMAT_MOD_LINEAR]
-            )
-            .is_err()
-    );
+    assert!(matches!(
+        renderer.create_scanout_target(
+            &TargetDesc {
+                format: OutputFormat::Rgba8Unorm,
+                ..desc
+            },
+            &offered
+        ),
+        Err(RenderError::UnsupportedFormat(_))
+    ));
+    // Each offered modifier on its own: a consumer may take only some.
+    for &modifier in &offered {
+        let (out, plane) = renderer
+            .create_scanout_target(&desc, &[modifier])
+            .unwrap_or_else(|e| panic!("a scanout target with modifier {modifier:#x}: {e}"));
+        assert_eq!(plane.modifier, modifier);
+        renderer.destroy_target(out);
+    }
 
-    let (out, plane) = renderer
-        .create_scanout_target(&desc, &[DRM_FORMAT_MOD_LINEAR])
-        .unwrap();
+    let (out, plane) = renderer.create_scanout_target(&desc, &offered).unwrap();
     assert_eq!(plane.fourcc, DRM_FORMAT_XRGB8888);
-    assert_eq!(plane.modifier, DRM_FORMAT_MOD_LINEAR);
+    assert!(
+        offered.contains(&plane.modifier),
+        "modifier {:#x}",
+        plane.modifier
+    );
     assert_eq!((plane.width, plane.height), (64, 32));
     assert!(plane.stride >= 64 * 4);
     println!(
@@ -945,9 +962,19 @@ fn scanout_target_exports_a_dmabuf_with_the_frame(renderer: &mut Renderer) {
         assert!(code_difference(image.pixel(inside.0, inside.1), [10, 128, 240]) <= 3);
         assert!(code_difference(image.pixel(outside.0, outside.1), [128, 128, 128]) <= 1);
 
-        // ...is what is in the dma-buf. Whether a dma-buf can be mapped
-        // is up to the driver that allocated it: lavapipe allows it,
-        // amdgpu refuses (EPERM). Where it can be, compare.
+        // ...is what is in the dma-buf. Only linear memory can be read
+        // row by row; a tiled layout is the driver's own. Whether a dma-buf
+        // can be mapped is up to the driver that allocated it: lavapipe
+        // allows it, amdgpu refuses (EPERM). Where it can be, compare.
+        if plane.modifier != DRM_FORMAT_MOD_LINEAR {
+            if frame == 0 {
+                println!(
+                    "scanout export: modifier {:#x} is not linear; contents checked through readback only",
+                    plane.modifier
+                );
+            }
+            continue;
+        }
         let length = plane.offset as usize + plane.stride as usize * 32;
         // SAFETY: maps the dma-buf read-only for its used length; the GPU
         // is idle because render() waits for it.

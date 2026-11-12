@@ -363,8 +363,8 @@ pub struct Displayed {
     pub format: Fourcc,
     pub modifier: u64,
     /// Tightly packed rows of 4 bytes per pixel (B, G, R, X for XRGB8888).
-    /// `None` when the memory cannot be read (a dma-buf that cannot be
-    /// mapped).
+    /// `None` when the memory cannot be read: a dma-buf that cannot be
+    /// mapped, or one with a modifier other than linear.
     pub pixels: Option<Vec<u8>>,
 }
 
@@ -596,11 +596,13 @@ impl MockDevice {
         };
         let pixels = match &fb.memory {
             FramebufferMemory::Dumb(handle) => state.dumbs.get(handle).map(|d| pack(&d.data)),
+            // Only linear memory is rows of pixels; a tiled layout is the
+            // driver's own. Without modifier support the memory is linear.
             FramebufferMemory::Dmabuf {
                 mapping: Some(mapping),
                 offset,
                 ..
-            } => {
+            } if fb.modifier == MODIFIER_LINEAR || fb.modifier == MODIFIER_INVALID => {
                 // SAFETY: the mapping covers `length` bytes and lives as
                 // long as the framebuffer; the exporter is idle while a
                 // test looks at the screen.
@@ -609,7 +611,7 @@ impl MockDevice {
                 };
                 Some(pack(&bytes[*offset..]))
             }
-            FramebufferMemory::Dmabuf { mapping: None, .. } | FramebufferMemory::Foreign => None,
+            FramebufferMemory::Dmabuf { .. } | FramebufferMemory::Foreign => None,
         };
         Some(Displayed {
             framebuffer: id,
@@ -1691,9 +1693,23 @@ mod tests {
                 CommitFlags::MODESET,
             )
             .unwrap();
-        // A memfd can be mapped, so the mock can show its contents.
-        assert!(device.displayed(pipeline.crtc).unwrap().pixels.is_some());
+        // The memory of a modifier other than linear is laid out the
+        // driver's way, so the mock does not show it as pixels.
         assert_eq!(device.displayed(pipeline.crtc).unwrap().modifier, 0x77);
+        assert!(device.displayed(pipeline.crtc).unwrap().pixels.is_none());
+        // A memfd can be mapped, so the mock can show linear contents.
+        let linear = device
+            .add_dmabuf_framebuffer(&descriptor(MODIFIER_LINEAR))
+            .unwrap();
+        device
+            .commit(
+                &modeset_request(&pipeline, linear, blob),
+                CommitFlags::MODESET,
+            )
+            .unwrap();
+        let displayed = device.displayed(pipeline.crtc).unwrap();
+        assert_eq!(displayed.modifier, MODIFIER_LINEAR);
+        assert!(displayed.pixels.is_some());
     }
 
     #[test]
