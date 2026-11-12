@@ -57,7 +57,7 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | 機器と入力を調べる道具 | `drm_info`、`libinput`、`evtest`、`wayland-utils`、`wev` |
 | そのほか | `gdb`、`strace`、`rsync`、`vim`、validation layer、Python（libevdev と python-xlib つき）、等幅のフォント、カーソルのテーマ |
 | session | logind と polkit。seatd も入っている（自動では起動しない。`tty-run --seatd` が起動する） |
-| 補助のスクリプト | `tools/vm/guest/` のもの（`tty-run`、`hzk`、`vkms-load`、`freeze-main-loop`、`uinput-touchpad.py`、`x11-test-client.py`）。ゲストの PATH にある |
+| 補助のスクリプト | `tools/vm/guest/` のもの（`tty-run`、`hzk`、`vkms-load`、`freeze-main-loop`、`uinput-touchpad.py`、`uinput-touchscreen.py`、`x11-test-client.py`）。ゲストの PATH にある |
 
 `x11-test-client.py` は、X11 の検証用のクライアントである。1 色で塗ったウィンドウ（色は X server が塗る）を出し、受け取ったイベントを
 1 行 1 つの JSON で書く。名前付きパイプ（`--commands`）から、命令を受ける: メニュー（override-redirect のウィンドウ）を開く、
@@ -194,13 +194,16 @@ display manager や、コンソールのログインと、同じ形である。
 | 方法 | 作れる入力 | 経路 |
 | --- | --- | --- |
 | QMP（`vm key`、`vm move` など） | キー、絶対座標のポインター、相対移動、ボタン、ホイール | 仮想のハードウェア → kernel → libinput。実際の機器と、同じ経路 |
-| uinput（ゲストの `uinput-touchpad.py`） | タッチパッドの swipe、指でのスクロール、pinch。書き換えれば、任意の機器 | ゲストの中で、仮想の機器を作る |
+| uinput（ゲストの `uinput-touchpad.py`） | タッチパッドの swipe（右へ）、指でのスクロール、pinch、hold。書き換えれば、任意の機器 | ゲストの中で、仮想の機器を作る |
+| uinput（ゲストの `uinput-touchscreen.py`） | タッチスクリーンの、複数の指の down、motion、up。手順を引数で渡す（`down:0:0.2:0.25 frame move:0:0.3:0.25 frame up:0 frame`。座標は画面の割合） | 同じ。kernel の multitouch の protocol B で送り、`INPUT_PROP_DIRECT` を持つので、udev がタッチスクリーンと分類する |
 | `libinput record` と `libinput replay` | 記録しておいた入力の再生 | `replay` が、uinput で同じ機器を作って、イベントを流す |
 
 - 絶対座標は、同じ座標を続けて送っても、イベントが出ない（kernel が捨てる）。一度、別の場所へ動かす。
 - 相対移動には、libinput の加速がかかる。
 - `libinput record` は、既定で、キーの code を伏せる。本当の code を記録するには、`--show-keycodes` を付ける。
 - uinput の機器を作るには、ゲストの中で root が要る（`sudo uinput-touchpad.py`）。
+- `uinput-touchscreen.py --go FILE` は、機器を作った後、`FILE` ができるまで待ってから、手順を始める
+  （クライアントの準備を待つため）。どちらの道具も、最後の手順の 0.5 秒後に、機器を消して終わる。
 - uinput の機器は、後から増える。compositor の側は、hotplug で受ける。
 
 ## 検証用の compositor を VM で動かす
@@ -262,6 +265,7 @@ X11 のアプリも動く。`hzk` は、compositor を `--xwayland-satellite` �
 | logo+H、logo+L | 左、右のウィンドウへ、focus を移す | スクリプト（`tile.luau`） |
 | logo+shift+H、logo+shift+L | focus のあるウィンドウを、隣と入れ替える | スクリプト |
 | logo+Q | focus のあるウィンドウを閉じる | スクリプト |
+| タッチパッドの 3 本指の swipe（右、左） | 右、左のウィンドウへ、focus を移す（アプリには届かない） | スクリプト |
 | Ctrl+Alt+Shift+R | スクリプトを読み直す | コア |
 | Ctrl+Alt+Shift+F | スクリプトを外して、組み込みの fallback にする（上の縁に、帯が出る） | コア |
 | Ctrl+Alt+Backspace、Ctrl+Alt+F2 | 終了、コンソールの切り替え | コア |
@@ -429,8 +433,8 @@ GPU は、要らない。数分で終わる。
 
 | 部 | 内容 | VM の構成 |
 | --- | --- | --- |
-| `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、色のプロトコル（wayland-info、vkcube、検証用のクライアント）、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
-| `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーの割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、1920x1080 で 4 つのアプリを動かしたときのフレームの時間（`apps-1080p`。描くだけのプロジェクトで配置は fallback のものと、組み込みのプロジェクトでタイルに並べたものの 2 つ）、`hzk script` | 既定 |
+| `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、uinput の仮想のタッチスクリーンとタッチパッドからのタッチとジェスチャー、色のプロトコル（wayland-info、vkcube、検証用のクライアント）、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
+| `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーとタッチパッドの 3 本指の swipe の割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、1920x1080 で 4 つのアプリを動かしたときのフレームの時間（`apps-1080p`。描くだけのプロジェクトで配置は fallback のものと、組み込みのプロジェクトでタイルに並べたものの 2 つ）、`hzk script` | 既定 |
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
 | `outputs` | 2 つの出力。使う出力の指定、ほかの出力に触れないこと、hotplug | 既定 |
@@ -542,7 +546,9 @@ CI の全体は、[テストと CI](testing-and-ci.md)にある。
 | VM の外で起動するときの安全策 | CPU の `hypervisor` フラグを隠した構成 | `real-hardware` |
 | 実際の IME での日本語の入力、候補ウィンドウの位置 | fcitx5（Anthy）、foot、QMP のキー | `ime` |
 | libseat の seatd のバックエンド | `tty-run --seatd` | 試験は、未実装 |
-| ジェスチャー、タッチパッド、入力の機器の抜き差し | uinput（`uinput-touchpad.py`）、`libinput replay` | 試験は、未実装 |
+| libinput でのタッチスクリーンのタッチ、タッチスクリーンの抜き差し（seat の capability） | uinput（`uinput-touchscreen.py`） | `lavapipe` |
+| libinput でのタッチパッドのジェスチャー（swipe、pinch、hold） | uinput（`uinput-touchpad.py`） | `lavapipe`、`script` |
+| `libinput replay` での、実機の入力の記録の再生 | `libinput record`、`libinput replay` | 試験は、未実装 |
 | vkms が表示した画素の値 | vkms の writeback | 試験は、未実装 |
 | overlay plane と cursor plane への割り当て、16 bit の framebuffer、`GAMMA_LUT`、plane の color pipeline | vkms | 試験は、未実装 |
 

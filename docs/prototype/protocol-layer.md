@@ -307,7 +307,7 @@ text-input-v3（アプリ）、input-method-v2（IME）、virtual-keyboard-v1（
 
 | 口 | 内容 |
 | --- | --- |
-| `set_touch_available` | seat の capability に touch を出す、取り下げる。中核は、タッチスクリーンがある間だけ出す（クライアントは、touch の capability を、利用者が画面に触れられることの印として扱う） |
+| `set_touch_available` | seat の capability に touch を出す、取り下げる。中核は、タッチスクリーンがある間だけ出す。取り下げると、触れている指は忘れる |
 | `touch_down` | 指が、表面の中の座標に触れた（表面が無い所なら `None`）。`slot` は、離れるまで、その指の名前である |
 | `touch_motion` | 指が動いた。座標は、触れた表面の座標である |
 | `touch_up`、`touch_frame`、`touch_cancel` | 指が離れた。同時に起きたタッチの区切り（`wl_touch.frame`）。進行中のすべてのタッチを取り消す（`wl_touch.cancel`） |
