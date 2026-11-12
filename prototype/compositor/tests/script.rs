@@ -47,6 +47,7 @@ device_tests!(
     a_script_is_reloaded_while_windows_stay_open,
     a_module_that_does_not_compile_is_not_taken,
     the_script_decides_when_the_pointer_is_held,
+    colors_set_through_the_protocol_are_drawn,
 );
 
 // ---------------------------------------------------------------------------
@@ -387,6 +388,198 @@ fn a_mixed_scene_matches_the_cpu_reference(device: Device) {
             "{label}: cursor"
         );
     }
+}
+
+/// Waits for the answer to image description `index`; panics if it failed.
+fn ready(session: &mut Session, client: &mut TestClient, index: usize) {
+    let answered = |client: &TestClient| {
+        client.events().iter().find_map(|e| match e {
+            ClientEvent::ImageDescriptionReady { index: i, .. } if *i == index => Some(Ok(())),
+            ClientEvent::ImageDescriptionFailed {
+                index: i, message, ..
+            } if *i == index => Some(Err(message.clone())),
+            _ => None,
+        })
+    };
+    let deadline = std::time::Instant::now() + common::TIMEOUT;
+    while answered(client).is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no answer for {index}"
+        );
+        session.wait(&mut [client], "a pump", |_| true);
+    }
+    if let Some(Err(message)) = answered(client) {
+        panic!("image description {index} failed: {message}");
+    }
+}
+
+/// Image descriptions set through color-management-v1 reach the pixels:
+/// a surface described through the protocol is drawn like one described
+/// through the control interface with the same description, and both like
+/// the CPU reference of `proto-color`. Where the control interface has no
+/// preset for it (HLG, BT.1886, the Windows scRGB encoding, a power
+/// function with luminances of its own), against the reference alone.
+fn colors_set_through_the_protocol_are_drawn(device: Device) {
+    const TF_BT1886: u32 = 1;
+    const TF_EXT_LINEAR: u32 = 5;
+    const TF_PQ: u32 = 11;
+    const TF_HLG: u32 = 13;
+    const TF_COMPOUND_POWER_2_4: u32 = 14;
+    const PRIMARIES_SRGB: u32 = 1;
+    const PRIMARIES_BT2020: u32 = 6;
+    const PRIMARIES_DISPLAY_P3: u32 = 9;
+
+    let mut session = Session::start("protocol-colors", device, &["--output-size", "256x128"]);
+    let color = [180u8, 120, 60, 255];
+    let protocol_options = ClientOptions {
+        color_manager_version: Some(3),
+        ..options("protocol", 80, 60, color)
+    };
+    let (mut protocol, _) = session.mapped_client(protocol_options);
+    let (mut control, _) = session.mapped_client(options("control", 80, 60, color));
+    move_window(&mut session, &mut protocol, "protocol", 20, 30);
+    move_window(&mut session, &mut control, "control", 140, 30);
+    let control_surface = window(&session.state(), "control").unwrap()["surface"]
+        .as_u64()
+        .unwrap();
+    protocol
+        .create_color_surface(proto_test_client::ColorTarget::Window)
+        .unwrap();
+
+    use proto_color::{Luminance, TransferFunction};
+    use proto_test_client::CreatorStep as S;
+    let windows_scrgb = ImageDescription {
+        primaries: Primaries::SRGB,
+        transfer: TransferFunction::Linear,
+        luminance: Luminance {
+            min: 0.0,
+            max: 80.0,
+            reference: 203.0,
+        },
+        mastering: None,
+    };
+    let adobe = [
+        640000, 330000, 210000, 710000, 150000, 60000, 312700, 329000,
+    ];
+    let custom = ImageDescription {
+        primaries: Primaries::ADOBE_RGB,
+        transfer: TransferFunction::Power(1.8),
+        luminance: Luminance {
+            min: 0.0,
+            max: 200.0,
+            reference: 100.0,
+        },
+        mastering: None,
+    };
+    // (label, how the protocol client makes it, the control preset, what
+    // it is).
+    type Steps = Option<Vec<proto_test_client::CreatorStep>>;
+    let cases: Vec<(&str, Steps, Option<&str>, ImageDescription)> = vec![
+        (
+            "display-p3",
+            Some(vec![
+                S::TfNamed(TF_COMPOUND_POWER_2_4),
+                S::PrimariesNamed(PRIMARIES_DISPLAY_P3),
+            ]),
+            Some("display-p3"),
+            ImageDescription::DISPLAY_P3,
+        ),
+        (
+            "bt2020-pq",
+            Some(vec![S::TfNamed(TF_PQ), S::PrimariesNamed(PRIMARIES_BT2020)]),
+            Some("bt2020-pq"),
+            ImageDescription::BT2020_PQ,
+        ),
+        (
+            "linear-bt709",
+            Some(vec![
+                S::TfNamed(TF_EXT_LINEAR),
+                S::PrimariesNamed(PRIMARIES_SRGB),
+            ]),
+            Some("scrgb-linear"),
+            ImageDescription::SCRGB_LINEAR,
+        ),
+        ("windows-scrgb", None, None, windows_scrgb),
+        (
+            "hlg",
+            Some(vec![
+                S::TfNamed(TF_HLG),
+                S::PrimariesNamed(PRIMARIES_BT2020),
+            ]),
+            None,
+            ImageDescription::new(Primaries::BT2020, TransferFunction::Hlg),
+        ),
+        (
+            "bt1886",
+            Some(vec![
+                S::TfNamed(TF_BT1886),
+                S::PrimariesNamed(PRIMARIES_SRGB),
+            ]),
+            None,
+            ImageDescription::new(Primaries::SRGB, TransferFunction::Bt1886),
+        ),
+        (
+            "power-1.8-adobe",
+            Some(vec![
+                S::TfPower(18000),
+                S::Primaries(adobe),
+                S::Luminances(0, 200, 100),
+            ]),
+            None,
+            custom,
+        ),
+    ];
+    let space = CompositeSpace::default();
+    for (label, steps, preset, description) in cases {
+        let index = match steps {
+            Some(steps) => protocol.create_image_description(&steps).unwrap(),
+            None => protocol.create_windows_description(false).unwrap(),
+        };
+        ready(&mut session, &mut protocol, index);
+        protocol.set_image_description(index, 0).unwrap();
+        protocol.commit().unwrap();
+        let pipeline =
+            DecodeTransform::describe(&description, AlphaMode::PremultipliedElectrical, &space);
+        session.wait(&mut [&mut protocol], "the description applied", |s| {
+            let surface = &window(s, "protocol").unwrap()["surfaces"][0];
+            surface["color_source"] == "protocol" && surface["decode_pipeline"] == pipeline
+        });
+        if let Some(preset) = preset {
+            session.send(Request::SetSurfaceColor {
+                surface: control_surface,
+                image_description: preset.into(),
+                alpha_mode: None,
+            });
+        }
+        let (encoded, composite) = session.screenshot(label);
+        let expected =
+            DecodeTransform::new(&description, AlphaMode::PremultipliedElectrical, &space)
+                .unwrap()
+                .apply(color.map(|v| v as f32 / 255.0));
+        let actual = composite.pixel(60, 60);
+        for i in 0..4 {
+            assert!(
+                (actual[i] - expected[i]).abs() <= 2e-5 + expected[i].abs() * 2e-3,
+                "{label}: the compositing buffer holds {actual:?}, expected {expected:?}"
+            );
+        }
+        if preset.is_some() {
+            let (p, c) = (composite.pixel(60, 60), composite.pixel(180, 60));
+            for i in 0..4 {
+                assert!(
+                    (p[i] - c[i]).abs() <= 1e-3 * p[i].abs().max(1.0),
+                    "{label}: protocol {p:?}, control {c:?}"
+                );
+            }
+            let (p, c) = (encoded.pixel(60, 60), encoded.pixel(180, 60));
+            assert_eq!(p, c, "{label}: protocol and control encode differently");
+        }
+        println!("{label}: {actual:?}");
+    }
+    session.assert_script_healthy();
+    session.assert_drawing_clean();
+    session.quit();
 }
 
 /// The script decides which primaries it composites in. The compositing

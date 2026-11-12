@@ -21,6 +21,11 @@ impl Chromaticity {
     fn to_xyz(self) -> [f64; 3] {
         [self.x / self.y, 1.0, (1.0 - self.x - self.y) / self.y]
     }
+
+    /// XYZ with X + Y + Z = 1: a direction defined also for `y == 0`.
+    fn direction(self) -> [f64; 3] {
+        [self.x, self.y, 1.0 - self.x - self.y]
+    }
 }
 
 /// RGB primaries and white point of a color space.
@@ -65,13 +70,72 @@ impl Primaries {
         white: Chromaticity::D65,
     };
 
+    /// CIE standard illuminant C, the white of the two sets below that use
+    /// it (Rec. ITU-T H.273).
+    const ILLUMINANT_C: Chromaticity = Chromaticity::new(0.310, 0.316);
+
+    /// Rec. ITU-R BT.470-6 System M (`pal_m` in color-management-v1).
+    pub const PAL_M: Primaries = Primaries {
+        red: Chromaticity::new(0.67, 0.33),
+        green: Chromaticity::new(0.21, 0.71),
+        blue: Chromaticity::new(0.14, 0.08),
+        white: Primaries::ILLUMINANT_C,
+    };
+
+    /// Rec. ITU-R BT.601-7 625 (`pal`).
+    pub const PAL: Primaries = Primaries {
+        red: Chromaticity::new(0.64, 0.33),
+        green: Chromaticity::new(0.29, 0.60),
+        blue: Chromaticity::new(0.15, 0.06),
+        white: Chromaticity::D65,
+    };
+
+    /// Rec. ITU-R BT.601-7 525, SMPTE 170M (`ntsc`).
+    pub const NTSC: Primaries = Primaries {
+        red: Chromaticity::new(0.630, 0.340),
+        green: Chromaticity::new(0.310, 0.595),
+        blue: Chromaticity::new(0.155, 0.070),
+        white: Chromaticity::D65,
+    };
+
+    /// "Generic film" of Rec. ITU-T H.273 (`generic_film`).
+    pub const GENERIC_FILM: Primaries = Primaries {
+        red: Chromaticity::new(0.681, 0.319),
+        green: Chromaticity::new(0.243, 0.692),
+        blue: Chromaticity::new(0.145, 0.049),
+        white: Primaries::ILLUMINANT_C,
+    };
+
+    /// CIE 1931 XYZ as a set of primaries, SMPTE ST 428-1 (`cie1931_xyz`):
+    /// the values are X, Y and Z themselves, with the equal-energy white.
+    pub const CIE1931_XYZ: Primaries = Primaries {
+        red: Chromaticity::new(1.0, 0.0),
+        green: Chromaticity::new(0.0, 1.0),
+        blue: Chromaticity::new(0.0, 0.0),
+        white: Chromaticity::new(1.0 / 3.0, 1.0 / 3.0),
+    };
+
+    /// DCI-P3 with the theatrical white, SMPTE RP 431-2 (`dci_p3`).
+    pub const DCI_P3: Primaries = Primaries {
+        red: Chromaticity::new(0.680, 0.320),
+        green: Chromaticity::new(0.265, 0.690),
+        blue: Chromaticity::new(0.150, 0.060),
+        white: Chromaticity::new(0.314, 0.351),
+    };
+
     /// Named primaries known to this crate, with the names used on the
     /// command line and in state dumps.
-    pub const NAMED: [(&'static str, Primaries); 4] = [
+    pub const NAMED: [(&'static str, Primaries); 10] = [
         ("srgb", Primaries::SRGB),
         ("display-p3", Primaries::DISPLAY_P3),
         ("bt2020", Primaries::BT2020),
         ("adobe-rgb", Primaries::ADOBE_RGB),
+        ("pal-m", Primaries::PAL_M),
+        ("pal", Primaries::PAL),
+        ("ntsc", Primaries::NTSC),
+        ("generic-film", Primaries::GENERIC_FILM),
+        ("cie1931-xyz", Primaries::CIE1931_XYZ),
+        ("dci-p3", Primaries::DCI_P3),
     ];
 
     /// Returns the name of these primaries when they match a named set.
@@ -93,17 +157,21 @@ impl Primaries {
     /// (Y of the white point is 1).
     ///
     /// Returns `None` when the primaries are degenerate (collinear, or a
-    /// chromaticity with `y == 0`).
+    /// white with `y == 0`). A primary may have `y == 0` (it carries no
+    /// luminance, as X and Z of CIE 1931 XYZ).
     pub fn rgb_to_xyz(&self) -> Option<Mat3> {
-        if [self.red, self.green, self.blue, self.white]
-            .iter()
-            .any(|c| c.y == 0.0)
+        if self.white.y == 0.0
+            || [self.red, self.green, self.blue, self.white]
+                .iter()
+                .any(|c| !(c.x.is_finite() && c.y.is_finite()))
         {
             return None;
         }
-        let r = self.red.to_xyz();
-        let g = self.green.to_xyz();
-        let b = self.blue.to_xyz();
+        // The direction of each primary in XYZ; its length is solved for
+        // below, so it need not be normalized to Y = 1.
+        let r = self.red.direction();
+        let g = self.green.direction();
+        let b = self.blue.direction();
         let m = Mat3([[r[0], g[0], b[0]], [r[1], g[1], b[1]], [r[2], g[2], b[2]]]);
         let s = m.inverse()?.mul_vec(self.white.to_xyz());
         Some(m * Mat3::from_diagonal(s))
@@ -267,6 +335,38 @@ mod tests {
         assert_eq!(Primaries::from_name("nope"), None);
     }
 
+    // CIE 1931 XYZ as primaries: the values are XYZ already.
+    #[test]
+    fn cie1931_xyz_is_the_identity() {
+        let m = Primaries::CIE1931_XYZ.rgb_to_xyz().unwrap();
+        assert_mat_close(&m, Mat3::IDENTITY.0, 1e-12);
+    }
+
+    // SMPTE 240M derives its luma coefficients (0.212, 0.701, 0.087) from
+    // the same primaries and white as SMPTE 170M: the Y row of the matrix.
+    #[test]
+    fn ntsc_luminance_matches_smpte_240m() {
+        let m = Primaries::NTSC.rgb_to_xyz().unwrap();
+        for (actual, expected) in m.0[1].iter().zip([0.212, 0.701, 0.087]) {
+            assert!((actual - expected).abs() < 5e-4, "{:?}", m.0[1]);
+        }
+    }
+
+    // SMPTE RP 431-2: the RGB → XYZ matrix of DCI-P3 with its own white.
+    #[test]
+    fn dci_p3_to_xyz_matches_rp431() {
+        let m = Primaries::DCI_P3.rgb_to_xyz().unwrap();
+        assert_mat_close(
+            &m,
+            [
+                [0.4452, 0.2771, 0.1723],
+                [0.2095, 0.7216, 0.0689],
+                [0.0000, 0.0471, 0.9074],
+            ],
+            1e-4,
+        );
+    }
+
     #[test]
     fn degenerate_primaries_are_rejected() {
         let p = Primaries {
@@ -274,6 +374,11 @@ mod tests {
             green: Chromaticity::new(0.3, 0.3),
             blue: Chromaticity::new(0.3, 0.3),
             white: Chromaticity::D65,
+        };
+        assert!(p.rgb_to_xyz().is_none());
+        let p = Primaries {
+            white: Chromaticity::new(0.3, 0.0),
+            ..Primaries::SRGB
         };
         assert!(p.rgb_to_xyz().is_none());
     }

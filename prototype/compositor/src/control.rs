@@ -93,12 +93,20 @@ pub enum Request {
         opacity: f32,
     },
     /// Overrides what the values of a surface mean, by preset name
-    /// (e.g. `display-p3`). A stand-in for the color protocols.
+    /// (e.g. `display-p3`). Wins over what the client says through
+    /// color-management-v1. For tests.
     SetSurfaceColor {
         surface: u64,
         image_description: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alpha_mode: Option<String>,
+    },
+    /// Changes the image description an output is driven with, by preset
+    /// name. Clients are told through color-management-v1. Only the
+    /// headless backend can.
+    SetOutputImageDescription {
+        output: String,
+        image_description: String,
     },
     /// Calls a global function of the running script with JSON arguments
     /// and returns what it returns. Not with `--no-drawing`.

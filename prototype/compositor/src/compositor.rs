@@ -380,6 +380,7 @@ impl<B: Backend> Compositor<B> {
             refresh_mhz: info.refresh_mhz as i32,
             scale: info.scale,
             position: info.position,
+            image_description: info.image_description,
         }
     }
 
@@ -1124,6 +1125,25 @@ impl<B: Backend> Compositor<B> {
                 self.schedule_redraw();
                 Ok(json!({}))
             }
+            Request::SetOutputImageDescription {
+                output,
+                image_description,
+            } => {
+                let description = ImageDescription::from_name(image_description)
+                    .ok_or_else(|| format!("unknown image description {image_description:?}"))?;
+                let id = self
+                    .outputs
+                    .iter()
+                    .find(|o| &o.info.name == output)
+                    .map(|o| o.info.id)
+                    .ok_or_else(|| format!("unknown output {output:?}"))?;
+                // The backend reports the change (`OutputChanged`), which
+                // reaches clients and the scene like any other.
+                self.backend
+                    .set_output_image_description(id, description)
+                    .map_err(|e| e.to_string())?;
+                Ok(json!({}))
+            }
             Request::ScriptCall { function, args } => {
                 self.scene_control("script_call", json!({ "function": function, "args": args }))
             }
@@ -1253,6 +1273,11 @@ impl<B: Backend> Compositor<B> {
                             "generation": node.generation,
                             "has_contents": self.scene.has_contents(node.surface),
                             "image_description": describe_image(&node.image_description),
+                            "color_source": node.color_source.name(),
+                            "render_intent": match node.color_source {
+                                proto_wl::ColorSource::Protocol(intent) => Some(intent.name()),
+                                _ => None,
+                            },
                             "alpha_mode": node.alpha_mode.name(),
                             "decode_pipeline": DecodeTransform::describe(
                                 &node.image_description,
@@ -1395,5 +1420,12 @@ fn describe_image(description: &ImageDescription) -> Value {
             "max": description.luminance.max,
             "reference": description.luminance.reference,
         },
+        "mastering": description.mastering.map(|m| json!({
+            "primaries": describe_primaries(&m.primaries),
+            "min_luminance": m.min_luminance,
+            "max_luminance": m.max_luminance,
+            "max_cll": m.max_cll,
+            "max_fall": m.max_fall,
+        })),
     })
 }

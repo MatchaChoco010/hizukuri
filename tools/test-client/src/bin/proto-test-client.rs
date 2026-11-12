@@ -5,6 +5,8 @@
 //!                   [--color RRGGBBAA] [--layout argb8888] [--duration SECONDS]
 //!                   [--relative-pointer] [--lock-pointer | --confine-pointer]
 //!                   [--text-input X,Y,W,H] [--input-method echo] [--no-window]
+//!                   [--color-manager VERSION] [--image-description SPEC]
+//!                   [--color-info]
 //! ```
 //!
 //! Shows a solid window and prints every event it receives as one JSON
@@ -15,6 +17,13 @@
 //! falls back to `WAYLAND_DISPLAY`, so it cannot open a window on the
 //! desktop session by accident. `--color` gives the stored channel values
 //! (premultiplied, as `wl_shm` expects).
+//!
+//! `--image-description` says what the values mean, through
+//! color-management-v1: `windows-scrgb`, `windows-bt2100`, or
+//! `tf=NAME,primaries=NAME[,lum=MIN:MAX:REF]` with the protocol's names
+//! (`tf=st2084_pq,primaries=bt2020`; `tf=power:2.4` for a power function;
+//! luminances in cd/m²). `--color-info` reads the image descriptions of the
+//! outputs and the one preferred for the window.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -22,7 +31,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use proto_test_client::{
-    ClientOptions, ConstraintRequest, InputMethodMode, PixelLayout, TestClient,
+    ClientEvent, ClientOptions, ColorTarget, ConstraintRequest, CreatorStep, InputMethodMode,
+    PixelLayout, TestClient,
 };
 
 fn main() -> ExitCode {
@@ -35,6 +45,107 @@ fn main() -> ExitCode {
     }
 }
 
+/// How the window's image description is made.
+enum Description {
+    Windows { bt2100: bool },
+    Parametric(Vec<CreatorStep>),
+}
+
+const TRANSFER_FUNCTIONS: [(&str, u32); 8] = [
+    ("bt1886", 1),
+    ("gamma22", 2),
+    ("gamma28", 3),
+    ("ext_linear", 5),
+    ("srgb", 9),
+    ("st2084_pq", 11),
+    ("hlg", 13),
+    ("compound_power_2_4", 14),
+];
+
+const PRIMARIES: [(&str, u32); 10] = [
+    ("srgb", 1),
+    ("pal_m", 2),
+    ("pal", 3),
+    ("ntsc", 4),
+    ("generic_film", 5),
+    ("bt2020", 6),
+    ("cie1931_xyz", 7),
+    ("dci_p3", 8),
+    ("display_p3", 9),
+    ("adobe_rgb", 10),
+];
+
+fn parse_description(text: &str) -> Result<Description, String> {
+    match text {
+        "windows-scrgb" => return Ok(Description::Windows { bt2100: false }),
+        "windows-bt2100" => return Ok(Description::Windows { bt2100: true }),
+        _ => {}
+    }
+    let mut steps = Vec::new();
+    for part in text.split(',') {
+        let (key, value) = part
+            .split_once('=')
+            .ok_or(format!("invalid image description part {part:?}"))?;
+        let step = match key {
+            "tf" => match value.strip_prefix("power:") {
+                Some(exponent) => {
+                    let exponent: f64 = exponent
+                        .parse()
+                        .map_err(|_| format!("invalid exponent {exponent:?}"))?;
+                    CreatorStep::TfPower((exponent * 10000.0).round() as u32)
+                }
+                None => CreatorStep::TfNamed(
+                    TRANSFER_FUNCTIONS
+                        .iter()
+                        .find(|(n, _)| *n == value)
+                        .ok_or(format!("unknown transfer function {value:?}"))?
+                        .1,
+                ),
+            },
+            "primaries" => CreatorStep::PrimariesNamed(
+                PRIMARIES
+                    .iter()
+                    .find(|(n, _)| *n == value)
+                    .ok_or(format!("unknown primaries {value:?}"))?
+                    .1,
+            ),
+            "lum" => {
+                let values: Vec<f64> = value
+                    .split(':')
+                    .map(|v| v.parse().map_err(|_| format!("invalid luminance {v:?}")))
+                    .collect::<Result<_, _>>()?;
+                let [min, max, reference] = values[..] else {
+                    return Err(format!("lum wants MIN:MAX:REF, not {value:?}"));
+                };
+                CreatorStep::Luminances(
+                    (min * 10000.0).round() as u32,
+                    max.round() as u32,
+                    reference.round() as u32,
+                )
+            }
+            other => return Err(format!("unknown image description key {other:?}")),
+        };
+        steps.push(step);
+    }
+    Ok(Description::Parametric(steps))
+}
+
+/// Where the color management of the window stands.
+#[derive(Default)]
+struct ColorProgress {
+    /// The index of the window's image description, once made.
+    made: Option<usize>,
+    /// Whether it was set on the window.
+    set: bool,
+    /// Whether the feedback and the outputs' objects were made.
+    asked: bool,
+    /// Output names asked about.
+    outputs: Vec<String>,
+    /// Image descriptions whose information is wanted, and whether it was
+    /// asked for.
+    informed: Vec<(usize, bool)>,
+}
+
 fn run() -> Result<(), String> {
     let mut options = ClientOptions::default();
     let mut socket: Option<PathBuf> = None;
@@ -44,6 +155,8 @@ fn run() -> Result<(), String> {
     // exist.
     let mut relative = false;
     let mut constraint: Option<ConstraintRequest> = None;
+    let mut description: Option<Description> = None;
+    let mut color_info = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -100,18 +213,34 @@ fn run() -> Result<(), String> {
             "--relative-pointer" => relative = true,
             "--lock-pointer" => constraint = Some(ConstraintRequest::Lock),
             "--confine-pointer" => constraint = Some(ConstraintRequest::Confine),
+            "--color-manager" => {
+                let text = value("--color-manager")?;
+                options.color_manager_version = Some(
+                    text.parse()
+                        .map_err(|_| format!("invalid version {text:?}"))?,
+                );
+            }
+            "--image-description" => {
+                description = Some(parse_description(&value("--image-description")?)?);
+            }
+            "--color-info" => color_info = true,
             "--help" | "-h" => {
                 println!(
                     "usage: proto-test-client --socket PATH [--title T] [--app-id ID] \
                      [--size WxH] [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888] \
                      [--duration SECONDS] [--relative-pointer] [--lock-pointer | --confine-pointer] \
                      [--text-input X,Y,W,H] [--input-method echo] \
-                     [--no-window]"
+                     [--no-window] \
+                     [--color-manager VERSION] [--image-description SPEC] [--color-info]"
                 );
                 return Ok(());
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
+    }
+    if (description.is_some() || color_info) && options.color_manager_version.is_none() {
+        // The newest version this client knows.
+        options.color_manager_version = Some(3);
     }
 
     let socket =
@@ -120,6 +249,7 @@ fn run() -> Result<(), String> {
     let deadline = duration.map(|d| Instant::now() + d);
     let mut printed = 0;
     let mut printed_ime = 0;
+    let mut color = ColorProgress::default();
     let stdout = std::io::stdout();
     loop {
         client
@@ -135,6 +265,7 @@ fn run() -> Result<(), String> {
         {
             constraint = None;
         }
+        advance_color(&mut client, &mut color, description.as_ref(), color_info)?;
         let events = client.events();
         if printed < events.len() {
             let mut out = stdout.lock();
@@ -159,4 +290,93 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
     }
+}
+
+/// Takes the next steps of color management that are due.
+fn advance_color(
+    client: &mut TestClient,
+    color: &mut ColorProgress,
+    description: Option<&Description>,
+    info: bool,
+) -> Result<(), String> {
+    let error = |e: proto_test_client::ClientError| e.to_string();
+    if !client.is_drawn() || client.color_manager_version().is_none() {
+        return Ok(());
+    }
+    let advertised = client
+        .events()
+        .iter()
+        .any(|e| matches!(e, ClientEvent::ColorManagerSupport { .. }));
+    if !advertised {
+        return Ok(());
+    }
+    if let Some(wanted) = description {
+        if color.made.is_none() {
+            color.made = Some(match wanted {
+                Description::Windows { bt2100 } => {
+                    client.create_windows_description(*bt2100).map_err(error)?
+                }
+                Description::Parametric(steps) => {
+                    client.create_image_description(steps).map_err(error)?
+                }
+            });
+        }
+        if let Some(index) = color.made
+            && !color.set
+            && client.events().iter().any(
+                |e| matches!(e, ClientEvent::ImageDescriptionReady { index: i, .. } if *i == index),
+            )
+        {
+            client
+                .create_color_surface(ColorTarget::Window)
+                .map_err(error)?;
+            client.set_image_description(index, 0).map_err(error)?;
+            // Applied with the next buffer.
+            client.redraw_with(|_| {});
+            color.set = true;
+        }
+    }
+    if info {
+        if !color.asked {
+            client.create_color_feedback().map_err(error)?;
+            color.asked = true;
+        }
+        let names: Vec<String> = client
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                ClientEvent::Output { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        for name in names {
+            if !color.outputs.contains(&name) {
+                let output = client.create_color_output(&name).map_err(error)?;
+                let index = client.get_output_image_description(output).map_err(error)?;
+                color.informed.push((index, false));
+                color.outputs.push(name);
+            }
+        }
+        let preferred = client
+            .events()
+            .iter()
+            .filter(|e| matches!(e, ClientEvent::PreferredChanged { .. }))
+            .count();
+        let asked_preferred = color.informed.len() - color.outputs.len();
+        for _ in asked_preferred..preferred {
+            let index = client.get_preferred(false).map_err(error)?;
+            color.informed.push((index, false));
+        }
+        for (index, asked) in &mut color.informed {
+            if !*asked
+                && client.events().iter().any(|e| {
+                    matches!(e, ClientEvent::ImageDescriptionReady { index: i, .. } if i == index)
+                })
+            {
+                client.get_image_information(*index).map_err(error)?;
+                *asked = true;
+            }
+        }
+    }
+    Ok(())
 }

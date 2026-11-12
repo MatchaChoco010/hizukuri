@@ -249,6 +249,20 @@ pub trait Backend {
     /// the backend's job and frees their render targets.
     fn shutdown(&mut self, _targets: Targets<'_>) {}
 
+    /// Drives an output with another image description, reported with
+    /// [`BackendEvent::OutputChanged`]. For tests; a backend that cannot
+    /// refuses.
+    fn set_output_image_description(
+        &mut self,
+        _output: OutputId,
+        _description: ImageDescription,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::InvalidConfig(format!(
+            "the {} backend cannot change the image description of an output",
+            self.name()
+        )))
+    }
+
     /// Describes the backend's own state for state dumps and diagnostics.
     fn describe(&self) -> serde_json::Value {
         serde_json::Value::Null

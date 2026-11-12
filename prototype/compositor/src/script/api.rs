@@ -102,7 +102,10 @@ fn color_table(lua: &Lua, description: &ImageDescription) -> mlua::Result<Table>
     )?;
     t.set("transfer", description.transfer.name())?;
     t.set("transfer_id", description.transfer.shader_id())?;
-    t.set("transfer_param", description.transfer.shader_param())?;
+    t.set(
+        "transfer_param",
+        description.transfer.param(&description.luminance),
+    )?;
     t.set("luminance_min", description.luminance.min)?;
     t.set("luminance_max", description.luminance.max)?;
     t.set("luminance_reference", description.luminance.reference)?;
@@ -455,11 +458,16 @@ pub fn register(
                 primaries: primaries(&working)?,
             };
             let transform = DecodeTransform::new(&description, alpha, &space)
-                .ok_or_else(|| arg_error("degenerate primaries"))?;
+                .ok_or_else(|| arg_error("degenerate primaries or luminances"))?;
             let t = lua.create_table()?;
             t.set("matrix", matrix_table(lua, &transform.matrix)?)?;
             t.set("transfer_id", transform.transfer.shader_id())?;
-            t.set("transfer_param", transform.transfer.shader_param())?;
+            // For HLG, the system gamma of the OOTF.
+            t.set("transfer_param", transform.transfer_param)?;
+            // For HLG: the luminance of the decoded scene light, which the
+            // OOTF scales by. Zero otherwise.
+            let coefficients = transform.ootf.map_or([0.0; 3], |o| o.coefficients);
+            t.set("ootf_coefficients", lua.create_sequence_from(coefficients)?)?;
             t.set("alpha_mode", transform.alpha_mode.shader_id())?;
             Ok(t)
         }
@@ -481,11 +489,11 @@ pub fn register(
                 primaries: primaries(&working)?,
             };
             let transform = EncodeTransform::new(&space, &output.image_description)
-                .ok_or_else(|| arg_error("degenerate primaries"))?;
+                .ok_or_else(|| arg_error("degenerate primaries or luminances"))?;
             let t = lua.create_table()?;
             t.set("matrix", matrix_table(lua, &transform.matrix)?)?;
             t.set("transfer_id", transform.transfer.shader_id())?;
-            t.set("transfer_param", transform.transfer.shader_param())?;
+            t.set("transfer_param", transform.transfer_param)?;
             t.set("clip", !transform.transfer.is_extended_range())?;
             Ok(t)
         }

@@ -122,7 +122,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.drag_icon()` | drag 中のアイコンの表面 |
 | `hz.background()`、`hz.time()` | 背景色、起動からの秒数 |
 | `hz.manages_windows()` | この session が、ウィンドウ管理をスクリプトに任せているか（`proto-compositor` では、いつも真）。読み込みの途中でも使える |
-| `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号、alpha の扱い） |
+| `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号と定数、HLG の OOTF の輝度の係数、alpha の扱い） |
 | `hz.encode_transform(working, output)` | 作業用の値を、出力の符号の値にする変換 |
 | `hz.decode_color(r, g, b, a, working)` | 1 色を CPU で変換する（背景色に使う） |
 
@@ -140,6 +140,14 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `kind` | `shm`（画素を複写したもの）か `dmabuf`（取り込んだもの） |
 
 色の変換の数値（原色の行列、伝達関数の番号と定数）は、コア（`proto-color`）が出す。当てはめる shader は、スクリプトの側にある。
+
+- 輝度の対応（reference white と黒をそろえる倍率）は、行列に入っている。伝達関数の定数（`transfer_param`）は、
+  べき乗の指数、BT.1886 の黒の水準（`(最小 / 最大)^(1/2.4)`）、HLG の OOTF の system gamma である。
+- 伝達関数の番号は、0 が linear、1 が IEC 61966-2-1 の区分的な関数、2 がべき乗、3 が PQ、4 が BT.1886、5 が HLG である
+  （`color.luau`）。HLG は、伝達関数で場面の光に戻した後、`ootf_coefficients`（表面の原色での輝度の係数）で求めた輝度で、
+  OOTF をかける（`render.luau`）。HLG と BT.1886 を、出力へ符号化する shader は無い。
+- 表面の記述が、クライアントが `wp_color_management_v1` で伝えたものか、制御口が上書きしたものかは、スクリプトには見せない。
+  変換の数値は、どちらでも同じである。
 
 ### スクリプトがコアに求めるもの
 

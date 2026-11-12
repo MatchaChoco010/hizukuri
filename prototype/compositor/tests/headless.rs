@@ -239,7 +239,7 @@ fn display_p3_output_matches_the_cpu_reference(device: Device) {
     );
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
-        "luminance:x(80/80) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise"
+        "luminance:x(79.8/79.8) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise"
     );
 
     // sRGB red is color(display-p3 0.9175 0.2003 0.1386): 234, 51, 35.
@@ -400,8 +400,8 @@ fn translucent_windows_blend_in_linear_light(device: Device) {
 }
 
 /// A surface whose values are declared to be Display P3 (through the
-/// control interface, until the color protocols exist) is converted
-/// accordingly.
+/// control interface; `script.rs` does it through color-management-v1) is
+/// converted accordingly.
 fn surface_image_description_is_honored(device: Device) {
     let mut session = Session::start("surface-description", device, &["--output-size", "256x192"]);
     let color = [255u8, 64, 32, 255];
@@ -429,7 +429,7 @@ fn surface_image_description_is_honored(device: Device) {
     });
     assert_eq!(
         window(&state, "p3").unwrap()["surfaces"][0]["decode_pipeline"],
-        "unpremultiply | eotf:srgb-piecewise | primaries:display-p3->bt2020 | luminance:x(80/80) | premultiply"
+        "unpremultiply | eotf:srgb-piecewise | primaries:display-p3->bt2020 | luminance:x(79.8/79.8) | premultiply"
     );
 
     let (encoded, composite) = session.screenshot("display-p3");
@@ -481,7 +481,7 @@ fn pq_output_puts_sdr_white_at_the_reference_white(device: Device) {
     assert_eq!(state["outputs"][0]["format"], "rgba16");
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
-        "luminance:x(203/10000) | primaries:bt2020->bt2020 | clip[0,1] | inverse-eotf:pq"
+        "luminance:x(202.995/10000) | primaries:bt2020->bt2020 | clip[0,1] | inverse-eotf:pq"
     );
 
     let (encoded, composite) = session.screenshot("white");

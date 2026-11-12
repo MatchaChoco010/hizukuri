@@ -73,7 +73,16 @@
 - 表面も出力も、image description（原色、transfer function、輝度）を持つ。色の指定が無い表面は、
   BT.709 の原色と、指数 2.2 のべき乗として扱う（`srgb-gamma22`）。
 - 出力の既定も `srgb-gamma22` なので、既定の構成では、指定の無い表面の値が、そのまま出力に出る。
-- `wp_color_management_v1` は、未実装である。表面の色は、制御口の `set_surface_color` で指定する。
+- 表面の image description は、クライアントが `wp_color_management_v1` で伝える（[プロトコルの層](protocol-layer.md#色)）。
+  制御口の `set_surface_color` は、検査のための上書きで、プロトコルで設定されたものより優先する。
+  一度上書きした表面は、それ以後、クライアントが何を設定しても、上書きした記述のままである。
+  `state` の表面の `color_source` が、どちらが効いているか（`control`、`protocol`、`default`）を示す。
+- 輝度は、reference white と黒をそろえる。表面の値は、`(L − 最小) / (reference white − 最小)` に直して合成する
+  （`L` は、プロトコルの付録の式で、値から求めた輝度）。reference white が 1.0、黒が 0.0 である。
+  出力へは、その逆を、出力の輝度でかける。SDR の表面を HDR の出力に出しても、黒は浮かない。
+  PQ の振れ幅は、最大の輝度の指定によらず、10000 cd/m² である。
+- HLG は、BT.2100 の OOTF（system gamma は `1.2 + 0.42 log10(最大の輝度 / 1000)`）をかけて、表示の光にしてから合成する。
+  BT.1886 は、最小の輝度を黒の水準として扱う。どちらも、表面の側だけで扱う（出力の名前には無い）。
 - 8 bit の値は、合成用のバッファを往復すると、1 階調ずれることがある。0 に近い値は、数階調ずれる
   （半精度の浮動小数点が 0 の近くで粗く、出力の 2.2 の曲線がそれを引き伸ばすため）。
 
@@ -230,7 +239,8 @@ target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LA
 | `focus_window` | `window`（`null` で解除） | focus を移し、最前面に出す |
 | `close_window` | `window` | ウィンドウに閉じるよう頼む |
 | `set_window_opacity` | `window`、`opacity` | 描くときの不透明度 |
-| `set_surface_color` | `surface`、`image_description`、`alpha_mode`（省略可） | 表面の値の意味を指定する |
+| `set_surface_color` | `surface`、`image_description`、`alpha_mode`（省略可） | 表面の値の意味を上書きする（検査のため）。`wp_color_management_v1` で設定されたものより優先する |
+| `set_output_image_description` | `output`、`image_description` | 出力を、別の image description で動かす。クライアントには、`wp_color_management_v1` で知らせる。headless だけ |
 | `script_call` | `function`、`args`（JSON の配列） | スクリプトの大域の関数を呼び、戻り値を `result` で返す |
 | `script_reload` | `path`（省略可） | スクリプトを読み直す。`path` があれば、そのプロジェクトに替える。コンパイルできないモジュールがあれば、読み直さずに、失敗を返す（[スクリプトの層](script-layer.md#読み直し)） |
 | `script_mode` | `mode` | `running`: スクリプトに任せる。`fallback`: 組み込みの fallback に任せる |
@@ -248,6 +258,7 @@ proto-ctl --socket PATH pointer-button 272 press
 proto-ctl --socket PATH pointer-axis --vertical 15 --v120-vertical 120
 proto-ctl --socket PATH move-window 3 40 30
 proto-ctl --socket PATH set-surface-color 2 display-p3
+proto-ctl --socket PATH set-output-image-description HEADLESS-1 bt2020-pq
 proto-ctl --socket PATH script-reload
 proto-ctl --socket PATH raw '{"cmd":"state"}'
 ```
@@ -264,7 +275,7 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 - `composite_space`、`background`
 - `outputs`: 大きさ、論理的な大きさ、位置、scale、format、image description、`encode_pipeline`
 - `windows`（重なりの順。下から上）: 題名、app id、出力、位置、大きさ、`activated`、`visual`（見た目の位置と不透明度）、
-  `surfaces`（役割、offset、大きさ、バッファの大きさ・種類・transform、`generation`、image description、alpha mode、`decode_pipeline`）
+  `surfaces`（役割、offset、大きさ、バッファの大きさ・種類・transform、`generation`、image description、その出どころ（`color_source`）と rendering intent、alpha mode、`decode_pipeline`）
 - `focus`: focus のあるウィンドウ、キーボードの focus のある表面、ポインターのある表面
 - `pointer`: 位置、クライアントが求めたカーソル
 - `selection`、`primary_selection`: クリップボードと primary selection の持ち主が出している MIME type
@@ -279,8 +290,8 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 `decode_pipeline` と `encode_pipeline` は、どの変換をどの順でかけるかを表す文字列である。
 
 ```text
-unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(80/80) | premultiply
-luminance:x(80/80) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise
+unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(79.8/79.8) | premultiply
+luminance:x(79.8/79.8) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise
 ```
 
 取り込んだ画像の形式:
@@ -299,9 +310,14 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
                   [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888]
                   [--duration 秒] [--relative-pointer] [--lock-pointer | --confine-pointer]
                   [--text-input X,Y,W,H] [--input-method echo] [--no-window]
+                  [--color-manager 版] [--image-description 記述] [--color-info]
 ```
 
 - `--socket` は必須である。`WAYLAND_DISPLAY` を見ない。
+- `--image-description` は、ウィンドウの値の意味を、`wp_color_management_v1` で伝える。記述は、`windows-scrgb`、
+  `windows-bt2100`、または `tf=名前,primaries=名前[,lum=最小:最大:reference white]` である（名前はプロトコルのもの。
+  `tf=st2084_pq,primaries=bt2020`。`tf=power:2.4` で指数のべき乗。輝度は cd/m²）。`--color-info` は、出力の image description と、
+  ウィンドウに望まれる image description を読む。`--color-manager` は、bind する版の上限である（既定は 3。どちらかを付けたときだけ bind する）。
 - `--relative-pointer` は、相対的な動きを求める。`--lock-pointer`、`--confine-pointer` は、ウィンドウに、
   persistent の lock か confine を求める（ゲームのように）。
 - `--color` は、バッファに書く値そのものである。`wl_shm` は premultiplied なので、半透明の色は掛け算した値を渡す
@@ -309,7 +325,7 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 - テストからは、ライブラリ（`proto_test_client::TestClient`）として使う。自分ではブロックせず、`pump` を呼んだときだけ進む。
   ライブラリは、バッファの模様、dmabuf での送付、buffer transform、viewport、fractional-scale、presentation の feedback、
   popup、selection、drag and drop、ウィンドウ管理への要求、相対的な動き、ポインターの制約、primary selection、
-  data control も話す。ウィンドウを持たないクライアント（クリップボードの履歴の道具の役）にもなれる。
+  data control、`wp_color_management_v1`（image description の作成と設定、出力と feedback、誤った使い方）も話す。ウィンドウを持たないクライアント（クリップボードの履歴の道具の役）にもなれる。
 - `--text-input` は、ウィンドウに入力欄を持たせる。text-input に `enter` されると、その矩形をカーソルとして伝えて、
   有効にする。受け取った preedit と確定した文字列は、イベントとして出す。
 - `--input-method echo` は、クライアントを、seat の入力メソッドにする（ふつうは `--no-window` と一緒に使う）。
@@ -387,7 +403,9 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 ## 未実装のもの
 
 - nested のバックエンド。
-- `wp_color_management_v1` と、それに続く色のプロトコル。HDR の出力、10 bit 以上の scanout。
+- ICC のプロファイルによる image description（`wp_color_management_v1` の `icc_v2_v4`）。`wp_color_representation_v1`。
+  HDR の出力（KMS の `HDR_OUTPUT_METADATA` と `Colorspace`）、10 bit 以上の scanout、HLG と BT.1886 で符号化する出力。
+- rendering intent による変換の違い（`perceptual` と `relative` を公開し、どちらも同じ変換をかける）。tone mapping と gamut mapping。
 - KMS での複数の出力、direct scanout、overlay plane、cursor plane、VRR、ティアリング。
 - damage を使った部分的な描き直し（毎回、出力の全体を描く）。
 - KMS の dma-buf の経路で、GPU の完了を待たずに flip すること。いまは、scanout の画像に描いたフレームの完了を、

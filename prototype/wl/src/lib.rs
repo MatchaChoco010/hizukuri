@@ -24,6 +24,7 @@
 //! laid out flat or placed in 3D.
 
 mod buffer;
+mod color;
 mod constraints;
 mod handlers;
 mod ime;
@@ -538,6 +539,48 @@ pub enum SurfaceRole {
     InputPopup,
 }
 
+/// A rendering intent of color-management-v1 that is offered: how the
+/// client would like its colors mapped to an output. Both are handled the
+/// same way (white to white, the rest clipped).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderIntent {
+    Perceptual,
+    /// Media-relative colorimetric.
+    Relative,
+}
+
+impl RenderIntent {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Perceptual => "perceptual",
+            Self::Relative => "relative",
+        }
+    }
+}
+
+/// Where the image description of a surface comes from, most important
+/// first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSource {
+    /// The control interface ([`WlServer::set_surface_color`]).
+    Control,
+    /// The client, through `wp_color_management_surface_v1`, with the
+    /// rendering intent it asked for.
+    Protocol(RenderIntent),
+    /// Nobody: [`DEFAULT_SURFACE_IMAGE_DESCRIPTION`].
+    Default,
+}
+
+impl ColorSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Protocol(_) => "protocol",
+            Self::Default => "default",
+        }
+    }
+}
+
 /// One surface of a window, as the scene needs it to draw and hit test.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurfaceNode {
@@ -563,6 +606,8 @@ pub struct SurfaceNode {
     /// What the buffer values mean.
     pub image_description: ImageDescription,
     pub alpha_mode: AlphaMode,
+    /// Who said what the values mean.
+    pub color_source: ColorSource,
     /// Counts content changes; a new value means new pixels are available
     /// from [`WlServer::take_buffer_update`].
     pub generation: u64,
@@ -601,6 +646,10 @@ pub struct OutputConfig {
     pub scale: f64,
     /// Position of the top left corner in the global logical space.
     pub position: (i32, i32),
+    /// What the encoded frame means: the image description clients learn
+    /// through `wp_color_management_output_v1`, and the one preferred for
+    /// the surfaces mainly on this output.
+    pub image_description: ImageDescription,
 }
 
 /// What a pointer constraint (`zwp_pointer_constraints_v1`) asks for.
@@ -776,6 +825,7 @@ impl WlServer {
             .dispatch(Duration::ZERO, &mut self.state)
             .map_err(io::Error::other)?;
         self.display.dispatch_clients(&mut self.state)?;
+        self.state.send_image_information();
         Ok(())
     }
 
@@ -799,8 +849,9 @@ impl WlServer {
         self.state.add_output(config)
     }
 
-    /// Changes the mode, scale or position of an output. Returns `false`
-    /// when the output is unknown. The name, make and model cannot change.
+    /// Changes the mode, scale, position or image description of an
+    /// output. Returns `false` when the output is unknown. The name, make
+    /// and model cannot change.
     pub fn update_output(&mut self, id: OutputId, config: &OutputConfig) -> bool {
         self.state.update_output(id, config)
     }
@@ -916,9 +967,10 @@ impl WlServer {
         self.state.surface_accepts_input(surface, x, y)
     }
 
-    /// Overrides what the values of a surface mean. A stand-in for
-    /// color-management-v1 and color-representation-v1 until those protocols
-    /// are implemented; meant for tests.
+    /// Overrides what the values of a surface mean, for tests: from now on
+    /// this wins over what the client says through color-management-v1,
+    /// and gives the alpha mode (color-representation-v1 is not
+    /// implemented).
     pub fn set_surface_color(
         &mut self,
         surface: SurfaceId,

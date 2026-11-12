@@ -454,6 +454,9 @@ compositor は、合成の結果を、出力の image description に合わせ�
   勧められているのは、`failed` で断ることである。
 - 申告が内容と違うクライアントがある（10000 cd/m² を超える輝度の申告など）。申告を、そのまま信用しない。
 - クライアントは、Mesa のように global を version 1 で bind することがある。version 1 の経路を残す。
+- `feature` の enum の `windows_bt2100` には、`since` が付いていない。要求の `create_windows_bt2100` は version 3 からである。
+  version 2 以下のクライアントに公開しても、使えない。
+- `wp_image_description_info_v1.done` は destructor の event である。送ると、object が消える。
 
 ## 14. 出典
 
