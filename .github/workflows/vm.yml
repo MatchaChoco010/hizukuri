@@ -56,19 +56,10 @@ jobs:
 
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
 
-      # Keeps /nix between runs: the dev shell, QEMU and the guest system.
-      # All of it also comes from cache.nixos.org and static.rust-lang.org
-      # (the few derivations that are specific to the guest are rebuilt in
-      # under a minute), so a miss only costs time. A miss starts from what
-      # the CI workflow saved for the dev shell, never from an older cache of
-      # this workflow: the store that is saved then holds one generation of
-      # the guest, not every one there has been.
-      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
-        with:
-          primary-key: nix-vm-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml', 'tools/vm/guest.nix', 'tools/vm/guest/**') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          save: ${{ github.event_name == 'push' }}
-
+      # /nix is not cached. The dev shell, QEMU and the guest system come from
+      # cache.nixos.org and static.rust-lang.org in under a minute (the few
+      # derivations that are specific to the guest are built here), which is
+      # what restoring a cache of that size takes as well.
       - name: Fetch the dev shell
         run: nix develop .#ci --command true
 
