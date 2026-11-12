@@ -129,15 +129,35 @@ test_all() {
     fi
 
     local failed=0
+    local devices="${HIZUKURI_TEST_DEVICES:-lavapipe}"
 
-    echo "== cargo test"
-    run_tests --workspace || failed=1
+    # These crates create their Vulkan devices in the test process, one per
+    # test, on parallel test threads. On a hardware device they run one test
+    # at a time: the NVIDIA driver can deadlock when one thread destroys its
+    # device while another thread that used the driver exits (the thread's
+    # exit runs the driver's thread-local destructors), and the test harness
+    # then waits for that thread forever.
+    local in_process=(proto-gfx-core proto-gfx-lua proto-slangc)
+
+    if [[ ",$devices," == *",gpu,"* ]]; then
+        local exclude=() packages=() crate
+        for crate in "${in_process[@]}"; do
+            exclude+=(--exclude "$crate")
+            packages+=(-p "$crate")
+        done
+        echo "== cargo test"
+        run_tests --workspace "${exclude[@]}" || failed=1
+        echo "== cargo test (${in_process[*]} on the hardware device, one test at a time)"
+        RUST_TEST_THREADS=1 run_tests "${packages[@]}" || failed=1
+    else
+        echo "== cargo test"
+        run_tests --workspace || failed=1
+    fi
 
     # The tests of the script GPU API (proto-gfx-core, proto-gfx-lua) run
     # in-process, on one device per run: on lavapipe, unless gpu is listed.
-    # When both are listed, the run above used the hardware device; run them
+    # When both are listed, the runs above used the hardware device; run them
     # once more on lavapipe, like the compositor tests do for themselves.
-    local devices="${HIZUKURI_TEST_DEVICES:-lavapipe}"
     if [[ ",$devices," == *",lavapipe,"* && ",$devices," == *",gpu,"* ]]; then
         local lavapipe
         lavapipe="$(lavapipe_manifest)"

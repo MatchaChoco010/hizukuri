@@ -53,6 +53,11 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 
 - Vulkan を使うテストは、`HIZUKURI_TEST_DEVICES` に並べたデバイスのそれぞれで走る。
   lavapipe では、テストが、`VK_DRIVER_FILES` を lavapipe の manifest に向けた子プロセスを起動する。環境の設定は、要らない。
+- `proto-gfx-core`、`proto-gfx-lua`、`proto-slangc` のテストは、テストのプロセスの中で、テストごとに Vulkan の device を作る。
+  `HIZUKURI_TEST_DEVICES` に `gpu` があると、`tools/ci.sh` は、この 3 つを、ほかと分けて、1 つずつ（`RUST_TEST_THREADS=1`）走らせる。
+  NVIDIA のドライバーでは、あるスレッドが device を壊すのと、ドライバーを使った別のスレッドが終わるのが重なると、
+  スレッドの終わりで呼ばれるドライバーの後始末が終わらず、テストの harness が、そのスレッドを待ち続けることがあるためである。
+  lavapipe では、並列に走らせる。
 - **GPU なしで dma-buf を扱うテストは、kernel の `/dev/udmabuf` を使う**（lavapipe が、dma-buf の書き出しと取り込みに使う）。
   テストを走らせる利用者が、このデバイスを開けることが要る。開けるようにできない環境では、`HIZUKURI_TEST_SKIP_UDMABUF=1` で外す。
   対象のテストと、`HIZUKURI_TEST_REAL_CLIENTS` に並べられる名前は、[検証用の compositor](../prototype/README.md)にある。
@@ -368,7 +373,7 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 | Check that stuck and crashed tests are reported | `tools/ci-watch.sh --self-test`。失敗しても、後の step は走る（`continue-on-error`） |
 | Build the compositor | テストのプロファイルで、`proto-compositor` をビルドする。後のテストは、これを使い回す |
 | Self test on vkms | GPU で描いて、vkms に出す `proto-compositor kms-selftest`（`--vulkan-device gpu --scanout cpu`）。テストパターンは、`proto-gfx-core` で、GPU の上で描く。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `proto-compositor kms-selftest: PASSED` でなければ、失敗する |
-| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる。自己診断だけが失敗したときも、走る |
+| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる（テストのプロセスの中で device を作る 3 つの crate は、1 つずつ。上の「検査を回す」）。自己診断だけが失敗したときも、走る |
 | Summary | ジョブの要約に、ドライバーの版、`tools/gpu-report.sh` の Vulkan の報告（`vulkan-summary.md`）、自己診断の `summary.txt`（無ければ、ログの終わり）を書く |
 
 - `--scanout dmabuf`（GPU の image を、dma-buf のまま vkms に渡す）は、確かめない。描くデバイスと、出すデバイスが違うので、自己診断が、意図して断る。
