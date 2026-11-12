@@ -787,51 +787,51 @@ fn imported_dmabufs_are_shown_upright(device: Device) {
 fn frames_are_drawn_only_when_something_changed(device: Device) {
     let mut session = Session::start("pacing", device, &["--output-size", "128x96"]);
     let (mut client, _) = session.mapped_client(options("pacing", 40, 30, RED));
-    let frames = |session: &mut Session| session.script_state()["frames"].as_u64().unwrap();
-
-    // Let the startup settle: the first frame is there (it includes
-    // compiling the shaders), and the count stops changing.
-    session.wait(&mut [&mut client], "the first frame", |s| {
-        s["script"]["frames"].as_u64().unwrap() > 0
+    let frames = |state: &Value| state["script"]["frames"].as_u64().unwrap();
+    let frame_done = |client: &mut TestClient| {
+        client
+            .wait_for(common::TIMEOUT, |e| {
+                matches!(e, ClientEvent::FrameDone { .. })
+            })
+            .unwrap()
+            .expect("a frame callback");
+    };
+    // "Idle" is told by the compositor, not by a pause: no frame is owed to
+    // an output. That is the starting point however long the startup took
+    // (the first frame includes compiling the shaders).
+    frame_done(&mut client);
+    let state = session.wait(&mut [&mut client], "nothing left to draw", |s| {
+        frames(s) > 0 && s["redraw_pending"] == false
     });
-    let mut settled = frames(&mut session);
-    loop {
-        client
-            .pump(Some(std::time::Duration::from_millis(100)))
-            .unwrap();
-        let now = frames(&mut session);
-        if now == settled {
-            break;
+    let settled = frames(&state);
+
+    // Several refresh periods later: no frame was drawn, none is owed.
+    let idle = |session: &mut Session, client: &mut TestClient| {
+        for _ in 0..5 {
+            client
+                .pump(Some(std::time::Duration::from_millis(40)))
+                .unwrap();
         }
-        settled = now;
-    }
-    // Idle for a while (several refresh periods): still the same.
-    for _ in 0..5 {
-        client
-            .pump(Some(std::time::Duration::from_millis(40)))
-            .unwrap();
-    }
-    assert_eq!(
-        frames(&mut session),
-        settled,
-        "frames were drawn while idle"
-    );
+        session.state()
+    };
+    let state = idle(&mut session, &mut client);
+    assert_eq!(frames(&state), settled, "frames were drawn while idle");
+    assert_eq!(state["redraw_pending"], false);
 
     // One commit: one frame, and the frame callback for it.
     client.clear_events();
     session.recolor(&mut client, "pacing", GREEN);
-    client
-        .wait_for(common::TIMEOUT, |e| {
-            matches!(e, hizukuri_test_client::ClientEvent::FrameDone { .. })
-        })
-        .unwrap()
-        .expect("a frame callback after the commit");
-    for _ in 0..5 {
-        client
-            .pump(Some(std::time::Duration::from_millis(40)))
-            .unwrap();
-    }
-    assert_eq!(frames(&mut session), settled + 1);
+    frame_done(&mut client);
+    let state = session.wait(&mut [&mut client], "the commit is drawn", |s| {
+        frames(s) > settled && s["redraw_pending"] == false
+    });
+    assert_eq!(frames(&state), settled + 1);
+    let state = idle(&mut session, &mut client);
+    assert_eq!(
+        frames(&state),
+        settled + 1,
+        "more than one frame for one commit"
+    );
     session.assert_script_healthy();
     session.assert_renderer_clean();
     session.quit();
@@ -1883,8 +1883,10 @@ fn a_script_that_fails_to_draw_leaves_a_usable_session(device: Device) {
             "256x192",
             "--script",
             project.to_str().unwrap(),
+            // Long next to what a frame takes, also on a slow machine:
+            // only the fault that never returns is to run into it.
             "--script-budget-ms",
-            "100",
+            "2000",
             "--script-memory-mb",
             "24",
         ],
@@ -1906,19 +1908,24 @@ fn a_script_that_fails_to_draw_leaves_a_usable_session(device: Device) {
         ("memory", "memory"),
         ("loop", "timeout"),
     ] {
-        session.script("set_fault", json!(["frame", kind]));
         let started = std::time::Instant::now();
+        session.script("set_fault", json!(["frame", kind]));
         let broken = session.screenshot_png(&format!("broken-{kind}"));
         let took = started.elapsed();
         // The windows are there, drawn by the fallback.
         assert_fallback_marker(&broken, true, kind);
         assert_rgb(&broken, 90, 60, RED, 0, kind);
         assert_rgb(&broken, 5, 100, [0x20, 0x20, 0x20, 255], 0, kind);
-        // Not returning costs the time budget (100 ms here), not more.
-        assert!(
-            took < std::time::Duration::from_secs(3),
-            "{kind} took {took:?}"
-        );
+        // Not returning is cut off at the time budget, and not much later
+        // (the allowance is for a busy machine, not for the cut).
+        if kind == "loop" {
+            let budget = std::time::Duration::from_secs(2);
+            assert!(took >= budget, "{kind} took {took:?}");
+            assert!(
+                took < budget + std::time::Duration::from_secs(60),
+                "{kind} took {took:?}"
+            );
+        }
         let script = session.script_state();
         assert_eq!(script["mode"], "safe", "{kind}");
         failures += 1;
@@ -2016,10 +2023,12 @@ fn holding_the_last_frame_while_the_script_fails(device: Device) {
     // The script is asked again after the retry time, without anything
     // else happening; while it still fails the frame stays.
     let failures = session.script_state()["failures"].as_u64().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    session.wait(&mut [&mut client], "the script is tried again", |s| {
+        s["script"]["failures"].as_u64().unwrap() > failures
+    });
     let still = session.screenshot_png("retried");
     assert_rgb(&still, 90, 60, RED, 1, "the held frame after a retry");
-    assert!(session.script_state()["failures"].as_u64().unwrap() > failures);
+    assert_eq!(session.script_state()["mode"], "hold");
 
     // The fault goes away: at the next retry the script draws again, and
     // what the client drew meanwhile appears.
@@ -2031,10 +2040,19 @@ fn holding_the_last_frame_while_the_script_fails(device: Device) {
     assert_rgb(&back, 90, 60, GREEN, 1, "after the script recovered");
     assert_eq!(session.script_state()["mode"], "running");
 
-    // A script that fails once recovers without anyone doing anything.
+    // A script that fails once recovers without anyone doing anything: one
+    // frame is kept, and the retry draws. (Whether the retry has already
+    // happened when this looks depends on the machine, so the mode is not
+    // asserted in between.)
+    let before = session.script_state();
     session.script("set_fault", json!(["frame", "once"]));
     session.screenshot_png("once");
-    assert_eq!(session.script_state()["mode"], "hold");
+    let after = session.script_state();
+    assert_eq!(
+        after["failures"].as_u64().unwrap(),
+        before["failures"].as_u64().unwrap() + 1
+    );
+    assert!(after["kept_frames"].as_u64().unwrap() > before["kept_frames"].as_u64().unwrap());
     session.recolor(&mut client, "held", BLUE);
     session.wait(
         &mut [&mut client],
@@ -2064,8 +2082,10 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
             "script",
             "--script",
             project.to_str().unwrap(),
+            // Long next to what a handler takes, also on a slow machine:
+            // only the handler that never returns is to run into it.
             "--script-budget-ms",
-            "100",
+            "2000",
         ],
     );
     let mut a = session.client(options("a", 100, 60, RED));
@@ -2113,8 +2133,14 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
     assert_eq!(session.script_state()["mode"], "running");
 
     // A key handler that never returns: that one key takes the time
-    // budget, and then the script is out at once, so the next keys are
-    // quick and reach the client.
+    // budget, and then the script is out at once. The next keys are not
+    // put to the handler at all, and reach the client.
+    let key_calls = |session: &mut Session| {
+        session.script_state()["timing"]["key"]["calls"]
+            .as_u64()
+            .unwrap_or(0)
+    };
+    let calls_before = key_calls(&mut session);
     session.script("set_fault", json!(["key", "loop"]));
     b.clear_events();
     let started = std::time::Instant::now();
@@ -2122,15 +2148,17 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
     key(&mut session, 30, false);
     let first = started.elapsed();
     assert_eq!(session.script_state()["mode"], "safe");
-    let started = std::time::Instant::now();
+    assert!(first >= std::time::Duration::from_secs(2), "{first:?}");
+    assert_eq!(key_calls(&mut session), calls_before + 1);
     for _ in 0..10 {
         key(&mut session, 31, true);
         key(&mut session, 31, false);
     }
-    let later = started.elapsed();
-    assert!(first >= std::time::Duration::from_millis(90), "{first:?}");
-    assert!(first < std::time::Duration::from_secs(3), "{first:?}");
-    assert!(later < std::time::Duration::from_millis(500), "{later:?}");
+    assert_eq!(
+        key_calls(&mut session),
+        calls_before + 1,
+        "the handler was asked again after it timed out"
+    );
     let count = |client: &TestClient, code: u32| {
         client
             .events()

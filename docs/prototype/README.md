@@ -243,6 +243,7 @@ hizukuri-ctl --socket PATH raw '{"cmd":"state"}'
 - `focus`: focus のあるウィンドウ、キーボードの focus のある表面、ポインターのある表面
 - `pointer`: 位置、クライアントが求めたカーソル
 - `selection`: クリップボードの持ち主が出している MIME type
+- `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
 - `window_manager`: `rust-floating` か `script`
 - `script`（`--renderer script` のとき）: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計
 

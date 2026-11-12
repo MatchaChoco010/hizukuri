@@ -1248,6 +1248,8 @@ impl<B: Backend> Compositor<B> {
             "socket": self.wl.socket_name(),
             "renderer": scene["renderer"],
             "scene": scene["kind"],
+            // Whether a frame is still owed to an output.
+            "redraw_pending": self.outputs.iter().any(|o| o.dirty),
             "window_manager": self.wm.name(),
             "script": scene["script"],
             // The icon of a drag in progress (offsets from the pointer).

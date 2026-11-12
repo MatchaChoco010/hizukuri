@@ -279,16 +279,33 @@ fn terminals_in_tiles(device: Device) {
     // no other.
     let focused = session.state()["focus"]["window"].as_u64().unwrap();
     assert_eq!(focused, settled.last().unwrap().0);
-    let type_text = |session: &mut Session| {
+    // Types "hello" and captures the screen once the application has drawn
+    // it: once the picture differs from `before` and has stopped changing.
+    // How long the application takes is the machine's business.
+    let type_text = |session: &mut Session, name: &str, before: &EncodedImage, script: bool| {
         for code in [35, 18, 38, 38, 24] {
             // h e l l o
             key(session, code, true);
             key(session, code, false);
         }
-        std::thread::sleep(Duration::from_millis(300));
+        let capture = |session: &mut Session| {
+            if script {
+                settled_screenshot(session, name)
+            } else {
+                session.screenshot_png(name)
+            }
+        };
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let image = capture(session);
+            if image.data != before.data {
+                return capture(session);
+            }
+            assert!(Instant::now() < deadline, "typing never showed up");
+            std::thread::sleep(Duration::from_millis(50));
+        }
     };
-    type_text(&mut session);
-    let typed = settled_screenshot(&mut session, "typed");
+    let typed = type_text(&mut session, "typed", &first, true);
     let rect = |t: &Tile| (t.2, t.3, t.4, t.5);
     assert!(changed(&first, &typed, rect(settled.last().unwrap())) > 0);
     assert_eq!(changed(&first, &typed, rect(&settled[0])), 0);
@@ -299,8 +316,7 @@ fn terminals_in_tiles(device: Device) {
     wait_state(&mut session, "the focus moved left", |s| {
         (s["focus"]["window"] == left.0).then_some(())
     });
-    type_text(&mut session);
-    let typed_left = settled_screenshot(&mut session, "typed-left");
+    let typed_left = type_text(&mut session, "typed-left", &typed, true);
     assert!(changed(&typed, &typed_left, rect(&left)) > 0);
 
     // Logo+Shift+L: it trades places with its right neighbour.
@@ -336,8 +352,7 @@ fn terminals_in_tiles(device: Device) {
     assert_eq!(after, swapped);
     let reloaded = settled_screenshot(&mut session, "after-reload");
     assert_eq!(changed(&before, &reloaded, (0, 0, 1280, 720)), 0);
-    type_text(&mut session);
-    let typed_again = settled_screenshot(&mut session, "typed-after-reload");
+    let typed_again = type_text(&mut session, "typed-after-reload", &reloaded, true);
     assert!(changed(&reloaded, &typed_again, (0, 0, 1280, 720)) > 0);
 
     // The built-in fallback: the same windows at the same places, with the
@@ -348,14 +363,8 @@ fn terminals_in_tiles(device: Device) {
     let fallback = session.screenshot_png("fallback");
     let marker = fallback.pixel(640, 1);
     assert_eq!((marker[0], marker[1]), (255, 0), "{marker:?}");
-    type_text(&mut session);
-    assert!(
-        changed(
-            &fallback,
-            &session.screenshot_png("typed-in-fallback"),
-            (0, 8, 1280, 704)
-        ) > 0
-    );
+    let typed_in_fallback = type_text(&mut session, "typed-in-fallback", &fallback, false);
+    assert!(changed(&fallback, &typed_in_fallback, (0, 8, 1280, 704)) > 0);
     session.send(Request::ScriptMode {
         mode: "running".into(),
     });

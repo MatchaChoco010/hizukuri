@@ -345,6 +345,12 @@ impl Session {
         isolate(&mut command, &runtime_dir);
         if device.is_script() {
             command.args(["--renderer", "script"]);
+            // The tests are not about how fast the machine is: a call into
+            // the script only times out when it is stuck. A scenario about
+            // the budget itself passes its own.
+            if !extra_args.contains(&"--script-budget-ms") {
+                command.args(["--script-budget-ms", "120000"]);
+            }
         }
         match device.gpu {
             Gpu::Hardware => {

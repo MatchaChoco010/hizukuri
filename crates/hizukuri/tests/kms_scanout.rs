@@ -136,7 +136,11 @@ fn run_all(selector: DeviceSelector) {
 /// The script scene on the device this process sees first (the hardware
 /// device, or lavapipe in the child process).
 fn script_scene() -> ScriptScene {
-    let mut options = ScriptOptions::default();
+    let mut options = ScriptOptions {
+        // Not a test of the time budget: only a stuck script times out.
+        call_budget: Duration::from_secs(120),
+        ..ScriptOptions::default()
+    };
     options.gpu.validation = std::env::var("HIZUKURI_TEST_VALIDATION").is_ok_and(|v| v == "1");
     ScriptScene::new(ScriptRuntime::new(options).expect("starting the script"))
 }
