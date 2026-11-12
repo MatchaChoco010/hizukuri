@@ -221,6 +221,11 @@ hizukuri-ctl --socket "$RT/hz.control" script-mode safe
 スクリプトの呼び出しには、時間の上限（`--script-budget-ms`）と、メモリの上限（`--script-memory-mb`）がある。
 スクリプトの故障で、compositor は落ちず、クライアントは切断されない。
 
+時間の上限は、VM の interrupt（ループの折り返しと、関数の呼び出しと戻りのたびに呼ばれる）で見る。
+interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れている（`crates/gfx-lua/src/interrupt.rs`）。
+`mlua` の interrupt は、Rust の関数がエラーを返した後に、実行中のスクリプトの関数の stack を広げる。
+失敗する呼び出しを `pcall` で受けながら繰り返すスクリプトでは、失敗の数に対して、時間が 2 乗で増える。
+
 | 故障 | 検出のされ方 | その後 |
 | --- | --- | --- |
 | `frame` が例外を投げる、誤った GPU の呼び出しをする | エラーの値 | 下の「描画が失敗したとき」 |

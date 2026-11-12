@@ -9,6 +9,8 @@
 //! language of hizukuri is not decided**; this is a provisional choice.
 
 mod api;
+#[cfg(feature = "luau")]
+mod interrupt;
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
@@ -137,13 +139,14 @@ struct Budget {
 }
 
 impl Budget {
+    /// One tick of the VM: whether the script has to stop now.
     #[inline]
-    fn check(&self) -> mlua::Result<mlua::VmState> {
+    fn spent(&self) -> bool {
         if self.expired.get() {
-            return Err(mlua::Error::external(BudgetExceeded(self.limit.get())));
+            return true;
         }
         let Some(deadline) = self.deadline.get() else {
-            return Ok(mlua::VmState::Continue);
+            return false;
         };
         // Reading the clock is the expensive part. Luau calls this at every
         // loop iteration and function call, so look at the clock on every
@@ -157,6 +160,14 @@ impl Budget {
         };
         if look && Instant::now() >= deadline {
             self.expired.set(true);
+        }
+        self.expired.get()
+    }
+
+    /// [`Self::spent`] for a hook that reports through `mlua`.
+    #[cfg(not(feature = "luau"))]
+    fn check(&self) -> mlua::Result<mlua::VmState> {
+        if self.spent() {
             return Err(mlua::Error::external(BudgetExceeded(self.limit.get())));
         }
         Ok(mlua::VmState::Continue)
@@ -197,6 +208,18 @@ pub struct ScriptHost {
     gpu: Rc<RefCell<Gpu>>,
     budget: Rc<Budget>,
     options: HostOptions,
+    /// The key the VM's interrupt was installed with, if it has one.
+    #[cfg(feature = "luau")]
+    interrupt: Option<usize>,
+}
+
+#[cfg(feature = "luau")]
+impl Drop for ScriptHost {
+    fn drop(&mut self) {
+        if let Some(key) = self.interrupt.take() {
+            interrupt::remove(key);
+        }
+    }
 }
 
 impl ScriptHost {
@@ -227,28 +250,35 @@ impl ScriptHost {
         setup(&lua, &gpu).map_err(|e| classify(&e))?;
 
         let budget = Rc::new(Budget::default());
-        if options.time_budget.is_some() {
-            #[cfg(feature = "luau")]
-            {
-                let b = Rc::clone(&budget);
-                lua.set_interrupt(move |_| b.check());
+        #[cfg(feature = "luau")]
+        let interrupt = match options.time_budget {
+            Some(_) => {
+                Some(interrupt::install(&lua, Rc::as_ptr(&budget)).map_err(|e| classify(&e))?)
             }
-            #[cfg(not(feature = "luau"))]
+            None => None,
+        };
+        #[cfg(not(feature = "luau"))]
+        if options.time_budget.is_some() {
             install_count_hook(&lua, &budget, COUNT_HOOK_INTERVAL).map_err(|e| classify(&e))?;
         }
-        if let Some(limit) = options.memory_limit {
-            lua.set_memory_limit(limit).map_err(|e| classify(&e))?;
-        }
-        #[cfg(feature = "luau")]
-        if options.sandbox {
-            lua.sandbox(true).map_err(|e| classify(&e))?;
-        }
-        Ok(Self {
+        // From here on the host exists, so that leaving early takes the
+        // interrupt's registration with it.
+        let host = Self {
             lua,
             gpu,
             budget,
             options,
-        })
+            #[cfg(feature = "luau")]
+            interrupt,
+        };
+        if let Some(limit) = host.options.memory_limit {
+            host.lua.set_memory_limit(limit).map_err(|e| classify(&e))?;
+        }
+        #[cfg(feature = "luau")]
+        if host.options.sandbox {
+            host.lua.sandbox(true).map_err(|e| classify(&e))?;
+        }
+        Ok(host)
     }
 
     pub fn gpu(&self) -> RefMut<'_, Gpu> {
@@ -278,13 +308,21 @@ impl ScriptHost {
         }
         let result = f();
         self.budget.deadline.set(None);
+        let expired = self.budget.expired.replace(false);
         #[cfg(not(feature = "luau"))]
-        if self.budget.expired.get() {
+        if expired {
             // Back from the per-instruction hook to the cheap one.
             let _ = install_count_hook(&self.lua, &self.budget, COUNT_HOOK_INTERVAL);
         }
-        self.budget.expired.set(false);
-        let result = result.map_err(|e| classify(&e));
+        // A call that failed after its budget ran out failed because of
+        // that, whatever the error it came back with looks like.
+        let result = result.map_err(|e| {
+            if expired {
+                ScriptError::Timeout(BudgetExceeded(self.budget.limit.get()).to_string())
+            } else {
+                classify(&e)
+            }
+        });
         if matches!(result, Err(ScriptError::Memory(_))) {
             // Luau does not run an emergency collection when an allocation
             // hits the limit, so the heap stays full of what the failed call
@@ -297,7 +335,20 @@ impl ScriptHost {
 
     /// Compiles and runs a chunk. The chunk usually defines `init` and `frame`.
     pub fn load(&self, name: &str, source: &str) -> Result<(), ScriptError> {
-        self.with_budget(|| self.lua.load(source).set_name(name).exec())
+        self.load_within(self.options.time_budget, name, source)
+    }
+
+    /// Like [`ScriptHost::load`]. `budget` replaces the host's default time
+    /// budget for this chunk.
+    pub fn load_within(
+        &self,
+        budget: Option<Duration>,
+        name: &str,
+        source: &str,
+    ) -> Result<(), ScriptError> {
+        self.with_budget_of(budget.or(self.options.time_budget), || {
+            self.lua.load(source).set_name(name).exec()
+        })
     }
 
     pub fn has_function(&self, name: &str) -> bool {
@@ -362,11 +413,22 @@ impl ScriptHost {
     /// half-way (an open render pass is closed first). The first error is
     /// returned.
     pub fn call_in_frame<A: IntoLuaMulti>(&self, name: &str, args: A) -> Result<(), ScriptError> {
+        self.call_in_frame_within(None, name, args)
+    }
+
+    /// Like [`ScriptHost::call_in_frame`]. `budget` replaces the host's
+    /// default time budget for this call.
+    pub fn call_in_frame_within<A: IntoLuaMulti>(
+        &self,
+        budget: Option<Duration>,
+        name: &str,
+        args: A,
+    ) -> Result<(), ScriptError> {
         self.gpu
             .borrow_mut()
             .begin_frame()
             .map_err(ScriptError::Gfx)?;
-        let script = self.call(name, args);
+        let script = self.call_function::<A, ()>(name, args, budget);
         let end = self.gpu.borrow_mut().end_frame();
         script?;
         end.map_err(ScriptError::Gfx)
