@@ -23,5 +23,8 @@ clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["fs", "event"] }
 png = "0.18"
 
+[build-dependencies]
+proto-slangc.workspace = true
+
 [dev-dependencies]
 proto-test-client.workspace = true

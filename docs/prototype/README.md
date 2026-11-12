@@ -19,6 +19,7 @@
 | `prototype/backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む）。バックエンドが、描くものに求める口（`target`: `TargetProvider`、`TargetDesc`、`OutputFormat`、`DmabufPlane`、`TargetError`） | `proto-color`、`calloop`、`drm`、Smithay（session、udev、libinput） |
 | `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込みと書き出し。shader の実行時のコンパイル。SPIR-V で渡された shader の検証と検査 | `vulkan-rs`、`naga`、`spirv-tools`（SPIRV-Tools）、`rspirv` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
+| `prototype/slangc` | Slang のコンパイラー（`slangc`）を子のプロセスとして呼び、SPIR-V を得る。build script が使う | `rustix` |
 | `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目と、その言葉（`wm`: `WindowId`、`OutputId`、`Placement`、`ConfigureHint`）、座標と矩形（`geometry`）、スクリプトの層（`script/`、`scripts/`）、スクリプトが動かないときと、誰も決めないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、取り込んだ画像とそのファイル（`image`: PNG と OpenEXR）、自己診断（`selftest`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて、`png` |
 | `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
 | `tools/ci.sh` | 検査をまとめて走らせる | |
@@ -110,7 +111,10 @@ cargo build -j 8
 - Nix の devShell（`nix develop`）の中では、ビルドの結果が `target/` の直下ではなく、`$CARGO_TARGET_DIR`
   （`target/nix-<hash>/`）に入る。この文書の例の `target/debug/` は、`"$CARGO_TARGET_DIR/debug/"` に読み替える。
   devShell の中と外で、同じバイナリを使い回さない。
-- shader は、実行時に、`proto-gfx-core` が `naga` で SPIR-V にする。外部のシェーダーコンパイラーは要らない。
+- スクリプトの shader は、実行時に、`proto-gfx-core` が `naga` で SPIR-V にする。
+- `proto-compositor` のシェーダー（`prototype/compositor/shaders/`）は Slang で書き、ビルド時に `slangc` で SPIR-V にして、
+  バイナリに埋め込む。ビルドに `slangc` が要る（devShell には入っている。[開発環境](../dev/development-environment.md)）。
+  無ければ、ビルドは、`nix develop` を使うように書いて失敗する。
 - `proto-gfx-core` は、SPIRV-Tools を、crate `spirv-tools` が C++ の源からビルドして、静的にリンクする。
   ビルドに、C++ のコンパイラーが要る（devShell には入っている）。キャッシュの無いビルドが、その分、長くなる。
 

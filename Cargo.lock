@@ -958,6 +958,7 @@ dependencies = [
  "proto-color",
  "proto-gfx-core",
  "proto-gfx-lua",
+ "proto-slangc",
  "proto-test-client",
  "proto-wl",
  "rustix",
@@ -987,6 +988,14 @@ version = "0.0.0"
 dependencies = [
  "half",
  "mlua",
+ "proto-gfx-core",
+ "rustix",
+]
+
+[[package]]
+name = "proto-slangc"
+version = "0.0.0"
+dependencies = [
  "proto-gfx-core",
  "rustix",
 ]

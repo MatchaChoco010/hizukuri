@@ -121,6 +121,9 @@
           ++ (with pkgs; [
             pkg-config
             cargo-nextest
+            # The Slang compiler. Build scripts compile the repository's
+            # .slang files to SPIR-V with it (HIZUKURI_SLANGC below).
+            shader-slang
             vulkan-tools # vulkaninfo, vkcube
             # The applications the tests can start
             # (HIZUKURI_TEST_REAL_CLIENTS).
@@ -150,6 +153,10 @@
           # directory, and tries to load their libraries.
           VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
           VK_IMPLICIT_LAYER_PATH = "${pkgs.emptyDirectory}";
+
+          # The slangc that builds use (prototype/slangc finds it here first,
+          # then on PATH), so that every build uses the one flake.lock pins.
+          HIZUKURI_SLANGC = "${pkgs.shader-slang}/bin/slangc";
 
           # The lavapipe manifest, for choosing it by hand:
           #   proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE"
