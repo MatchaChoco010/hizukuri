@@ -22,6 +22,7 @@ Nix は、必須ではない。ディストリビューションのパッケー�
 ```sh
 nix develop            # ふだん使う shell。エディター向けの道具と、試すためのアプリが入っている
 nix develop .#ci       # CI が使う shell。検査に要るものだけ
+nix develop .#slides   # リリースの報告のスライドを組む shell。Typst とフォントだけ
 ```
 
 コマンドを 1 つだけ実行するときは、`--command` を使う。
@@ -99,11 +100,17 @@ HIZUKURI_TEST_DEVICES=gpu,lavapipe tools/ci.sh
 
 QEMU は、devShell には入れていない。検証用の VM の道具（`tools/vm/vm`）が、`tools/vm/guest.nix` から、自分で用意する。
 
+`slides` の shell は、上の 2 つとは別のものである。入っているのは、Typst と、スライドに使うフォント（Noto Sans CJK JP、JetBrains Mono）だけで、
+Rust も、ライブラリも、入っていない。リリースの報告のスライド（skill `release-slides`）を組むときにだけ使う。
+フォントの場所は、環境変数 `TYPST_FONT_PATHS` に入る。スライドを組む道具は、Typst に、機械に入っているフォントを探させない。
+`default` と `ci` の shell は、Typst とフォントを取得しない。
+
 ## flake の出力
 
 | 出力 | 内容 |
 | --- | --- |
 | `devShells.x86_64-linux.default`、`.ci` | 上の 2 つの shell |
+| `devShells.x86_64-linux.slides` | リリースの報告のスライドを組む shell |
 | `packages.x86_64-linux.vm-guest` | 検証用の VM のゲスト（NixOS の system）。`tools/vm/guest.nix` の `system` |
 | `packages.x86_64-linux.vm-host-tools` | VM を動かす側の道具（QEMU、ssh、rsync、python）。`tools/vm/guest.nix` の `hostTools` |
 | `formatter.x86_64-linux` | nixfmt |
