@@ -77,7 +77,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - 描画（`render.luau`）: 作業用の色空間のバッファに合成してから、出力の符号の値に変換する、2 つの pass。
   作業用の色空間は、名前（`bt2020`、`srgb`、`display-p3`、`adobe-rgb`）か、色度の表で選ぶ。
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
-  popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。
+  popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。入力メソッドの候補ウィンドウも、同じである。
 - タイル（`tile.luau`）: `--wm script` のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
   logo+Q で閉じる。logo+Escape で、ポインターの lock と confine を解く。キーの割り当ても、スクリプトの中にある。
 
@@ -115,7 +115,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | --- | --- |
 | `hz.outputs()` | 出力の一覧。id、名前、画素の大きさ、倍率、論理座標での位置と大きさ、リフレッシュレート、画像の形式、色 |
 | `hz.windows()` | ウィンドウの一覧（重なりの順）。id、title、app_id、位置、大きさ、focus、opacity |
-| `hz.surfaces(window)` | ウィンドウの表面の一覧（subsurface と popup を含む。奥から手前） |
+| `hz.surfaces(window)` | ウィンドウの表面の一覧（subsurface、popup、入力メソッドの候補ウィンドウを含む。奥から手前） |
 | `hz.damage(surface)` | 直前の更新で、クライアントが変わったと伝えた矩形（バッファの画素） |
 | `hz.color_info(color)` | 表面の値の意味。image description の名前、原色、伝達関数、輝度、alpha の持ち方 |
 | `hz.pointer()` | ポインターの位置 |
@@ -131,7 +131,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 
 | 項目 | 内容 |
 | --- | --- |
-| `id`、`role` | 表面の id、役割（`toplevel`、`subsurface`、`popup`） |
+| `id`、`role` | 表面の id、役割（`toplevel`、`subsurface`、`popup`、`input-popup`） |
 | `x`、`y`、`width`、`height` | ウィンドウの中での位置と、論理の大きさ |
 | `texture`、`image` | テクスチャの slot と、画像の handle（`gfx` の呼び出しに渡す） |
 | `buffer_width`、`buffer_height`、`scale` | バッファの大きさと、buffer scale |
@@ -218,6 +218,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
 | popup の位置（positioner の計算）、popup の grab、drag and drop | `proto-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く |
 | ポインターの制約の働き（lock の間、ポインターを動かさないこと、confine の間、領域の中に留めること）と、プロトコルの状態 | プロトコルの約束（有効になる時点で、ポインターが表面と領域の中にあること、lock の間は `wl_pointer.motion` を送らないこと）は、スクリプトに任せられない。認めるかどうかと、抜け出し方は、スクリプトが決める |
+| 入力メソッドの候補ウィンドウの位置（アプリが伝えたカーソルの矩形の下、収まらなければ上）、キーボードの grab と仮想キーボードのキーの行き先 | `proto-wl` が持つ（[プロトコルの層](protocol-layer.md#入力メソッド)）。スクリプトは、候補ウィンドウを、text-input に focus のあるウィンドウの、いちばん手前の表面（`input-popup`）として受け取り、描く。スクリプトの `key` は、IME の grab より先に呼ばれる |
 
 - カーソルを描くのは、スクリプトである。どのカーソルを描くか（組み込みの矢印、クライアントの表面、隠す）は、
   コアが決めて、テクスチャとして渡す。
@@ -367,6 +368,8 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
   （`proto-wl` は、出来事として出している。[プロトコルの層](protocol-layer.md#ウィンドウ)）。
 - popup の位置を、変形に合わせて決めること（`proto-wl` には、置き直す口がある。
   [プロトコルの層](protocol-layer.md#popup)）。いまは、変形していないウィンドウの位置で、出力の中に収める。
+- 入力メソッドの候補ウィンドウの位置を、スクリプトが決めること。いまは、変形していないウィンドウの位置で、
+  カーソルの矩形の近くに置く。ウィンドウを変形して描くと、候補ウィンドウは、ウィンドウと同じ変換で描かれる。
 - damage を使って、描く範囲を狭めること。
 - タイルが、複数の出力を使うこと。
 - 画面に、エラーの内容を表示すること。

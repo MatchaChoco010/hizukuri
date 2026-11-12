@@ -35,7 +35,8 @@ comparison with the Rust renderer, frame times, and the `hzk script` launcher.
 
 The part `vkms` runs the compositor and its self test on the virtual KMS
 driver over SSH alone, without a VT. `safety` covers the watchdog; `outputs`
-two outputs and hotplug.
+two outputs and hotplug; `ime` Japanese input with a real input method
+(fcitx5 with Anthy) into foot.
 
 Every item prints PASS, FAIL or SKIP. Everything needed to see why an item
 failed is kept under the output directory (default
@@ -51,6 +52,9 @@ failed is kept under the output directory (default
     script/screen-*.png              the script layer: real applications tiled, the scene
                                      drawn by both renderers, four busy windows at 1920x1080
     script/frame-time-apps-1080p.json  frame times of the Rust and the script renderer
+    ime/screen-candidates.png        the candidate window of fcitx5 by foot's cursor
+    ime/fcitx5.log, fcitx5-requests.txt  fcitx5's log with WAYLAND_DEBUG, and the
+                                     requests it made in the order of first use
     script/hzk-script.log            what `hzk script` printed
     kms-info.json                    the guest's DRM device
     kms-summary.txt                  `proto-compositor kms-info --summary` in the guest
@@ -100,7 +104,7 @@ PATHS = {
 }
 
 # What runs on any machine, in this order, when nothing is asked for.
-DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs"]
+DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs", "ime"]
 
 
 def drawing(args):
@@ -2084,6 +2088,248 @@ def check_script(out, uid, results):
     part.item("hzk-script-launcher", launcher)
 
 
+# The input method of the `ime` part: fcitx5 with the Anthy engine, starting
+# in Japanese (hiragana, romaji typing). Written to a config directory of the
+# check's own.
+FCITX5_PROFILE = """[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=anthy
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=anthy
+Layout=
+
+[GroupOrder]
+0=Default
+"""
+FCITX5_CONFIG = """[Behavior]
+ActiveByDefault=True
+ShareInputState=All
+ShowInputMethodInformation=False
+"""
+# Run by foot: every line typed into the terminal goes to a file of its own.
+IME_READER = """#!/bin/sh
+n=0
+while IFS= read -r line; do
+  n=$((n + 1))
+  printf '%s' "$line" > "$1/ime-line-$n.txt"
+done
+"""
+
+
+def protocol_order(log):
+    """The Wayland requests a client made, in the order of their first use,
+    from its WAYLAND_DEBUG output: `interface.request` per line."""
+    import re
+    seen = []
+    # `interface#id.request(...)`, or `interface@id.request(...)` in older
+    # versions of libwayland.
+    pattern = re.compile(r" -> ([A-Za-z0-9_]+)[@#][0-9]+\.([A-Za-z0-9_]+)\(")
+    for line in log.splitlines():
+        match = pattern.search(line)
+        if match:
+            name = f"{match.group(1)}.{match.group(2)}"
+            if name not in seen:
+                seen.append(name)
+    return seen
+
+
+def check_ime(out, uid, results):
+    """Japanese input with a real input method: fcitx5 (Anthy) and foot, in
+    the script layer on the DRM/KMS session. Keys are typed through QMP;
+    what the terminal's shell receives is written to files and compared.
+    The candidate window is captured, and its place checked against the
+    cursor rectangle the terminal reported."""
+    part = Part("ime", out, uid, results)
+    work = f"{GUEST_DIR}/ime"
+    env = (f"env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR={part.runtime} "
+           f"WAYLAND_DISPLAY={SOCKET}")
+    fcitx5 = {"pid": None}
+
+    def state():
+        return part.ctl("state")
+
+    def ime():
+        return state()["input_method"]
+
+    def line(number):
+        return guest(f"cat {work}/ime-line-{number}.txt 2>/dev/null || true", check=False)
+
+    def press(keys):
+        """`vm type` for `type:TEXT`, `vm key` for anything else."""
+        for key in keys:
+            if key.startswith("type:"):
+                vm("type", key[5:])
+            else:
+                vm("key", key)
+            time.sleep(0.4)
+
+    def typed_line(number, keys, expected, settle=1.0):
+        """Types `keys`, then Return twice (the first one commits what is
+        composed, the second ends the line); waits for the shell's line
+        `number`."""
+        press(keys)
+        time.sleep(settle)
+        press(["ret", "ret"])
+        try:
+            return wait_for(f"line {number} in the terminal",
+                            lambda: line(number) or None, seconds=10)
+        except Failed:
+            vm("screendump", os.path.join(part.out, f"screen-line-{number}.png"), check=False)
+            raise Failed(f"nothing arrived for {expected!r}")
+
+    def setup():
+        if not guest("command -v fcitx5 && command -v foot || true").strip():
+            raise Failed("fcitx5 or foot is not installed in the guest")
+        guest(f"rm -rf {work} && mkdir -p {work}/config/fcitx5 && "
+              f"cat > {work}/config/fcitx5/profile <<'EOF'\n{FCITX5_PROFILE}EOF\n"
+              f"cat > {work}/config/fcitx5/config <<'EOF'\n{FCITX5_CONFIG}EOF\n"
+              f"cat > {work}/reader.sh <<'EOF'\n{IME_READER}EOF\n"
+              f"chmod +x {work}/reader.sh")
+        part.start("--renderer", "script", "--wm", "script", "--exit-after", "300")
+        fcitx5["pid"] = spawn(
+            f"{env} XDG_CONFIG_HOME={work}/config WAYLAND_DEBUG=1 dbus-run-session -- "
+            f"fcitx5 --verbose '*=3'", "ime-fcitx5.log")
+        wait_for("fcitx5 to become the input method", lambda: ime()["bound"], seconds=30)
+        spawn(f"{env} foot --app-id ime-foot sh {work}/reader.sh {work}", "ime-foot.log")
+        wait_for("foot's window", lambda: any(
+            w["app_id"] == "ime-foot" and w["mapped"] for w in state()["windows"]), seconds=20)
+        status = wait_for("the input method active, holding the keyboard",
+                          lambda: (lambda s: s if s["active"] and s["keyboard_grab"]
+                                   else None)(ime()), seconds=20)
+        vm("screendump", os.path.join(part.out, "screen-start.png"), check=False)
+        return ("fcitx5 became the input method; foot got the focus and enabled its text "
+                f"input; fcitx5 was activated and grabbed the keyboard ({status})")
+
+    def kana():
+        press(["type:aiueo"])
+        time.sleep(1.0)
+        vm("screendump", os.path.join(part.out, "screen-preedit.png"), check=False)
+        text = typed_line(1, [], "あいうえお", settle=0)
+        if text != "あいうえお":
+            raise Failed(f"the terminal got {text!r}")
+        return "aiueo, Return, Return: the shell read あいうえお"
+
+    def conversion():
+        text = typed_line(2, ["type:nihongo", "spc"], "日本語")
+        if text != "日本語":
+            raise Failed(f"the terminal got {text!r}")
+        return "nihongo, Space, Return, Return: the shell read 日本語"
+
+    def candidates():
+        press(["type:kouho", "spc", "spc"])
+        popup = wait_for("the candidate window", lambda: (lambda p: p if p and p["shown"]
+                                                          else None)(ime()["popup"]), seconds=10)
+
+        def drawn():
+            current = state()
+            for window in current["windows"]:
+                for node in window["surfaces"]:
+                    if node["role"] == "input-popup" and node["has_contents"]:
+                        return current, window, node
+            return None
+
+        current, window, node = wait_for("the candidate window's contents", drawn, seconds=10)
+        time.sleep(0.5)
+        vm("screendump", os.path.join(part.out, "screen-candidates.png"), check=False)
+        with open(os.path.join(part.out, "state-candidates.json"), "w") as file:
+            json.dump(current, file, indent=1)
+        popup = current["input_method"]["popup"]
+        root = window["surfaces"][0]
+        cx, cy, cw, ch = popup["cursor_rectangle"]
+        px, py = popup["position"]
+        width, height = node["size"]
+        # The cursor rectangle is relative to foot's surface; the popup's
+        # position to the window geometry, where the surface starts at the
+        # root surface's offset.
+        ox, oy = root["offset"]
+        below = py == oy + cy + ch
+        above = py + height == oy + cy
+        if not (below or above) or width <= 0 or height <= 0:
+            raise Failed(f"the popup at {popup['position']} ({width}x{height}) is not by the "
+                         f"cursor {popup['cursor_rectangle']} (surface offset {root['offset']})")
+        # Take the selected candidate. The window goes; Return ends the line.
+        press(["ret"])
+        wait_for("the candidate window to go",
+                 lambda: not (ime()["popup"] or {}).get("shown"), seconds=10)
+        press(["ret"])
+        text = wait_for("line 3 in the terminal", lambda: line(3) or None, seconds=10)
+        if text.isascii():
+            raise Failed(f"the terminal got {text!r} for a candidate")
+        return (f"kouho, Space, Space: a {width}x{height} candidate window "
+                f"{'below' if below else 'above'} the cursor {popup['cursor_rectangle']}, "
+                f"at {popup['position']} in the window; fcitx5 was told "
+                f"{popup['sent_rectangle']} (relative to its popup); Return took {text!r} "
+                f"and the window went away")
+
+    def focus_moves():
+        spawn(f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} "
+              f"--title other --duration 120", "ime-client.log")
+        wait_for("the other window to take the focus", lambda: (lambda s: any(
+            w["title"] == "other" and w["id"] == s["focus"]["window"]
+            for w in s["windows"]))(state()), seconds=15)
+        wait_for("the input method to be deactivated", lambda: not ime()["active"],
+                 seconds=10)
+        vm("key", "logo-h")
+        wait_for("the focus back on foot and the input method active again",
+                 lambda: ime()["active"], seconds=10)
+        return ("a window without a text input took the focus: deactivated; logo+H "
+                "(the script's key, handled before the grab) moved the focus back: active again")
+
+    def crash():
+        # As a crash: no chance to let go of anything.
+        guest(_SIGNAL.format(pid=fcitx5["pid"], signal="KILL") + "true", check=False)
+        wait_for("the input method to be gone", lambda: not ime()["bound"], seconds=15)
+        status = ime()
+        if status["keyboard_grab"]:
+            raise Failed(f"the grab outlived the input method: {status}")
+        text = typed_line(4, ["type:abc"], "abc", settle=0.3)
+        if text != "abc":
+            raise Failed(f"the terminal got {text!r}")
+        return "fcitx5 killed (SIGKILL): no grab is left, and abc, Return reached the shell directly"
+
+    def protocols():
+        log = guest(f"cat {GUEST_DIR}/ime-fcitx5.log 2>/dev/null || true", check=False)
+        with open(os.path.join(part.out, "fcitx5.log"), "w") as file:
+            file.write(log)
+        order = protocol_order(log)
+        with open(os.path.join(part.out, "fcitx5-requests.txt"), "w") as file:
+            file.write("\n".join(order) + "\n")
+        wanted = ["zwp_input_method_manager_v2.get_input_method",
+                  "zwp_input_method_v2.grab_keyboard",
+                  "zwp_virtual_keyboard_manager_v1.create_virtual_keyboard",
+                  "zwp_input_method_v2.get_input_popup_surface"]
+        missing = [name for name in wanted if name not in order]
+        if missing:
+            raise Failed(f"fcitx5 never made {missing}; it made {order}")
+        return "fcitx5's requests, first uses in order: " + ", ".join(
+            name for name in order if name.startswith("zwp_"))
+
+    try:
+        if part.item("setup", setup):
+            part.item("kana", kana)
+            part.item("conversion", conversion)
+            part.item("candidates", candidates)
+            part.item("focus", focus_moves)
+            part.item("crash", crash)
+        part.item("protocols", protocols)
+    finally:
+        for name in ("foot", "client"):
+            try:
+                with open(os.path.join(part.out, f"{name}.log"), "w") as file:
+                    file.write(guest(f"cat {GUEST_DIR}/ime-{name}.log 2>/dev/null || true",
+                                     check=False))
+            except Exception:
+                pass
+        part.keep_log("end")
+        part.stop()
+
+
 def check_real_hardware(out, uid, results):
     """The guard against taking over a real display by accident. Needs a VM
     that looks like real hardware: start it with
@@ -2165,7 +2411,7 @@ def main():
     parser.add_argument("--out", help="directory for results and evidence")
     parser.add_argument("--only", default=",".join(DEFAULT_PARTS),
                         help="comma separated parts to check: lavapipe, script, vkms, safety, "
-                             "outputs (the default: all of these), real-hardware (needs "
+                             "outputs, ime (the default: all of these), real-hardware (needs "
                              "HIZUKURI_VM_CPU=host,-hypervisor)")
     parser.add_argument("--skip-build", action="store_true",
                         help="send the binaries that are already built")
@@ -2264,6 +2510,7 @@ PARTS = {
     "vkms": check_vkms,
     "safety": check_safety,
     "outputs": check_outputs,
+    "ime": check_ime,
     "real-hardware": check_real_hardware,
 }
 

@@ -66,6 +66,24 @@ let
     done
   '';
 
+  # The input method the IME checks use: fcitx5 with the Anthy engine for
+  # Japanese, nothing else (no Qt, no GTK modules, no configuration tool).
+  # The wrapper tells fcitx5 where the engine's addon is, as nixpkgs'
+  # fcitx5-with-addons does.
+  inputMethod = pkgs.symlinkJoin {
+    name = "hizukuri-vm-fcitx5";
+    paths = [
+      pkgs.fcitx5
+      pkgs.fcitx5-anthy
+    ];
+    nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/fcitx5 \
+        --prefix FCITX_ADDON_DIRS : $out/lib/fcitx5 \
+        --suffix XDG_DATA_DIRS : $out/share
+    '';
+  };
+
   guest =
     { modulesPath, ... }:
     {
@@ -182,7 +200,12 @@ let
         "/run/opengl-driver/share/vulkan/icd.d/virtio_icd.x86_64.json"
       ];
 
-      fonts.packages = [ pkgs.dejavu_fonts ];
+      # Japanese text: what the input method composes, in the terminal and
+      # in the candidate window.
+      fonts.packages = [
+        pkgs.dejavu_fonts
+        pkgs.ipaexfont
+      ];
       fonts.fontconfig.defaultFonts.monospace = [ "DejaVu Sans Mono" ];
 
       environment.systemPackages = [
@@ -197,6 +220,9 @@ let
         alacritty
         vulkan-tools # vkcube, vulkaninfo
         wl-clipboard
+        # The input method, and the session bus it wants.
+        inputMethod
+        dbus
         # Clients that draw their own cursor show none without a theme.
         adwaita-icon-theme
         # Looking at devices and input.

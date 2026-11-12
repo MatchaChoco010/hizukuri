@@ -6,7 +6,7 @@ use std::time::Duration;
 use proto_color::{AlphaMode, ImageDescription};
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
-use smithay::desktop::PopupManager;
+use smithay::desktop::{PopupGrab, PopupManager};
 use smithay::input::keyboard::{FilterResult, XkbConfig};
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorImageStatus, CursorImageSurfaceData, MotionEvent,
@@ -28,6 +28,7 @@ use smithay::wayland::compositor::{
 use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState};
 use smithay::wayland::fractional_scale::{FractionalScaleManagerState, with_fractional_scale};
+use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::{PresentationFeedbackCachedState, PresentationState, Refresh};
@@ -42,8 +43,11 @@ use smithay::wayland::shell::xdg::{
     XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::ShmState;
+use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 
+use crate::ime::ImeState;
 use crate::surface::{collect_tree, surface_id, surface_size, take_buffer, with_surface_state};
 use crate::{
     BufferUpdate, CursorState, DmabufConfig, OutputConfig, OutputId, ServerConfig, SurfaceId,
@@ -111,6 +115,15 @@ pub(crate) struct State {
     pub _cursor_shape_state: CursorShapeManagerState,
     pub _relative_pointer_state: RelativePointerManagerState,
     pub _pointer_constraints_state: PointerConstraintsState,
+    pub _text_input_state: TextInputManagerState,
+    pub _input_method_state: InputMethodManagerState,
+    pub _virtual_keyboard_state: VirtualKeyboardManagerState,
+    /// What is kept about input methods (`crate::ime`).
+    pub ime: ImeState,
+    /// A menu (a grabbing popup) that was opened while an input method
+    /// held the keyboard grab. The input method keeps the grab; the
+    /// keyboard focus stays on the menu until it closes.
+    pub menu_grab: Option<PopupGrab<State>>,
 
     pub events: Vec<WlEvent>,
     pub windows: Vec<Window>,
@@ -126,7 +139,7 @@ pub(crate) struct State {
     window_outputs: HashMap<WindowId, Vec<OutputId>>,
     /// Where popups of a window should stay, relative to the window
     /// geometry (x, y, width, height).
-    popup_bounds: HashMap<WindowId, (i32, i32, i32, i32)>,
+    pub(crate) popup_bounds: HashMap<WindowId, (i32, i32, i32, i32)>,
     /// The icon surface of a drag in progress.
     pub drag_icon: Option<WlSurface>,
     /// The MIME types of the current selection (clipboard), if a client
@@ -180,6 +193,12 @@ impl State {
             ExtDataControlState::new::<Self, _>(dh, Some(&primary_selection_state), |_| true);
         let wlr_data_control_state =
             WlrDataControlState::new::<Self, _>(dh, Some(&primary_selection_state), |_| true);
+        let text_input_state = TextInputManagerState::new::<Self>(dh);
+        // Any client may become the input method, or type through a virtual
+        // keyboard: this compositor is for verification.
+        let input_method_state = InputMethodManagerState::new::<Self, _>(dh, |_client| true);
+        let virtual_keyboard_state =
+            VirtualKeyboardManagerState::new::<Self, _>(dh, |_client| true);
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_global = match &config.dmabuf {
             Some(dmabuf) => Some(create_dmabuf_global(dh, &mut dmabuf_state, dmabuf)?),
@@ -192,7 +211,7 @@ impl State {
             .map_err(|e| WlError::Keyboard(format!("{e:?}")))?;
         seat.add_pointer();
 
-        Ok(Self {
+        let mut state = Self {
             display_handle: dh.clone(),
             loop_handle,
             compositor_state,
@@ -220,6 +239,11 @@ impl State {
             _cursor_shape_state: cursor_shape_state,
             _relative_pointer_state: relative_pointer_state,
             _pointer_constraints_state: pointer_constraints_state,
+            _text_input_state: text_input_state,
+            _input_method_state: input_method_state,
+            _virtual_keyboard_state: virtual_keyboard_state,
+            ime: ImeState::new(),
+            menu_grab: None,
             events: Vec::new(),
             windows: Vec::new(),
             popups: Vec::new(),
@@ -239,7 +263,9 @@ impl State {
             outputs: Vec::new(),
             cursor: CursorState::Named("default".to_string()),
             next_id: 1,
-        })
+        };
+        state.init_ime();
+        Ok(state)
     }
 
     pub fn allocate_id(&mut self) -> u64 {
@@ -483,6 +509,13 @@ impl State {
     }
 
     pub fn window_surfaces(&self, id: WindowId) -> Vec<SurfaceNode> {
+        let mut nodes = self.window_surfaces_without_input_popup(id);
+        self.collect_input_popup(id, &mut nodes);
+        nodes
+    }
+
+    /// The surfaces of a window but for the popup of an input method.
+    pub(crate) fn window_surfaces_without_input_popup(&self, id: WindowId) -> Vec<SurfaceNode> {
         let Some(window) = self.window(id) else {
             return Vec::new();
         };
@@ -640,6 +673,7 @@ impl State {
                 popup.send_repositioned(token);
             }
         }
+        self.send_input_popup_rectangle();
         for window in &mut self.windows {
             if std::mem::take(&mut window.reply_owed) && window.toplevel.is_initial_configure_sent()
             {
@@ -805,6 +839,7 @@ impl State {
             .iter()
             .map(|w| w.toplevel.wl_surface().clone())
             .chain(self.popups.iter().map(|p| p.wl_surface().clone()))
+            .chain(self.shown_input_popup())
             .collect();
         if let CursorState::Surface(id) = &self.cursor
             && let Some(surface) = self.surfaces.get(id)
@@ -869,23 +904,46 @@ impl State {
     /// ignores this; once the grab is over, the same call takes effect.
     /// That is why it is repeated after everything that can end a grab.
     pub fn sync_keyboard_focus(&mut self) {
-        let surface = self
-            .wanted_keyboard_focus
-            .and_then(|id| self.window(id))
-            .map(|w| w.toplevel.wl_surface().clone());
+        // A menu opened under an input method's grab has no keyboard grab
+        // of its own to keep the focus; it keeps it here until it closes.
+        let menu = match &self.menu_grab {
+            Some(grab) if !grab.has_ended() => grab.current_grab(),
+            _ => {
+                self.menu_grab = None;
+                None
+            }
+        };
+        let surface = menu.or_else(|| {
+            self.wanted_keyboard_focus
+                .and_then(|id| self.window(id))
+                .map(|w| w.toplevel.wl_surface().clone())
+        });
+        self.set_keyboard_focus_surface(surface);
+    }
+
+    /// Moves the keyboard focus. Every change of the keyboard focus goes
+    /// through here: Smithay deactivates the input method on each.
+    pub(crate) fn set_keyboard_focus_surface(&mut self, surface: Option<WlSurface>) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
         if keyboard.current_focus() == surface {
             return;
         }
+        let before = keyboard.current_focus();
         keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+        // A popup's keyboard grab may keep the focus where it is.
+        if keyboard.current_focus() != before {
+            self.ime_focus_moved();
+        }
     }
 
     pub fn keyboard_key(&mut self, keycode: u32, pressed: bool, time_us: u64) {
+        self.restore_keymap();
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        self.note_key_for_input_method(keycode + 8, pressed);
         let state = if pressed {
             KeyState::Pressed
         } else {

@@ -4,10 +4,14 @@
 //! proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 //!                   [--color RRGGBBAA] [--layout argb8888] [--duration SECONDS]
 //!                   [--relative-pointer] [--lock-pointer | --confine-pointer]
+//!                   [--text-input X,Y,W,H] [--input-method echo] [--no-window]
 //! ```
 //!
 //! Shows a solid window and prints every event it receives as one JSON
-//! object per line on stdout. `--socket` is required: the client never
+//! object per line on stdout. `--text-input` gives the window a text field
+//! with that cursor rectangle; `--input-method echo` makes the client the
+//! input method of the seat (it composes letters and commits them in
+//! capitals on Return), usually with `--no-window`. `--socket` is required: the client never
 //! falls back to `WAYLAND_DISPLAY`, so it cannot open a window on the
 //! desktop session by accident. `--color` gives the stored channel values
 //! (premultiplied, as `wl_shm` expects).
@@ -17,7 +21,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use proto_test_client::{ClientOptions, ConstraintRequest, PixelLayout, TestClient};
+use proto_test_client::{
+    ClientOptions, ConstraintRequest, InputMethodMode, PixelLayout, TestClient,
+};
 
 fn main() -> ExitCode {
     match run() {
@@ -67,6 +73,23 @@ fn run() -> Result<(), String> {
                 options.layout = PixelLayout::from_name(&text)
                     .ok_or(format!("unknown pixel layout {text:?}"))?;
             }
+            "--text-input" => {
+                let text = value("--text-input")?;
+                let parts: Vec<i32> = text
+                    .split(',')
+                    .map(|p| p.parse::<i32>())
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| format!("invalid rectangle {text:?}, expected X,Y,W,H"))?;
+                let [x, y, w, h] = parts[..] else {
+                    return Err(format!("invalid rectangle {text:?}, expected X,Y,W,H"));
+                };
+                options.text_input_enable_on_enter = Some((x, y, w, h));
+            }
+            "--input-method" => match value("--input-method")?.as_str() {
+                "echo" => options.input_method = Some(InputMethodMode::Echo),
+                other => return Err(format!("unknown input method mode {other:?}")),
+            },
+            "--no-window" => options.window = false,
             "--duration" => {
                 let text = value("--duration")?;
                 let seconds: f64 = text
@@ -81,7 +104,9 @@ fn run() -> Result<(), String> {
                 println!(
                     "usage: proto-test-client --socket PATH [--title T] [--app-id ID] \
                      [--size WxH] [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888] \
-                     [--duration SECONDS] [--relative-pointer] [--lock-pointer | --confine-pointer]"
+                     [--duration SECONDS] [--relative-pointer] [--lock-pointer | --confine-pointer] \
+                     [--text-input X,Y,W,H] [--input-method echo] \
+                     [--no-window]"
                 );
                 return Ok(());
             }
@@ -94,6 +119,7 @@ fn run() -> Result<(), String> {
     let mut client = TestClient::connect_path(&socket, options).map_err(|e| e.to_string())?;
     let deadline = duration.map(|d| Instant::now() + d);
     let mut printed = 0;
+    let mut printed_ime = 0;
     let stdout = std::io::stdout();
     loop {
         client
@@ -118,6 +144,16 @@ fn run() -> Result<(), String> {
             }
             out.flush().map_err(|e| e.to_string())?;
             printed = events.len();
+        }
+        let ime_events = client.ime_events();
+        if printed_ime < ime_events.len() {
+            let mut out = stdout.lock();
+            for event in &ime_events[printed_ime..] {
+                let line = serde_json::to_string(event).map_err(|e| e.to_string())?;
+                writeln!(out, "{line}").map_err(|e| e.to_string())?;
+            }
+            out.flush().map_err(|e| e.to_string())?;
+            printed_ime = ime_events.len();
         }
         if client.is_closed() || deadline.is_some_and(|d| Instant::now() >= d) {
             return Ok(());

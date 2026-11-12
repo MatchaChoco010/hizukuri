@@ -11,6 +11,7 @@ wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 xkbcommon = "0.9.0"
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
 rustix = { version = "1", features = ["fs", "event", "pipe", "mm", "param"] }
 thiserror.workspace = true
 serde.workspace = true

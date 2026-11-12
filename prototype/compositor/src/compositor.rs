@@ -1242,6 +1242,7 @@ impl<B: Backend> Compositor<B> {
                                 SurfaceRole::Popup => "popup",
                                 SurfaceRole::Cursor => "cursor",
                                 SurfaceRole::DragIcon => "drag-icon",
+                                SurfaceRole::InputPopup => "input-popup",
                             },
                             "offset": [node.offset.0, node.offset.1],
                             "size": [node.size.0, node.size.1],
@@ -1326,6 +1327,7 @@ impl<B: Backend> Compositor<B> {
             "primary_selection": self.wl.primary_selection_mime_types(),
             // Locks and confinements clients asked for; `active` is in effect.
             "pointer_constraints": self.describe_pointer_constraints(),
+            "input_method": input_method_json(&self.wl.input_method_status()),
             "pointer": {
                 "position": self.pointer_active.then_some([self.pointer.0, self.pointer.1]),
                 "cursor": match self.wl.cursor() {
@@ -1337,6 +1339,24 @@ impl<B: Backend> Compositor<B> {
             "frames_rendered": scene["frames_rendered"],
         })
     }
+}
+
+/// The input method part of `state`.
+fn input_method_json(status: &proto_wl::InputMethodStatus) -> Value {
+    let rect = |r: (i32, i32, i32, i32)| json!([r.0, r.1, r.2, r.3]);
+    json!({
+        "bound": status.bound,
+        "active": status.active,
+        "keyboard_grab": status.keyboard_grab,
+        "popup": status.popup.as_ref().map(|popup| json!({
+            "surface": popup.surface.0,
+            "shown": popup.shown,
+            "window": popup.window.map(|w| w.0),
+            "position": popup.position.map(|(x, y)| json!([x, y])),
+            "cursor_rectangle": rect(popup.cursor_rectangle),
+            "sent_rectangle": popup.sent_rectangle.map(rect),
+        })),
+    })
 }
 
 fn surface_view(node: proto_wl::SurfaceNode) -> SurfaceView {

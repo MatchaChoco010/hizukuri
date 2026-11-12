@@ -143,6 +143,7 @@ fn role_name(role: SurfaceRole) -> &'static str {
         SurfaceRole::Popup => "popup",
         SurfaceRole::Cursor => "cursor",
         SurfaceRole::DragIcon => "drag-icon",
+        SurfaceRole::InputPopup => "input-popup",
     }
 }
 
