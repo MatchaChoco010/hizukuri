@@ -16,6 +16,8 @@ const KEY_B: u32 = 48;
 const KEY_C: u32 = 46;
 const KEY_ENTER: u32 = 28;
 const KEY_LEFT: u32 = 105;
+const KEY_LEFTSHIFT: u32 = 42;
+const KEY_LEFTMETA: u32 = 125;
 const BTN_LEFT: u32 = 0x110;
 /// The cursor rectangle the text field reports.
 const CURSOR: (i32, i32, i32, i32) = (40, 30, 2, 16);
@@ -343,6 +345,83 @@ fn keys_handed_back_reach_the_application_once() {
 }
 
 #[test]
+fn a_key_held_into_the_grab_is_released_for_the_application() {
+    // A shortcut moved the focus to the application while its modifier was
+    // held: the application has the press, the input method grabs the
+    // keyboard, and the release goes to the grab. The input method hands
+    // the release back; the application must get it, with the modifiers
+    // that go with it.
+    let mut rig = Rig::new();
+    let (ime, app, _) = rig.active();
+    rig.client(ime).ime_release_keyboard();
+    rig.settle("grab released", |rig| !rig.status().keyboard_grab);
+    rig.client(app).clear_events();
+    rig.server.keyboard_key(KEY_LEFTMETA, true, 1_000_000);
+    rig.settle("press at the application", |rig| {
+        keys(rig.client(app).events()).contains(&(KEY_LEFTMETA, true))
+    });
+    rig.client(ime).ime_grab_keyboard().unwrap();
+    rig.settle("grabbed again", |rig| rig.status().keyboard_grab);
+    rig.server.keyboard_key(KEY_LEFTMETA, false, 2_000_000);
+    rig.settle("release at the grab", |rig| {
+        grab_keys(rig.client(ime).ime_events()).contains(&(KEY_LEFTMETA, false))
+    });
+    assert!(!keys(rig.client(app).events()).contains(&(KEY_LEFTMETA, false)));
+
+    rig.client(ime)
+        .ime_virtual_key(KEY_LEFTMETA, false)
+        .unwrap();
+    rig.settle("release at the application", |rig| {
+        keys(rig.client(app).events()).contains(&(KEY_LEFTMETA, false))
+    });
+    let last_modifiers = rig.client(app).events().iter().rev().find_map(|e| match e {
+        ClientEvent::Modifiers { depressed, .. } => Some(*depressed),
+        _ => None,
+    });
+    assert_eq!(
+        last_modifiers,
+        Some(0),
+        "the application still sees a modifier held"
+    );
+}
+
+#[test]
+fn modifiers_mirrored_by_the_input_method_reach_the_application() {
+    // While the grab holds the keyboard, a modifier pressed on its own goes
+    // to the grab. The input method mirrors the modifiers on its virtual
+    // keyboard; that is how the application learns of them.
+    let mut rig = Rig::new();
+    let (ime, app, _) = rig.active();
+    rig.client(ime).ime_virtual_key(KEY_LEFT, true).unwrap();
+    rig.client(ime).ime_virtual_key(KEY_LEFT, false).unwrap();
+    rig.settle("virtual keyboard ready", |rig| {
+        keys(rig.client(app).events()).contains(&(KEY_LEFT, false))
+    });
+    rig.client(app).clear_events();
+    rig.server.keyboard_key(KEY_LEFTSHIFT, true, 1_000_000);
+    rig.settle("shift at the grab", |rig| {
+        rig.client(ime)
+            .ime_events()
+            .iter()
+            .any(|e| matches!(e, ImeEvent::GrabModifiers { depressed: 1, .. }))
+    });
+    assert!(
+        !rig.client(app)
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Modifiers { depressed: 1, .. })),
+        "the application heard of the grab's modifiers directly"
+    );
+    rig.client(ime).ime_virtual_modifiers(1, 0, 0, 0).unwrap();
+    rig.settle("shift at the application", |rig| {
+        rig.client(app)
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Modifiers { depressed: 1, .. }))
+    });
+}
+
+#[test]
 fn moving_the_focus_deactivates_the_input_method() {
     let mut rig = Rig::new();
     let (ime, app, _) = rig.active();
@@ -397,6 +476,10 @@ fn a_crashed_input_method_gives_the_keyboard_back() {
     rig.settle("input method gone", |rig| !rig.status().bound);
     let status = rig.status();
     assert!(!status.keyboard_grab && !status.active, "{status:?}");
+    assert!(
+        !rig.client(app).text_input_entered(),
+        "the text input was not left"
+    );
     rig.settle("held key released", |rig| {
         keys(rig.client(app).events()).contains(&(KEY_B, false))
     });

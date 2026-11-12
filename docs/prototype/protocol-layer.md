@@ -51,9 +51,12 @@
 | `zwp_primary_selection_device_manager_v1` | 1 | |
 | `ext_data_control_manager_v1` | 1 | primary selection も扱う。どのクライアントにも見せる（下） |
 | `zwlr_data_control_manager_v1` | 2 | 同じ |
+| `zwp_text_input_manager_v3` | 1 | アプリの入力欄（[入力メソッド](#入力メソッド)） |
+| `zwp_input_method_manager_v2` | 1 | 入力メソッド（IME）。どのクライアントにも見せる |
+| `zwp_virtual_keyboard_manager_v1` | 1 | 仮想キーボード。どのクライアントにも見せる |
 | `zwp_linux_dmabuf_v1` | 6 または 3 | `--dmabuf` で公開したときだけ（下） |
 
-未実装: `wp_color_management_v1`、text-input と input-method、タッチとジェスチャー。
+未実装: `wp_color_management_v1`、タッチとジェスチャー。
 
 ## バッファ
 
@@ -145,6 +148,8 @@ transform だけを変えて、バッファを付け直さない commit は、�
 - `xdg_popup.grab` を扱う。grab の間、キーボードは popup に向き、ポインターのイベントは、popup のクライアントにだけ届く。
   そのクライアント以外の場所を押すと、popup を閉じる（`popup_done`）。押した操作は、そのまま続く。
 - grab の間に中核が求めた focus の変更は、grab が終わったときに適用する。
+- 入力メソッドがキーボードを grab しているときに開いた popup の grab は、キーボードの grab を取らない（下の
+  [入力メソッド](#入力メソッド)）。
 
 ## selection と drag and drop
 
@@ -193,6 +198,44 @@ transform だけを変えて、バッファを付け直さない commit は、�
 
 - **いつ有効にし、いつ解くかは、この層は決めない。** 例外は 1 つで、ポインターが表面を離れると、Smithay が解く。
 - 中核が、それを決める（[スクリプトの層](script-layer.md#ポインターの制約)）。
+
+## 入力メソッド
+
+text-input-v3（アプリ）、input-method-v2（IME）、virtual-keyboard-v1（IME が返すキー）を扱う。
+2 つの側の状態の受け渡し（enable と activate、preedit と commit、`done` の serial）は、Smithay が行う。
+プロトコルの要約は、[IME のプロトコル](../research/wayland/ime.md)にある。
+
+- text-input の focus は、キーボードの focus に従う。キーボードの focus が動くと、IME は deactivate される。
+  入力メソッドのクライアントがいないときは、アプリの text-input に `enter` を送らない。
+- 入力メソッドは、seat に 1 つである。2 つ目の `zwp_input_method_v2` には、`unavailable` を送る。
+- **キーボードの grab。** IME が grab している間、`keyboard_key` で渡したキーは、IME に届き、アプリには届かない。
+  中核のキーの割り当て（緊急用のキー、スクリプトの `key`）は、`keyboard_key` を呼ぶ前に、中核が見る。
+  grab より先である。
+- **仮想キーボードのキー。** grab を持つ IME の仮想キーボードのキーは、grab を通さずに、キーボードの focus に届く
+  （grab へ戻すと、IME との間で回り続ける）。キーの前に、いまの modifier を送る（grab の間、modifier の変化は、
+  grab にだけ届いているため）。IME が仮想キーボードの `modifiers` で返す modifier も、focus に送る。
+  押したキーの「離す」は、IME がいなくなった後に届いても、同じ経路で送る。grab の前にアプリに届いたキーの「離す」を
+  grab が受け取り、IME が返したときも、アプリに送る（ショートカットの modifier を押したまま focus が移ったとき）。
+  IME が押しを使ったキーの「離す」を返してきても（fcitx5 は、そうする）、アプリには送らない。
+  ほかのクライアントの仮想キーボードのキーは、実際のキーボードのキーと同じ経路を通る（grab にも届く）。
+  その keymap が seat のものと違えば、その間だけ seat の keymap を置き換え、実際のキーボードのキーが来たら戻す。
+  中核のキーの割り当ては、仮想キーボードのキーを見ない。
+- **IME が落ちたとき。** grab は外れ、アプリの text-input は `leave` を受け取り、キーは、またアプリに直接届く。
+  IME の仮想キーボードで押されたままのキーは、離される。
+- **候補ウィンドウ（`zwp_input_popup_surface_v2`）。** IME が active で、text-input に focus があるときだけ、見せる。
+  focus のある text-input の表面が属するウィンドウの、表面の 1 つ（`SurfaceRole::InputPopup`）として、
+  `window_surfaces` のいちばん手前に入る。中核とスクリプトは、ほかの表面と同じように描き、当たり判定をする。
+  - 位置は、プロトコルの層が決める。アプリが `set_cursor_rectangle` で伝えた矩形の下に、左端をそろえて置く。
+    ウィンドウの「popup を収める範囲」（`set_popup_bounds`）があり、下に収まらず、上なら収まるときは、矩形の上に置く。
+    左右は、範囲に収まるようにずらす。
+  - IME には、カーソルの矩形を、候補ウィンドウの表面から見た座標で伝える（`text_input_rectangle`）。
+- `input_method_status` で、入力メソッドの有無、active か、grab しているか、候補ウィンドウの位置と、
+  アプリが伝えたカーソルの矩形が読める。
+- 入力メソッドがキーボードを grab している間に、アプリが `xdg_popup.grab` で popup（メニュー）を開くと、
+  キーボードの grab は IME に残し、キーボードの focus を popup に移す。focus は、popup が閉じるまで popup に留まる。
+  キーは IME を通り、IME が使わなかったキーが、仮想キーボードで popup に届く。
+- text-input-v3 の version 2（`set_cursor_rectangle` を `wl_surface.commit` に合わせる）は、扱わない
+  （固定した版の Smithay が、version 1 だけを公開する）。
 
 ## 入力
 

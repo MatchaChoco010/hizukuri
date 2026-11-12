@@ -4,7 +4,7 @@
   - `text-input-unstable-v3`: wayland-protocols 1.50。interface は version 2（1.49 でも version 2）
   - `input-method-unstable-v2`: `wayland-protocols-misc` crate 0.3.12 に入っている XML。interface は version 1
   - `virtual-keyboard-unstable-v1`: 同じ crate の XML。interface は version 1
-  - Smithay（`8fd9fe0c74e5`）、fcitx5（`5ffd9e5`、2026-11-04）
+  - Smithay（`8fd9fe0c74e5`）、fcitx5（`5ffd9e5`、2026-11-04。7 節の後半は 5.1.23）
 
 ## 1. 目的と全体像
 
@@ -195,6 +195,14 @@ Smithay（`8fd9fe0c`）の仮想キーボードは、次のように動く。
 
 この経路で、「仮想キーボードのキーを grab へ送らない」ことを、compositor が自分で保証する必要がある。
 
+- grab を持つ IME のクライアントか、どうかは、`InputMethodHandle::keyboard_grab_client` で分かる。
+  そのキーは、`KeyboardHandle::input_forward_bypassing_grab` で、grab を通さずに focus へ送れる。
+  この関数は、xkb の状態を更新しない。
+- `input_forward_bypassing_grab` の `mods_changed` を `true` にすると、modifier は、キーの**後**に送られる
+  （`KeyboardInnerHandle::input` が、key、modifiers の順に送る）。関数の文書の「前に送る」という説明と、実装が食い違っている。
+- 仮想キーボードが消えると、押されたままのキーの「離す」を `Keyboard` のイベントとして送り、その後に `DeviceRemoved` を送る。
+  IME のクライアントが落ちたときは、その時点で、grab も `keyboard_grab_client` も無くなっていることがある。
+
 ## 6. 候補ウィンドウの位置決め
 
 - IME は、`get_input_popup_surface` で、候補ウィンドウの表面を作る。
@@ -206,6 +214,10 @@ Smithay（`8fd9fe0c`）の仮想キーボードは、次のように動く。
 - compositor は、`text_input_rectangle` で、入力位置の矩形を IME に伝える。座標は、候補ウィンドウの表面から見たものである。
   IME は、これを使って、候補ウィンドウの中の配置（どちら向きに伸ばすか、など）を決める。
 - 画面の端では、候補ウィンドウがはみ出さないように、位置をずらす。カーソルの矩形を隠さないようにする。
+
+Smithay（`8fd9fe0c`）は、アプリが `set_cursor_rectangle` で伝えた矩形を、アプリの表面の座標のまま、
+`text_input_rectangle` で送る。プロトコルの「surface local coordinates」を、候補ウィンドウの表面から見た座標として送るには、
+compositor が、候補ウィンドウを置いた後に、送り直す必要がある。
 
 **text-input-v3 の version 2 での変更。**
 
@@ -271,6 +283,15 @@ fcitx5 は、`zwp_input_method_manager_v2` と `zwp_virtual_keyboard_manager_v1`
 24. compositor が、fcitx5 に `deactivate` と `done` を送る。候補ウィンドウを隠す。
 25. fcitx5 は、仮想キーボードで押したままのキーがあれば、離すイベントを送る。grab を解放する。
 
+fcitx5 5.1.23 の同じファイルから、ほかに分かること:
+
+- grab で受け取った `modifiers` を、仮想キーボードの `modifiers` で、そのまま送り返す。
+- キーの繰り返しを、自分で作る。押したキーの繰り返しの時機に、仮想キーボードで「離す」と「押す」を送り直す
+  （`repeat_info` の delay より、少し早く始める）。
+- `done` を受け取るたびに、変化が無くても、preedit を送り直して `commit` する（`done` と `commit` を対にしたがる compositor のため）。
+- 仮想キーボードは、既定では、activate のたびに作り直す（設定の `PersistentVirtualKeyboard` で、使い回す）。
+- 処理しなかったキーの一部は、仮想キーボードのキーではなく、確定した文字列として送ることがある。
+
 fcitx5 のソースには、「grab は 1 つしか持てない。2 つのクライアントの間を切り替えると `activate` が 2 度続くことがあり、
 そのとき 2 つ目の grab の要求が失敗して、無効な object になる」という注記がある。
 compositor は、`activate` を重ねて送らないようにし、grab の要求が重なったときにも落ちないようにする。
@@ -305,6 +326,13 @@ compositor は、`activate` を重ねて送らないようにし、grab の要�
   アプリの popup より手前に出す必要がある。
 - **version 2 のカーソルの矩形。** 有効になる時機が、version 1 と違う。Smithay（`8fd9fe0c`）が公開するのは、text-input-v3 も input-method-v2 も、version 1 である。
 - **Smithay の text-input は、focus を、キーボードの focus に自動で合わせる。** 候補ウィンドウの位置は、compositor が handler で決める。
+  キーボードの focus が動くと、Smithay は、元の focus の leave と、新しい focus の enter のそれぞれで、IME に `deactivate` と `done` を送る
+  （有効でなかったときにも送る）。この経路では、`TextInputActivation::deactivated` は呼ばれない。
+- **Smithay の候補ウィンドウの親。** 親は、IME が候補ウィンドウを作った時点の、text-input の focus である。
+  text-input の focus は、IME が active かどうかに関わらず、キーボードの focus に合わせてあるので、親があることは、
+  見せてよいことを意味しない。
+- **メニューの grab。** キーボードの grab は 1 つである。IME の grab がある間に、`xdg_popup.grab` のための grab を取ると、
+  IME の grab が外れる。Smithay は、外した IME の grab を、後で戻す口を持たない。
 
 ## 10. 出典
 
@@ -317,5 +345,6 @@ compositor は、`activate` を重ねて送らないようにし、grab の要�
   https://github.com/Smithay/wayland-rs
 - fcitx5（`5ffd9e5`、2026-11-04）: `src/frontend/waylandim/waylandimserverv2.cpp`、`src/ui/classic/waylandinputwindow.cpp`
   https://github.com/fcitx/fcitx5
+- fcitx5 5.1.23（nixpkgs の `fcitx5` の source）: `src/frontend/waylandim/waylandimserverv2.cpp`
 - Smithay（`8fd9fe0c74e5`）: `src/wayland/text_input/`、`src/wayland/input_method/`、`src/wayland/seat/keyboard.rs`、`CHANGELOG.md`
   https://github.com/Smithay/smithay

@@ -57,6 +57,11 @@ pub(crate) struct ImeState {
     /// past the grab, by device: their release goes the same way, even
     /// when the grab is gone by then.
     bypassed: HashMap<String, Vec<u32>>,
+    /// Keys of the real keyboard whose press reached the focused client
+    /// directly, with no grab in the way, and whose release did not (yet):
+    /// the grab took it. When the input method hands such a release back,
+    /// it goes to the client.
+    held_by_client: Vec<u32>,
 }
 
 impl ImeState {
@@ -68,6 +73,7 @@ impl ImeState {
             default_keymap: None,
             foreign_keymap: false,
             bypassed: HashMap::new(),
+            held_by_client: Vec::new(),
         }
     }
 }
@@ -257,6 +263,24 @@ impl State {
         }
     }
 
+    /// Notes where a key of the real keyboard is about to go (`raw` is the
+    /// xkb key code): past an input method's grab or into it.
+    pub(crate) fn note_key_for_input_method(&mut self, raw: u32, pressed: bool) {
+        let grabbed = self.seat.input_method().keyboard_grabbed()
+            && self.seat.get_keyboard().is_some_and(|k| k.is_grabbed());
+        match (pressed, grabbed) {
+            (true, false) => {
+                if !self.ime.held_by_client.contains(&raw) {
+                    self.ime.held_by_client.push(raw);
+                }
+            }
+            (false, false) => self.ime.held_by_client.retain(|k| *k != raw),
+            // A press the grab takes is the input method's to hand back; a
+            // release the grab takes stays owed to the client.
+            (true, true) | (false, true) => {}
+        }
+    }
+
     /// A key of a real keyboard is about to be handled: a keymap a virtual
     /// keyboard brought in gives way to the seat's own.
     pub(crate) fn restore_keymap(&mut self) {
@@ -361,9 +385,20 @@ impl VirtualKeyboardHandler for State {
                 let serial = SERIAL_COUNTER.next_serial();
                 let raw = keycode.raw();
                 let held_past_grab = self.ime.bypassed.get(&id).is_some_and(|k| k.contains(&raw));
+                // A release goes past the grab when the press did, even if the
+                // grab is gone by now. It also does when the grab holder
+                // hands back the release of a key whose press reached the
+                // client before the grab was taken (the modifier of a
+                // shortcut that moved the focus to it).
+                let owed_to_client = key_state == KeyState::Released
+                    && self.belongs_to_grab_holder(&device)
+                    && self.ime.held_by_client.contains(&raw);
+                if owed_to_client {
+                    self.ime.held_by_client.retain(|k| *k != raw);
+                }
                 let past_grab = match key_state {
                     KeyState::Pressed => self.belongs_to_grab_holder(&device),
-                    KeyState::Released => held_past_grab,
+                    KeyState::Released => held_past_grab || owed_to_client,
                 };
                 if past_grab {
                     let keys = self.ime.bypassed.entry(id.clone()).or_default();
@@ -407,12 +442,17 @@ impl VirtualKeyboardHandler for State {
                 mods_locked,
                 group,
             }) => {
-                // An input method mirrors the modifiers of the grab, which
-                // are the seat's own: nothing changes then.
-                let _ = device;
                 keyboard.with_xkb_state(self, |mut context| {
                     context.set_modifier_mask(mods_depressed, mods_latched, mods_locked, group)
                 });
+                // An input method mirrors the modifiers of the grab, which
+                // are the seat's own: the line above changes nothing, and
+                // the client would not hear of them. While the grab holds
+                // the keyboard, this is the only way the client learns that
+                // a modifier was pressed or released.
+                if self.belongs_to_grab_holder(&device) {
+                    keyboard.advertise_modifier_state(self);
+                }
             }
             InputEvent::DeviceRemoved { device } => {
                 // Smithay released the keys that were still down just

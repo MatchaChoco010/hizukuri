@@ -263,6 +263,8 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 - `selection`、`primary_selection`: クリップボードと primary selection の持ち主が出している MIME type
 - `pointer_constraints`: クライアントが求めているポインターの制約。表面、ウィンドウ、種類（`lock`、`confine`）、
   有効かどうか（`active`）、cursor position hint
+- `input_method`: 入力メソッドの有無（`bound`）、active か、キーボードを grab しているか、候補ウィンドウ（`popup`）の
+  表面、見えているか、ウィンドウ、ウィンドウの中の位置、アプリが伝えたカーソルの矩形、IME に伝えた矩形
 - `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
 - `window_manager`: `script`（`--wm script`）、`fallback`（`--no-renderer`）、`rust-floating`（`--wm rust`）
 - `script`（`--renderer script` のとき）: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計
@@ -289,6 +291,7 @@ luminance:x(80/80) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srg
 proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
                   [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888]
                   [--duration 秒] [--relative-pointer] [--lock-pointer | --confine-pointer]
+                  [--text-input X,Y,W,H] [--input-method echo] [--no-window]
 ```
 
 - `--socket` は必須である。`WAYLAND_DISPLAY` を見ない。
@@ -300,6 +303,13 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
   ライブラリは、バッファの模様、dmabuf での送付、buffer transform、viewport、fractional-scale、presentation の feedback、
   popup、selection、drag and drop、ウィンドウ管理への要求、相対的な動き、ポインターの制約、primary selection、
   data control も話す。ウィンドウを持たないクライアント（クリップボードの履歴の道具の役）にもなれる。
+- `--text-input` は、ウィンドウに入力欄を持たせる。text-input に `enter` されると、その矩形をカーソルとして伝えて、
+  有効にする。受け取った preedit と確定した文字列は、イベントとして出す。
+- `--input-method echo` は、クライアントを、seat の入力メソッドにする（ふつうは `--no-window` と一緒に使う）。
+  active な間、キーボードを grab し、英小文字を変換中の文字列にまとめ、Return で大文字にして確定し、
+  候補ウィンドウの代わりに、1 色の popup を出す。ほかのキーは、仮想キーボードで返す。
+- ライブラリは、入力欄の側（enable、カーソルの矩形、disable）と、入力メソッドの側（grab、preedit、commit、
+  仮想キーボード、popup）を、1 つずつ操作できる（`ClientOptions::text_input`、`ClientOptions::input_method`）。
 
 ## 検査
 
@@ -375,8 +385,9 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - damage を使った部分的な描き直し（毎回、出力の全体を描く）。
 - スクリプトから、SPIR-V の shader を渡すこと（`Gpu::create_shader_spirv` は、Rust の API にだけある）。
 - Rust のレンダラーでの、dmabuf の Vulkan への取り込み（スクリプトの描画には、ある）。
-- IME（text-input、input-method）、xwayland-satellite のための対応、タッチ、ジェスチャー。
+- xwayland-satellite のための対応、タッチ、ジェスチャー。
 - data control を、信頼するクライアントにだけ見せること（`wp_security_context_v1`）。
+- 候補ウィンドウの位置を、スクリプトが決めること。text-input-v3 の version 2。
 - Rust のレンダラーは、GPU の完了を CPU で待つ（表面の内容を取り込むたびと、フレームを描くたびに 1 回ずつ）。
   KMS でも、待ってから flip する（`IN_FENCE_FD` を使わない）。完了の通知が遅い環境では、
   更新のあるクライアントの数に比例して、フレームが遅くなる。

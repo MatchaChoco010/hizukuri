@@ -421,6 +421,22 @@ impl TestClient {
         Ok(())
     }
 
+    /// Sends the modifiers through the virtual keyboard, as an input method
+    /// does with those its grab receives.
+    pub fn ime_virtual_modifiers(
+        &mut self,
+        depressed: u32,
+        latched: u32,
+        locked: u32,
+        group: u32,
+    ) -> Result<(), ClientError> {
+        self.state.ensure_virtual_keyboard(&self.handle)?;
+        if let Some(keyboard) = &self.state.ime.virtual_keyboard {
+            keyboard.modifiers(depressed, latched, locked, group);
+        }
+        Ok(())
+    }
+
     /// Shows a popup surface (the candidate window) filled with `color`.
     pub fn ime_show_popup(
         &mut self,

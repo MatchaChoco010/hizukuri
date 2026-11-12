@@ -52,6 +52,7 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | --- | --- |
 | Mesa | lavapipe と、virtio-gpu のドライバー（Venus、virgl）。Vulkan の loader は、lavapipe と Venus の 2 つだけを見る（`VK_DRIVER_FILES`） |
 | アプリ | `foot`、weston（`weston-terminal`）、`alacritty`、`vulkan-tools`（`vkcube`、`vulkaninfo`）、`wl-clipboard` |
+| 入力メソッド | fcitx5 と、日本語の変換エンジンの Anthy（`fcitx5-anthy`）だけ。Qt と GTK の IM module、設定の道具は入れない。session bus のための `dbus`（`dbus-run-session`）。日本語のフォント（IPAex） |
 | 機器と入力を調べる道具 | `drm_info`、`libinput`、`evtest`、`wayland-utils`、`wev` |
 | そのほか | `gdb`、`strace`、`rsync`、`vim`、validation layer、Python（libevdev つき）、等幅のフォント、カーソルのテーマ |
 | session | logind と polkit。seatd も入っている（自動では起動しない。`tty-run --seatd` が起動する） |
@@ -444,7 +445,7 @@ GPU は、要らない。数分で終わる。
 
 | 指定 | 内容 |
 | --- | --- |
-| `--only PART,...` | 回す部を選ぶ。既定は、`lavapipe,script,vkms,safety,outputs` |
+| `--only PART,...` | 回す部を選ぶ。既定は、`lavapipe,script,vkms,safety,outputs,ime` |
 | `--out DIR` | 結果を置く場所。既定は、`artifacts/vm-check/<日時>/` |
 | `--skip-build` | ビルドしない。すでにあるバイナリを送る |
 
@@ -455,6 +456,7 @@ GPU は、要らない。数分で終わる。
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
 | `outputs` | 2 つの出力。使う出力の指定、ほかの出力に触れないこと、hotplug | 既定 |
+| `ime` | 実際の IME（fcitx5 と Anthy）で、foot に日本語を入れる。スクリプトの層（組み込みのプロジェクト）で動かす。下の「IME の部」 | 既定 |
 | `real-hardware` | VM の外で起動するときの安全策 | `HIZUKURI_VM_CPU=host,-hypervisor` |
 
 - compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目（組み込みのプロジェクトで、`--wm script`）のほかは、
@@ -499,6 +501,26 @@ vm-check: <数> passed, <数> failed, <数> skipped. Evidence: <出力のディ�
 | `<部>/screen-<段階>.png` | 取り込んだ画面 |
 | `<部>/selftest*/` | `kms-selftest` の報告 |
 | `script/frame-time-apps-1080p.json` | Rust のレンダラーと、スクリプトのレンダラーの、フレームの時間 |
+| `ime/screen-candidates.png`、`ime/state-candidates.json` | fcitx5 の候補ウィンドウが出ている画面と、そのときの状態 |
+| `ime/fcitx5.log`、`ime/fcitx5-requests.txt` | fcitx5 のログ（`WAYLAND_DEBUG=1`）と、fcitx5 が送った要求の一覧（初めて使った順） |
+
+#### IME の部
+
+`ime` の部は、DRM/KMS の session（スクリプトの描画と、スクリプトのウィンドウ管理）の上で、fcitx5 と foot を動かす。
+
+- fcitx5 は、`dbus-run-session` の中で、検査の作業用のディレクトリの設定（`XDG_CONFIG_HOME`）で起動する。
+  設定は、Anthy を既定の入力メソッドにし、最初から有効にする（ひらがな、ローマ字の入力）。
+- foot の中では、受け取った行を、1 行ずつファイルに書く shell が動く。キーは、QMP から送る。
+
+| 項目 | 確かめること |
+| --- | --- |
+| `setup` | fcitx5 が入力メソッドになり、foot が focus を得て text-input を有効にし、fcitx5 が active になって、キーボードを grab する |
+| `kana` | `aiueo`、Return、Return で、shell が `あいうえお` を読む（1 つ目の Return は確定、2 つ目は仮想キーボードで foot に返るキー） |
+| `conversion` | `nihongo`、Space、Return、Return で、shell が `日本語` を読む |
+| `candidates` | `kouho`、Space、Space で、候補ウィンドウが出て、foot が伝えたカーソルの矩形のすぐ下（収まらなければ上）にある。画面を取り込む。Return で選んだ候補が確定し、候補ウィンドウが消え、shell が日本語の行を読む |
+| `focus` | text-input の無いウィンドウに focus が移ると deactivate され、スクリプトのキー（logo+H。grab より先に処理される）で foot に戻すと、また active になる |
+| `crash` | fcitx5 を SIGKILL で止めると、grab が残らず、`abc`、Return が、foot の shell に直接届く（modifier も残らない） |
+| `protocols` | fcitx5 のログから、送った要求を、初めて使った順に並べる。input method、grab、仮想キーボード、popup の表面を使ったこと |
 
 失敗を調べるときは、`--keep` で VM を残し、`tools/vm/vm tty-log`、`tools/vm/vm screendump`、`tools/vm/vm ssh` で、ゲストを見る。
 ゲストの起動の失敗は、`HIZUKURI_VM_DIR` の `log/serial.log` に出る。
@@ -538,6 +560,7 @@ CI の全体は、[テストと CI](testing-and-ci.md)にある。
 | 複数の出力、hotplug | virtio-gpu の 2 つ目の出力、`vm output` | `outputs` |
 | メインループが固まったときの、watchdog の動作 | `freeze-main-loop` | `safety`、`script` |
 | VM の外で起動するときの安全策 | CPU の `hypervisor` フラグを隠した構成 | `real-hardware` |
+| 実際の IME での日本語の入力、候補ウィンドウの位置 | fcitx5（Anthy）、foot、QMP のキー | `ime` |
 | libseat の seatd のバックエンド | `tty-run --seatd` | 試験は、未実装 |
 | ジェスチャー、タッチパッド、入力の機器の抜き差し | uinput（`uinput-touchpad.py`）、`libinput replay` | 試験は、未実装 |
 | vkms が表示した画素の値 | vkms の writeback | 試験は、未実装 |

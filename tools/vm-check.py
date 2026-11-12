@@ -2125,17 +2125,17 @@ done
 def protocol_order(log):
     """The Wayland requests a client made, in the order of their first use,
     from its WAYLAND_DEBUG output: `interface.request` per line."""
+    import re
     seen = []
+    # `interface#id.request(...)`, or `interface@id.request(...)` in older
+    # versions of libwayland.
+    pattern = re.compile(r" -> ([A-Za-z0-9_]+)[@#][0-9]+\.([A-Za-z0-9_]+)\(")
     for line in log.splitlines():
-        if " -> " not in line:
-            continue
-        call = line.split(" -> ", 1)[1].split("(", 1)[0].strip()
-        if "@" in call:
-            name = call.split("@", 1)[0] + "." + call.rsplit(".", 1)[-1]
-        else:
-            name = call
-        if name not in seen:
-            seen.append(name)
+        match = pattern.search(line)
+        if match:
+            name = f"{match.group(1)}.{match.group(2)}"
+            if name not in seen:
+                seen.append(name)
     return seen
 
 
@@ -2253,14 +2253,19 @@ def check_ime(out, uid, results):
         if not (below or above) or width <= 0 or height <= 0:
             raise Failed(f"the popup at {popup['position']} ({width}x{height}) is not by the "
                          f"cursor {popup['cursor_rectangle']} (surface offset {root['offset']})")
-        # Cancel the conversion and what was typed.
-        press(["esc", "esc", "esc"])
+        # Take the selected candidate. The window goes; Return ends the line.
+        press(["ret"])
         wait_for("the candidate window to go",
                  lambda: not (ime()["popup"] or {}).get("shown"), seconds=10)
+        press(["ret"])
+        text = wait_for("line 3 in the terminal", lambda: line(3) or None, seconds=10)
+        if text.isascii():
+            raise Failed(f"the terminal got {text!r} for a candidate")
         return (f"kouho, Space, Space: a {width}x{height} candidate window "
                 f"{'below' if below else 'above'} the cursor {popup['cursor_rectangle']}, "
                 f"at {popup['position']} in the window; fcitx5 was told "
-                f"{popup['sent_rectangle']} (relative to its popup); Escape closed it")
+                f"{popup['sent_rectangle']} (relative to its popup); Return took {text!r} "
+                f"and the window went away")
 
     def focus_moves():
         spawn(f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} "
@@ -2277,15 +2282,16 @@ def check_ime(out, uid, results):
                 "(the script's key, handled before the grab) moved the focus back: active again")
 
     def crash():
-        stop_spawned(fcitx5["pid"])
+        # As a crash: no chance to let go of anything.
+        guest(_SIGNAL.format(pid=fcitx5["pid"], signal="KILL") + "true", check=False)
         wait_for("the input method to be gone", lambda: not ime()["bound"], seconds=15)
         status = ime()
         if status["keyboard_grab"]:
             raise Failed(f"the grab outlived the input method: {status}")
-        text = typed_line(3, ["type:abc"], "abc", settle=0.3)
+        text = typed_line(4, ["type:abc"], "abc", settle=0.3)
         if text != "abc":
             raise Failed(f"the terminal got {text!r}")
-        return "fcitx5 stopped: no grab is left, and abc, Return reached the shell directly"
+        return "fcitx5 killed (SIGKILL): no grab is left, and abc, Return reached the shell directly"
 
     def protocols():
         log = guest(f"cat {GUEST_DIR}/ime-fcitx5.log 2>/dev/null || true", check=False)

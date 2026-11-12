@@ -943,6 +943,7 @@ impl State {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        self.note_key_for_input_method(keycode + 8, pressed);
         let state = if pressed {
             KeyState::Pressed
         } else {
