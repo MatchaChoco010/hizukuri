@@ -160,6 +160,21 @@ pub struct WorldSnapshot {
     pub background: [f32; 3],
 }
 
+/// When the frame that is about to be drawn is for. See
+/// [`Scene::frame_timing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameTiming {
+    pub output: proto_backend::OutputId,
+    /// The time of the clock frames are timed with, now.
+    pub now: std::time::Duration,
+    /// When the frame is expected to reach the output, on the same clock:
+    /// what the backend predicts, or `now` when it cannot tell. What moves
+    /// on screen is best placed where it should be at this time.
+    pub presentation: std::time::Duration,
+    /// Time between two frames of the output.
+    pub refresh: std::time::Duration,
+}
+
 /// Something a scene asks the core to do. See [`Scene::take_requests`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum SceneRequest {
@@ -261,6 +276,10 @@ pub trait Scene {
     fn has_contents(&self, surface: SurfaceId) -> bool;
 
     // -- port 2: frames out -------------------------------------------------
+
+    /// Called right before [`Scene::draw`] with the time the frame is for.
+    /// Scenes that draw nothing that moves by itself ignore it.
+    fn frame_timing(&mut self, _timing: &FrameTiming) {}
 
     /// Draws the windows into the render target of an output. `target` is
     /// `None` when the backend has nothing to render into; the scene then

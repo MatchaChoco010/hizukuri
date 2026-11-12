@@ -168,6 +168,11 @@ pub enum Request {
     ScriptMode {
         mode: String,
     },
+    /// Moves the clock frames are timed with forward, when it is a manual
+    /// one (`--clock manual`). Answers the new time (`now_ms`).
+    AdvanceClock {
+        milliseconds: f64,
+    },
     /// Stops the compositor.
     Quit,
 }

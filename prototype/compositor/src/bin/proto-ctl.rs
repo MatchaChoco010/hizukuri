@@ -165,6 +165,8 @@ enum Command {
     /// Put the script in charge (`running`) or the built-in fallback
     /// (`fallback`).
     ScriptMode { mode: String },
+    /// Move the manual clock forward (`--clock manual`), in milliseconds.
+    AdvanceClock { milliseconds: f64 },
     /// Stop the compositor.
     Quit,
     /// Send a raw JSON request.
@@ -275,6 +277,7 @@ fn main() -> ExitCode {
             path: path.map(|p| std::path::absolute(&p).unwrap_or(p)),
         },
         Command::ScriptMode { mode } => Request::ScriptMode { mode },
+        Command::AdvanceClock { milliseconds } => Request::AdvanceClock { milliseconds },
         Command::Quit => Request::Quit,
         Command::Raw { json } => match serde_json::from_str(&json) {
             Ok(request) => request,

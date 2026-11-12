@@ -107,6 +107,27 @@ impl FramePacer {
     }
 }
 
+/// When a frame committed at `now` is expected on screen, at a fixed refresh
+/// rate: at the first vblank after `now`, counted from the last completed
+/// flip at `last_flip`. A flip still in flight takes that vblank, and the new
+/// frame the one after.
+///
+/// Rendering takes time too: a frame that is late for the vblank found here
+/// shows one refresh period later. Without VRR the display does not wait.
+pub fn next_vblank(
+    last_flip: Duration,
+    refresh: Duration,
+    now: Duration,
+    flip_pending: bool,
+) -> Duration {
+    let refresh_ns = refresh.as_nanos().max(1);
+    let since = now.saturating_sub(last_flip).as_nanos();
+    // The first vblank strictly after `now` (and after the last flip).
+    let periods = since / refresh_ns + 1;
+    let periods = if flip_pending { periods + 1 } else { periods };
+    last_flip + Duration::from_nanos((periods * refresh_ns) as u64)
+}
+
 /// The answer of [`FramePacer::flip_completed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlipCompleted {
@@ -258,6 +279,23 @@ mod tests {
         assert!(pacer.flip_abandoned());
         assert!(pacer.can_present());
         assert!(!pacer.flip_abandoned());
+    }
+
+    #[test]
+    fn the_next_vblank_follows_the_last_flip() {
+        let refresh = Duration::from_micros(16_000);
+        let last = Duration::from_secs(10);
+        let at = |us: u64| last + Duration::from_micros(us);
+        // Right after a flip: the next vblank.
+        assert_eq!(next_vblank(last, refresh, at(1_000), false), at(16_000));
+        // On a vblank: the one after it.
+        assert_eq!(next_vblank(last, refresh, at(16_000), false), at(32_000));
+        // Idle for a while: the first vblank after now.
+        assert_eq!(next_vblank(last, refresh, at(100_000), false), at(112_000));
+        // A flip in flight takes the next vblank.
+        assert_eq!(next_vblank(last, refresh, at(1_000), true), at(32_000));
+        // A clock behind the flip's timestamp is not a time before it.
+        assert_eq!(next_vblank(last, refresh, Duration::from_secs(9), false), at(16_000));
     }
 
     #[test]

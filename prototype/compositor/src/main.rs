@@ -20,7 +20,9 @@ use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use proto_backend::headless::{HeadlessBackend, HeadlessConfig, HeadlessOutputConfig};
-use proto_backend::{Backend, BackendError, BackendEvent, BackendHost, OutputId, OutputInfo};
+use proto_backend::{
+    Backend, BackendError, BackendEvent, BackendHost, OutputId, OutputInfo, TimeSource,
+};
 use proto_backend::{OutputFormat, TargetId, Targets};
 use proto_color::ImageDescription;
 use proto_compositor::compositor::{Compositor, CompositorOptions};
@@ -54,6 +56,16 @@ enum CursorMode {
     Auto,
     On,
     Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ClockKind {
+    /// `CLOCK_MONOTONIC`.
+    Monotonic,
+    /// Headless only: a clock that stands still until it is moved through
+    /// the control interface (`advance_clock`). For tests of what moves
+    /// with time.
+    Manual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -208,6 +220,12 @@ struct RunArgs {
     /// Exit after this many seconds. A safety net for unattended runs.
     #[arg(long)]
     exit_after: Option<f64>,
+
+    /// The clock frames are timed with. `manual` (headless only) stands
+    /// still until `advance_clock` moves it; frames are still granted in
+    /// real time.
+    #[arg(long, value_enum, default_value = "monotonic")]
+    clock: ClockKind,
 
     /// Directory of the script project (with `main.luau`), which draws and
     /// manages the windows. Without it the built-in project is used.
@@ -371,6 +389,9 @@ impl Backend for AnyBackend {
     }
     fn describe(&self) -> serde_json::Value {
         self.inner().describe()
+    }
+    fn next_presentation(&self, output: OutputId) -> Option<std::time::Duration> {
+        self.inner().next_presentation(output)
     }
     fn drain_events(&mut self) -> Vec<BackendEvent> {
         self.inner_mut().drain_events()
@@ -578,6 +599,12 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         }
     }
 
+    let clock = match args.clock {
+        ClockKind::Monotonic => TimeSource::Monotonic,
+        ClockKind::Manual if backend_kind == BackendKind::Headless => TimeSource::manual(),
+        ClockKind::Manual => return Err("--clock manual needs --backend headless".into()),
+    };
+
     let mut event_loop: EventLoop<App> =
         EventLoop::try_new().map_err(|e| format!("failed to create the event loop: {e}"))?;
     let handle = event_loop.handle();
@@ -599,6 +626,7 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         memory_limit: Some(args.script_memory_mb.max(1) << 20),
         retry_after: std::time::Duration::from_millis(args.script_retry_ms),
         wait_for_gpu: args.script_wait_gpu,
+        clock: clock.clone(),
         ..ScriptOptions::default()
     };
     let mut make_drawing = |display_gpu: Option<(u32, u32)>| -> Result<(Drawing, bool), String> {
@@ -639,7 +667,8 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
                 composite_space,
             };
             let backend = HeadlessBackend::new(&config, drawing.targets())
-                .map_err(|e| format!("failed to create the headless backend: {e}"))?;
+                .map_err(|e| format!("failed to create the headless backend: {e}"))?
+                .with_clock(clock.clone());
             backend
                 .insert_sources(&handle)
                 .map_err(|e| format!("failed to register the backend: {e}"))?;
@@ -707,6 +736,7 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         background: args.background,
         composite_space,
         draw_cursor,
+        clock,
     };
     let (scene, wm): (Box<dyn Scene>, Box<dyn WindowManager>) = match drawing {
         Drawing::Nothing => (
