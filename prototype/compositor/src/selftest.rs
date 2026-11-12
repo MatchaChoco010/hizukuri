@@ -25,7 +25,7 @@ use proto_backend::{Backend, BackendEvent, OutputInfo};
 use proto_backend::{DmabufPlane, TargetDesc, TargetError, TargetId, TargetProvider, Targets};
 use proto_gfx_core::{
     ColorAttachment, ColorTarget, CullMode, DeviceDescription, Format, GfxError, Gpu, GpuConfig,
-    Handle, LoadOp, RenderPipelineDesc, ShaderLanguage, ShaderSource, ShaderStage, Topology,
+    Handle, LoadOp, RenderPipelineDesc, ShaderStage, Topology,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -93,25 +93,10 @@ fn pattern_rects(width: u32, height: u32, frame: u64) -> Vec<([u32; 4], [u8; 3])
     rects
 }
 
-const PATTERN_SHADER: &str = r#"
-struct Push {
-    rect: vec4<f32>,        // x, y, width, height in target pixels
-    color: vec4<f32>,
-    target_size: vec4<f32>, // width, height, unused, unused
-}
-var<immediate> pc: Push;
-
-@vertex
-fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let corner = vec2<f32>(f32(index & 1u), f32((index >> 1u) & 1u));
-    return vec4((pc.rect.xy + corner * pc.rect.zw) / pc.target_size.xy * 2.0 - 1.0, 0.0, 1.0);
-}
-
-@fragment
-fn fs() -> @location(0) vec4<f32> {
-    return pc.color;
-}
-"#;
+/// The pattern's shader (`shaders/selftest.slang`), compiled to SPIR-V by
+/// `build.rs`.
+const PATTERN_VERTEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/selftest.vs.spv"));
+const PATTERN_FRAGMENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/selftest.fs.spv"));
 
 /// Draws the test pattern into output images, on its own GPU device. It
 /// is the [`TargetProvider`] the backend makes its targets with.
@@ -152,17 +137,11 @@ impl PatternRenderer {
         let (vertex, fragment) = match self.shaders {
             Some(shaders) => shaders,
             None => {
-                let mut shader = |stage, entry| {
-                    self.gpu.create_shader(&ShaderSource {
-                        stage,
-                        language: ShaderLanguage::Wgsl,
-                        source: PATTERN_SHADER,
-                        entry,
-                    })
-                };
+                let mut shader =
+                    |stage, entry, spirv| self.gpu.create_shader_spirv(stage, entry, spirv);
                 let shaders = (
-                    shader(ShaderStage::Vertex, "vs")?,
-                    shader(ShaderStage::Fragment, "fs")?,
+                    shader(ShaderStage::Vertex, "vs", PATTERN_VERTEX)?,
+                    shader(ShaderStage::Fragment, "fs", PATTERN_FRAGMENT)?,
                 );
                 self.shaders = Some(shaders);
                 shaders

@@ -10,6 +10,8 @@
 //! the entry point's own name, and is always compiled with `-fp-mode precise`. `proto-gfx-core` checks it again before use;
 //! nothing here makes it safe to run.
 
+pub mod project;
+
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};

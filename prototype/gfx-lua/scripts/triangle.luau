@@ -1,31 +1,11 @@
 -- Example 1: a script builds a pipeline from nothing and draws a triangle.
 -- Vertex and index data are assembled in a Luau `buffer`.
 
-local SHADER = [[
-struct VsOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-}
-
-@vertex
-fn vs(@location(0) position: vec2<f32>, @location(1) color: vec4<f32>) -> VsOut {
-    var out: VsOut;
-    out.position = vec4(position, 0.0, 1.0);
-    out.color = color;
-    return out;
-}
-
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    return in.color;
-}
-]]
-
 local pipeline, vertices, indices
 
 function init()
-    local vs = gfx.create_shader({ stage = "vertex", source = SHADER, entry = "vs" })
-    local fs = gfx.create_shader({ stage = "fragment", source = SHADER, entry = "fs" })
+    local vs = gfx.create_shader({ stage = "vertex", shader = "shaders/triangle.slang", entry = "vs" })
+    local fs = gfx.create_shader({ stage = "fragment", shader = "shaders/triangle.slang", entry = "fs" })
     pipeline = gfx.create_render_pipeline({
         vertex = vs,
         fragment = fs,

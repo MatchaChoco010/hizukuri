@@ -64,7 +64,8 @@ fn a_named_shader_is_created_from_its_spirv() {
 
 #[test]
 fn a_host_without_a_loader_refuses_names() {
-    let host = host_with(patient());
+    let gpu = proto_gfx_core::Gpu::new(proto_gfx_core::GpuConfig::for_tests()).unwrap();
+    let host = proto_gfx_lua::ScriptHost::new(gpu, patient()).unwrap();
     host.load(
         "unnamed",
         r#"

@@ -2,70 +2,6 @@
 -- same file runs on both VMs. `buffer` (Luau) and `string.pack` (Lua) variants
 -- are chosen at load time.
 
-local QUAD = [[
-struct Push {
-    rect: vec4<f32>,
-    target_size: vec2<f32>,
-    rotation: vec2<f32>,
-    tint: vec4<f32>,
-}
-var<immediate> pc: Push;
-
-struct VsOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs(@builtin(vertex_index) index: u32) -> VsOut {
-    var corners = array<vec2<f32>, 6>(
-        vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
-        vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
-    );
-    let corner = corners[index];
-    let local = (corner - 0.5) * pc.rect.zw;
-    let rotated = vec2(
-        local.x * pc.rotation.x - local.y * pc.rotation.y,
-        local.x * pc.rotation.y + local.y * pc.rotation.x,
-    );
-    let pixel = pc.rect.xy + pc.rect.zw * 0.5 + rotated;
-    var out: VsOut;
-    out.position = vec4(pixel / pc.target_size * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = corner;
-    return out;
-}
-
-@group(0) @binding(0) var window_texture: texture_2d<f32>;
-@group(0) @binding(1) var window_sampler: sampler;
-
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(window_texture, window_sampler, in.uv) * pc.tint;
-}
-]]
-
-local ENCODE = [[
-@group(0) @binding(0) var linear_target: texture_2d<f32>;
-
-@vertex
-fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    var corners = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    return vec4(corners[index], 0.0, 1.0);
-}
-
-fn srgb_oetf(c: vec3<f32>) -> vec3<f32> {
-    let low = c * 12.92;
-    let high = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-    return select(high, low, c <= vec3(0.0031308));
-}
-
-@fragment
-fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let linear = textureLoad(linear_target, vec2<i32>(position.xy), 0);
-    return vec4(srgb_oetf(clamp(linear.rgb, vec3(0.0), vec3(1.0))), linear.a);
-}
-]]
-
 local pipelines = {}
 local encode, sampler
 local slots = {}
@@ -73,8 +9,8 @@ local linear_image, linear_slot
 
 local function quad_pipeline(format, blend)
     return gfx.create_render_pipeline({
-        vertex = gfx.create_shader({ stage = "vertex", source = QUAD, entry = "vs" }),
-        fragment = gfx.create_shader({ stage = "fragment", source = QUAD, entry = "fs" }),
+        vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/bench_quad.slang", entry = "quad_vs" }),
+        fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/bench_quad.slang", entry = "quad_fs" }),
         targets = { { format = format, blend = blend } },
     })
 end
@@ -198,8 +134,8 @@ end
 function init_4k(width, height)
     pipelines.linear = quad_pipeline("rgba16float", "premultiplied")
     encode = gfx.create_render_pipeline({
-        vertex = gfx.create_shader({ stage = "vertex", source = ENCODE, entry = "vs" }),
-        fragment = gfx.create_shader({ stage = "fragment", source = ENCODE, entry = "fs" }),
+        vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/bench_encode.slang", entry = "encode_vs" }),
+        fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/bench_encode.slang", entry = "encode_fs" }),
         targets = { { format = "rgba8unorm" } },
     })
     linear_image = gfx.create_image({

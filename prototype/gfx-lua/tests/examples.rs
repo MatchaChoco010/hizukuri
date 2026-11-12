@@ -400,7 +400,7 @@ fn compute_blur() {
 
 /// Example 5: one instanced draw for many windows. The shader picks the heap
 /// slot of each quad from GPU data; the API validates the whole range the
-/// shader can reach, and the compiler clamps the index.
+/// shader can reach, and clamps the index when it takes in the shader.
 #[test]
 fn batched_draw_through_a_texture_array() {
     let host = host();
@@ -427,7 +427,8 @@ fn batched_draw_through_a_texture_array() {
 
     let output = target(&host, Format::Rgba8Unorm, 64, 64);
     // x, y, width, height, texture index. The last two indices are outside
-    // the array of 8: the shader clamps them to element 7.
+    // the array of 8. The clamp reads an index as a signed number: 8 becomes
+    // element 7, and 4 000 000 000 (negative as an i32) element 0.
     let quads: [[u32; 5]; 6] = [
         [0, 0, 8, 8, 0],
         [16, 0, 8, 8, 3],
@@ -445,7 +446,7 @@ fn batched_draw_through_a_texture_array() {
     assert_eq!(host.gpu().stats().draws, 1, "one draw for all quads");
     let pixels = read(&host, output);
     for quad in quads {
-        let expected = colors[quad[4].min(7) as usize];
+        let expected = colors[(quad[4] as i32).clamp(0, 7) as usize];
         assert_eq!(
             px8(&pixels, 64, quad[0] + 4, quad[1] + 4),
             expected,

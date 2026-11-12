@@ -29,7 +29,12 @@ pub fn host() -> ScriptHost {
     host_with(patient())
 }
 
-pub fn host_with(options: HostOptions) -> ScriptHost {
+/// A host for the tests. Unless `options` has a shader loader of its own,
+/// shaders named by a script are those of the examples (`scripts/shaders/`).
+pub fn host_with(mut options: HostOptions) -> ScriptHost {
+    options
+        .shader_loader
+        .get_or_insert_with(proto_gfx_lua::shaders::examples);
     let gpu = Gpu::new(GpuConfig::for_tests()).expect("create gpu");
     ScriptHost::new(gpu, options).expect("create script host")
 }
