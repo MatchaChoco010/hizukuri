@@ -66,8 +66,9 @@ failed is kept under the output directory (default
     x11/satellite.log                what xwayland-satellite and Xwayland printed
     x11/x11-client*.log              the events the X11 test client received
     script/hzk-script.log            what `hzk script` printed
-    animation/screen-*.png           the animation example before, during and after a swap,
-                                     with what the script drew at each (animation-*.json)
+    animation/screen-*.png           the animation example (its moves slowed down) before,
+                                     during and after a swap, with what the script drew
+                                     at each (animation-*.json)
     kms-info.json                    the guest's DRM device
     kms-summary.txt                  `proto-compositor kms-info --summary` in the guest
 
@@ -107,6 +108,9 @@ BTN_LEFT = 272
 DRAW_ONLY = "/home/hizukuri/hzk-draw-only"
 # Where the animation example goes in the guest.
 ANIMATION = "/home/hizukuri/hzk-animation"
+# Seconds a move of the example takes in the VM check: long enough for a
+# capture to see it.
+SLOW_MOVE = "3.0"
 
 PATHS = {
     "lavapipe": {
@@ -3024,11 +3028,12 @@ def main():
 def check_animation(out, uid, results):
     """The animation example as a DRM/KMS session: two windows side by
     side, logo+shift+L swaps them, and they move to their new places over
-    time. The screen is taken before, during and after; that the windows
-    are between their places while moving is not checked here (the clock is
-    real, so what a capture catches varies), only kept as evidence. The
-    positions over time are checked by tests/animation.rs on a manual
-    clock."""
+    time. The screen is taken before, during and after. The example runs
+    with its moves slowed down to a few seconds (a copy with another
+    `move_duration`), so that a capture through the VM catches the windows
+    on their way; where they are then is kept as evidence, not checked (the
+    clock is real). The positions over time are checked by
+    tests/animation.rs on a manual clock."""
     part = Part("animation", out, uid, results)
     left_color, left_arg = CLIENT_COLOR, CLIENT_COLOR_ARG
     right_color, right_arg = (60, 170, 90), "3CAA5AFF"
@@ -3050,7 +3055,13 @@ def check_animation(out, uid, results):
         return window and window["position"][0]
 
     def swap():
-        part.start("--script", ANIMATION, "--exit-after", "120")
+        # The example as it is, with slower moves.
+        slow = f"{GUEST_DIR}/animation-slow"
+        guest(f"rm -rf {slow} && cp -r {ANIMATION} {slow} && sed -i "
+              f"'s/move_duration = [0-9.]*/move_duration = {SLOW_MOVE}/' {slow}/main.luau")
+        if f"move_duration = {SLOW_MOVE}" not in guest(f"cat {slow}/main.luau"):
+            raise Failed("the example's main.luau has no move_duration to slow down")
+        part.start("--script", slow, "--exit-after", "120")
         current = state()
         if current["script"]["mode"] != "running" or "frame" not in current["script"]["callbacks"]:
             raise Failed(f"the example does not run: {current['script']}")
@@ -3080,7 +3091,7 @@ def check_animation(out, uid, results):
         keep("animation-during.json", during)
         wait_for("the windows to swap", lambda: at("anim-left") == 644 and at("anim-right") == 8,
                  seconds=5)
-        wait_for("the windows to stop", lambda: all(not w["moving"] for w in drawn()), seconds=5)
+        wait_for("the windows to stop", lambda: all(not w["moving"] for w in drawn()), seconds=10)
         after = wait_for("the swapped windows on screen", lambda: (lambda v: v if near(
             v[0], right_color, 6) and near(v[1], left_color, 6) else None)(
             pixels([(tiles[8], 400), (tiles[644], 400)])), seconds=5)

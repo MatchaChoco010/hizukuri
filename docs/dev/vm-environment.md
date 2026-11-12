@@ -466,7 +466,7 @@ GPU は、要らない。数分で終わる。
 | 部 | 内容 | VM の構成 |
 | --- | --- | --- |
 | `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、uinput の仮想のタッチスクリーンとタッチパッドからのタッチとジェスチャー、色のプロトコル（wayland-info、vkcube、検証用のクライアント）、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
-| `animation` | アニメーションの例（`prototype/compositor/projects/animation`）で、検証用のクライアントの窓を 2 つ開き、logo+shift+L で入れ替える。入れ替わり、止まり、スクリプトが失敗しないこと。前、途中、後の画面と、スクリプトが描いた位置（`animation_state`）を残す。途中の位置は、実時間なので、確かめない（`tests/animation.rs` が、止まった時計で確かめる） | 既定 |
+| `animation` | アニメーションの例（`prototype/compositor/projects/animation`）で、検証用のクライアントの窓を 2 つ開き、logo+shift+L で入れ替える。入れ替わり、止まり、スクリプトが失敗しないこと。動きは、画面の取り込みが途中を捉えられるように、3 秒に延ばす（`main.luau` の `move_duration` を書き換えた写しで動かす）。前、途中、後の画面と、スクリプトが描いた位置（`animation_state`）を残す。途中の位置は、実時間なので、確かめない（`tests/animation.rs` が、止まった時計で確かめる） | 既定 |
 | `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーとタッチパッドの 3 本指の swipe の割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、1920x1080 で 4 つのアプリを動かしたときのフレームの時間（`apps-1080p`。描くだけのプロジェクトで配置は fallback のものと、組み込みのプロジェクトでタイルに並べたものの 2 つ）、`hzk script` | 既定 |
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
