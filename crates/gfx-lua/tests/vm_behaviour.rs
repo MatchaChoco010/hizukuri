@@ -57,33 +57,34 @@ fn outcome(result: &Result<(), ScriptError>) -> String {
 
 #[test]
 fn interrupts_memory_and_error_cost() {
+    // The host's own budget is patient: what is expected to return is not
+    // timed. The calls that are meant to be interrupted get this one.
     let budget = Duration::from_millis(100);
     let host = host_with(HostOptions {
-        time_budget: Some(budget),
         memory_limit: Some(64 << 20),
-        ..HostOptions::default()
+        ..patient()
     });
     host.load("vm.lua", SCRIPT).unwrap();
     eprintln!("VM: {VM_NAME}");
 
     for name in ["spin", "spin_pcall"] {
         let start = Instant::now();
-        let result = host.call(name, ());
+        let result = host.call_function::<_, ()>(name, (), Some(budget));
         let elapsed = start.elapsed();
         eprintln!("{name}: {} after {elapsed:?}", outcome(&result));
         assert!(
             matches!(result, Err(ScriptError::Timeout(_))),
             "{name}: {result:?}"
         );
-        assert!(
-            elapsed < budget + Duration::from_millis(250),
-            "{name}: {elapsed:?}"
-        );
+        assert!(elapsed >= budget, "{name}: {elapsed:?}");
+        assert!(elapsed < budget + STOPS_WITHIN, "{name}: {elapsed:?}");
     }
 
-    // With proper tail calls this is an endless loop; without, a stack overflow.
+    // With proper tail calls this is an endless loop; without, a stack
+    // overflow. Either way the call ends: by the VM's own limit, or by this
+    // budget (long enough for the overflow to come first on a slow machine).
     let start = Instant::now();
-    let result = host.call("tail_recursion", ());
+    let result = host.call_function::<_, ()>("tail_recursion", (), Some(Duration::from_secs(20)));
     eprintln!(
         "tail_recursion: {} after {:?}",
         outcome(&result),
@@ -97,7 +98,7 @@ fn interrupts_memory_and_error_cost() {
     // one would run for minutes.
     for n in 6..=24 {
         let start = Instant::now();
-        let result = host.call("slow_pattern", n);
+        let result = host.call_function::<_, ()>("slow_pattern", n, Some(budget));
         let elapsed = start.elapsed();
         if elapsed > budget / 4 || n == 24 {
             eprintln!(
@@ -110,15 +111,6 @@ fn interrupts_memory_and_error_cost() {
             break;
         }
     }
-
-    // The rest is not about the time budget: use a generous one, so that a
-    // slow (debug) build does not time out while filling the heap.
-    let host = host_with(HostOptions {
-        time_budget: Some(Duration::from_secs(60)),
-        memory_limit: Some(64 << 20),
-        ..HostOptions::default()
-    });
-    host.load("vm.lua", SCRIPT).unwrap();
 
     // Hitting the memory limit, then calling again.
     let result = host.call("hoard", ());

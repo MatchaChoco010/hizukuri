@@ -74,6 +74,12 @@ impl Gpu {
         self.completed_serial
     }
 
+    /// Changes how long a wait for the GPU may take before the device is
+    /// given up on ([`crate::GpuConfig::gpu_timeout`]).
+    pub fn set_gpu_timeout(&mut self, timeout: std::time::Duration) {
+        self.config.gpu_timeout = timeout;
+    }
+
     /// Marks an object as the host's. The script binding refuses to destroy
     /// or overwrite such objects, and [`Gpu::destroy_all`] keeps them. The
     /// mark ends when the host destroys the object.

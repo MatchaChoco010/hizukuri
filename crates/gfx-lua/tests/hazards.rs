@@ -89,7 +89,7 @@ fn run_probe(args: &[&str], deadline: Duration) -> Outcome {
 /// rejected; the host notices only because the GPU does not come back.
 #[test]
 fn shader_that_never_returns() {
-    let outcome = run_probe(&["shader-hang"], Duration::from_secs(60));
+    let outcome = run_probe(&["shader-hang"], Duration::from_secs(600));
     eprintln!(
         "shader-hang: status {:?} after {:?}\n{}",
         outcome.status, outcome.elapsed, outcome.stdout

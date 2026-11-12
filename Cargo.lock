@@ -513,6 +513,7 @@ dependencies = [
  "gfx-core",
  "half",
  "mlua",
+ "rustix",
 ]
 
 [[package]]

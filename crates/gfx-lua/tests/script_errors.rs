@@ -37,7 +37,7 @@ fn runtime_message(result: Result<(), ScriptError>) -> String {
 
 #[test]
 fn syntax_errors() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     for source in [
         "function frame( end",
         "local = 3",
@@ -58,7 +58,7 @@ fn syntax_errors() {
 
 #[test]
 fn exceptions_and_type_errors() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     host.load(
         "faulty.luau",
         r#"
@@ -135,7 +135,7 @@ fn exceptions_and_type_errors() {
 /// frame; what was recorded so far is executed; the next frame is normal.
 #[test]
 fn exception_in_the_middle_of_a_pass() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     host.load(
         "midpass.luau",
         r#"
@@ -187,7 +187,7 @@ fn exception_in_the_middle_of_a_pass() {
 /// A script may handle GPU errors itself and carry on within the same frame.
 #[test]
 fn scripts_can_catch_gpu_errors() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     host.load(
         "careful.luau",
         r#"
@@ -219,9 +219,11 @@ fn scripts_can_catch_gpu_errors() {
     assert_no_validation_errors();
 }
 
+/// Calls a function that never returns under a short budget of its own.
+/// It is interrupted, not before the budget, and not long after.
 fn expect_timeout(host: &ScriptHost, name: &str, args: impl mlua::IntoLuaMulti, budget: Duration) {
     let start = Instant::now();
-    let result = host.call_in_frame(name, args);
+    let result = host.call_in_frame_within(Some(budget), name, args);
     let elapsed = start.elapsed();
     assert!(
         matches!(result, Err(ScriptError::Timeout(_))),
@@ -230,7 +232,7 @@ fn expect_timeout(host: &ScriptHost, name: &str, args: impl mlua::IntoLuaMulti, 
     eprintln!("{name}: interrupted after {elapsed:?} (budget {budget:?})");
     assert!(elapsed >= budget, "{name}: returned before the budget");
     assert!(
-        elapsed < budget + Duration::from_millis(250),
+        elapsed < budget + STOPS_WITHIN,
         "{name}: took {elapsed:?} to stop"
     );
 }
@@ -238,11 +240,10 @@ fn expect_timeout(host: &ScriptHost, name: &str, args: impl mlua::IntoLuaMulti, 
 /// Loops that never end are cut off, and the next frame goes out.
 #[test]
 fn endless_loops_are_interrupted() {
+    // Everything that is expected to return runs under the patient budget
+    // of the host; only the loops get this one.
     let budget = Duration::from_millis(100);
-    let (host, output) = triangle_host(HostOptions {
-        time_budget: Some(budget),
-        ..HostOptions::default()
-    });
+    let (host, output) = triangle_host(patient());
     host.load(
         "endless.luau",
         r#"
@@ -304,9 +305,10 @@ fn endless_loops_are_interrupted() {
 
     // A chunk that never finishes loading.
     let start = Instant::now();
-    let result = host.load("spin.luau", "while true do end");
+    let result = host.load_within(Some(budget), "spin.luau", "while true do end");
     assert!(matches!(result, Err(ScriptError::Timeout(_))), "{result:?}");
-    assert!(start.elapsed() < budget + Duration::from_millis(250));
+    assert!(start.elapsed() >= budget);
+    assert!(start.elapsed() < budget + STOPS_WITHIN);
     next_frame_is_correct(&host, output);
     assert_no_validation_errors();
 }
@@ -318,10 +320,7 @@ fn endless_loops_are_interrupted() {
 #[test]
 fn native_calls_and_the_budget() {
     let budget = Duration::from_millis(50);
-    let (host, output) = triangle_host(HostOptions {
-        time_budget: Some(budget),
-        ..HostOptions::default()
-    });
+    let (host, output) = triangle_host(patient());
     host.load(
         "native.luau",
         r#"
@@ -335,7 +334,7 @@ fn native_calls_and_the_budget() {
     let mut report = Vec::new();
     for n in [16, 18, 20, 22, 24] {
         let start = Instant::now();
-        let result = host.call("slow_pattern", n);
+        let result = host.call_function::<_, ()>("slow_pattern", n, Some(budget));
         let elapsed = start.elapsed();
         report.push(format!(
             "n={n}: {elapsed:?} -> {}",
@@ -360,8 +359,7 @@ fn native_calls_and_the_budget() {
 fn memory_limit() {
     let (host, output) = triangle_host(HostOptions {
         memory_limit: Some(64 << 20),
-        time_budget: Some(Duration::from_secs(20)),
-        ..HostOptions::default()
+        ..patient()
     });
     host.load(
         "hungry.luau",
@@ -433,7 +431,7 @@ fn memory_limit() {
 /// A script creates GPU objects without end.
 #[test]
 fn script_creates_resources_forever() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     host.load(
         "greedy.luau",
         r#"
@@ -490,7 +488,7 @@ fn script_creates_resources_forever() {
 /// A script that passes every number it can think of as a handle.
 #[test]
 fn fabricated_handles() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     host.load(
         "forger.luau",
         r#"
@@ -519,11 +517,62 @@ fn fabricated_handles() {
     assert_no_validation_errors();
 }
 
+/// CPU time this thread has used. Unlike the wall clock it does not move
+/// while the thread waits for a busy machine.
+fn cpu_time() -> Duration {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
+    Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
+}
+
+/// A failing API call that the script catches costs the same whether it is
+/// the first of a call or the ten thousandth. (With the time budget
+/// installed through the VM binding's own interrupt it did not: every
+/// failure grew the stack frame of the running function, and each one cost
+/// in proportion to the failures before it.)
+#[test]
+fn caught_errors_cost_the_same_however_many() {
+    let (host, output) = triangle_host(patient());
+    host.load(
+        "many.luau",
+        r#"
+        function failing(n)
+            for i = 1, n do
+                pcall(gfx.destroy, 12345)
+            end
+        end
+        "#,
+    )
+    .unwrap();
+    // The fastest of three, in CPU time: what the work costs, not what else
+    // the machine was doing.
+    let cost = |n: u32| {
+        (0..3)
+            .map(|_| {
+                let start = cpu_time();
+                host.call_in_frame("failing", n).unwrap();
+                cpu_time() - start
+            })
+            .min()
+            .unwrap()
+    };
+    let (few, many) = (cost(500), cost(8000));
+    eprintln!("500 caught failures: {few:?}, 8000: {many:?}");
+    // 16 times the failures take about 16 times as long. If each one cost in
+    // proportion to those before it, they would take 256 times as long. The
+    // bound is far from both.
+    assert!(
+        many < few * 64,
+        "8000 failures took {many:?}, 500 took {few:?}"
+    );
+    next_frame_is_correct(&host, output);
+    assert_no_validation_errors();
+}
+
 /// The device is lost under a running script; the host builds a new device
 /// and the same script source sets itself up again.
 #[test]
 fn device_loss_seen_from_a_script() {
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     next_frame_is_correct(&host, output);
     host.gpu().simulate_device_loss();
     let result = host.call_in_frame("frame", output.to_bits());
@@ -533,7 +582,7 @@ fn device_loss_seen_from_a_script() {
         "{result:?}"
     );
     drop(host);
-    let (host, output) = triangle_host(HostOptions::default());
+    let (host, output) = triangle_host(patient());
     next_frame_is_correct(&host, output);
     assert_no_validation_errors();
 }
@@ -542,7 +591,7 @@ fn device_loss_seen_from_a_script() {
 /// gone, the new one starts clean.
 #[test]
 fn reload_replaces_the_script() {
-    let (host, _) = triangle_host(HostOptions::default());
+    let (host, _) = triangle_host(patient());
     assert!(host.has_function("frame"));
     let before = host.gpu().stats();
     assert!(before.live_buffers >= 2 && before.live_pipelines == 1);

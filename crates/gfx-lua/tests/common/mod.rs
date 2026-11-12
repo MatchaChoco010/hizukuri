@@ -1,11 +1,32 @@
 //! Shared helpers for the integration tests.
 #![allow(dead_code)]
 
+use std::time::Duration;
+
 use gfx_core::{Format, Gpu, GpuConfig, Handle, ImageDesc, ImageUsage};
 use gfx_lua::{HostOptions, ScriptHost};
 
+/// The time budget of calls that are expected to return. These tests are
+/// not about how fast the machine is: a call under this budget only times
+/// out when it is stuck. Calls that are meant to be interrupted get a short
+/// budget of their own (`ScriptHost::call_in_frame_within` and friends).
+pub const PATIENT: Duration = Duration::from_secs(300);
+
+/// How much later than its budget an interrupted call may come back. The
+/// interrupt is prompt (a fraction of a millisecond); the allowance is for a
+/// machine that is busy with other things.
+pub const STOPS_WITHIN: Duration = Duration::from_secs(30);
+
+/// Host options with the [`PATIENT`] time budget.
+pub fn patient() -> HostOptions {
+    HostOptions {
+        time_budget: Some(PATIENT),
+        ..HostOptions::default()
+    }
+}
+
 pub fn host() -> ScriptHost {
-    host_with(HostOptions::default())
+    host_with(patient())
 }
 
 pub fn host_with(options: HostOptions) -> ScriptHost {

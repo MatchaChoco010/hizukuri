@@ -103,14 +103,20 @@ fn frame(gpu: &mut Gpu, scene: &Scene, stop: u32) -> Result<()> {
     gpu.end_frame()
 }
 
+/// How long the GPU may take for work that is expected to finish.
+const PATIENT: Duration = Duration::from_secs(120);
+
 /// A fragment shader that never returns.
 fn shader_hang() {
-    let mut gpu = software_gpu(Duration::from_millis(1500));
+    // Frames that are meant to finish get all the time a slow machine may
+    // need. Only the wait for the frame that hangs is cut short.
+    let mut gpu = software_gpu(PATIENT);
     let scene_a = scene(&mut gpu);
     frame(&mut gpu, &scene_a, 1).expect("normal frame");
     let pixels = gpu.read_image(scene_a.target).expect("read");
     assert_eq!(&pixels[..4], &[0, 255, 0, 255]);
     say("NORMAL_FRAME_OK");
+    gpu.set_gpu_timeout(Duration::from_millis(1500));
 
     // The call is valid: nothing the API checks can tell that the shader
     // will not terminate.
@@ -133,7 +139,7 @@ fn shader_hang() {
 
     // Can the same process get a working device while the first one is stuck?
     let start = Instant::now();
-    let mut second = software_gpu(Duration::from_millis(3000));
+    let mut second = software_gpu(PATIENT);
     let scene_b = scene(&mut second);
     let result = frame(&mut second, &scene_b, 1).and_then(|()| second.read_image(scene_b.target));
     match result {

@@ -19,3 +19,4 @@ mlua.workspace = true
 
 [dev-dependencies]
 half.workspace = true
+rustix = { version = "1", features = ["time"] }
