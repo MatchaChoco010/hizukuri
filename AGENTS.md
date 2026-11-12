@@ -105,6 +105,8 @@ hizukuri で作る Wayland compositor を、**コンポジター**と呼ぶ。�
   承認するのは人で、merge の操作は、承認を受けたエージェントが行う。承認の無い PR を、`main` に merge しない。
 - 人の確認で問題が見つかったら、直しを `develop` に積む（`release` を直接直さない）。直しを含む `develop` を、もう一度 `release` に取り込む。
   問題のある変更を取り除くより、直しを積むほうを選ぶ。
+- `release` に取り込むのは、検査の通ったものだけである。`develop` から、候補のブランチ `release-candidate/<名前>` を切り、
+  そこで CI（書式と lint とテスト、VM の中の試験、ハードウェアの GPU の上の検査）を回し、通ったものを、`release` に取り込む。
 - リリースの手順は、skill `release` にある。報告のスライドの作り方は、skill `release-slides` にある。
 
 ## コミット
