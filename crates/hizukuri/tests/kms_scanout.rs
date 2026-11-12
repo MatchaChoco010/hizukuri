@@ -4,8 +4,14 @@
 //!
 //! The mock keeps the memory behind framebuffers, so these tests look at
 //! the pixels "on screen": through dumb buffers for the CPU copy path, and
-//! through the mapped dma-buf for the dma-buf path where the driver allows
-//! mapping (lavapipe does).
+//! through the mapped dma-buf for the dma-buf path where the memory is
+//! linear and the driver allows mapping (lavapipe does).
+//!
+//! Which format modifiers a renderer can export depends on its driver
+//! (lavapipe: linear; other drivers may offer only tiled layouts). The mock
+//! display's plane is built from what the renderer says, so the tests check
+//! the path the backend has to take with that renderer, not one that only
+//! works with linear memory.
 //!
 //! Devices are chosen like in the renderer's tests: `HIZUKURI_TEST_DEVICES`
 //! (default `lavapipe`); lavapipe runs in a child process with
@@ -20,13 +26,17 @@ use hizukuri::control::Request;
 use hizukuri::scene::{FlatScene, Scene};
 use hizukuri::script::{ScriptOptions, ScriptRuntime, ScriptScene};
 use hizukuri::selftest::SelfTest;
-use hizukuri_backend::Backend;
 use hizukuri_backend::kms::clock::ManualClock;
 use hizukuri_backend::kms::input::{Hotkey, RawInput};
 use hizukuri_backend::kms::mock::{Displayed, MockDevice, SnapshotBuilder};
+use hizukuri_backend::kms::model::MODIFIER_LINEAR;
 use hizukuri_backend::kms::plan::ScanoutPreference;
 use hizukuri_backend::kms::{ActiveScanout, KmsBackend, KmsConfig};
-use hizukuri_render::{DeviceSelector, Renderer, RendererOptions, find_icd_manifest};
+use hizukuri_backend::{Backend, BackendError};
+use hizukuri_render::{
+    DeviceSelector, DmabufPlane, RenderError, Renderer, RendererOptions, TargetDesc, TargetId,
+    TargetProvider, find_icd_manifest,
+};
 use hizukuri_test_client::{ClientEvent, ClientOptions, TestClient};
 
 const CHILD_ENV: &str = "HIZUKURI_KMS_TEST_CHILD";
@@ -116,19 +126,32 @@ fn udmabuf_wanted() -> bool {
 }
 
 fn run_all(selector: DeviceSelector) {
+    use Plane::*;
+    use ScanoutPreference::*;
     for draws in [Draws::Rust, Draws::Script] {
-        for scanout in [ScanoutPreference::CpuCopy, ScanoutPreference::Dmabuf] {
-            // On lavapipe, the dma-buf path needs /dev/udmabuf.
-            if scanout == ScanoutPreference::Dmabuf
-                && selector == DeviceSelector::Cpu
-                && !udmabuf_wanted()
-            {
-                continue;
-            }
-            a_client_window_reaches_the_screen(&selector, draws, scanout);
+        for (scanout, plane) in [
+            (CpuCopy, NoModifiers),
+            // A plane without modifiers takes linear memory only, which not
+            // every renderer can export.
+            (Dmabuf, NoModifiers),
+            (Dmabuf, RendererModifiers),
+            (Auto, RendererModifiers),
+        ] {
+            the_scanout_path_follows_the_modifiers(&selector, draws, Offer::Driver, scanout, plane);
         }
         the_cursor_is_drawn_at_the_pointer(&selector, draws);
         a_vt_switch_keeps_clients_and_shows_them_again(&selector, draws);
+    }
+    // No modifier in common, on any device: the CPU copy, unless the dma-buf
+    // path is asked for.
+    for scanout in [Auto, Dmabuf] {
+        the_scanout_path_follows_the_modifiers(
+            &selector,
+            Draws::Rust,
+            Offer::TiledOnly,
+            scanout,
+            NoModifiers,
+        );
     }
     the_self_test_passes_on_the_mock(&selector);
 }
@@ -145,6 +168,105 @@ fn script_scene() -> ScriptScene {
     ScriptScene::new(ScriptRuntime::new(options).expect("starting the script"))
 }
 
+/// What draws, and the modifiers it can export a scanout target with.
+fn drawing(selector: &DeviceSelector, draws: Draws, offer: Offer) -> (Drawing, Vec<u64>) {
+    match (draws, offer) {
+        (Draws::Rust, Offer::Driver) => {
+            let renderer = renderer(selector);
+            let modifiers = renderer.scanout_modifiers();
+            (Drawing::Rust(Box::new(renderer)), modifiers)
+        }
+        (Draws::Rust, Offer::TiledOnly) => (
+            Drawing::TiledOnly(TiledOnly(Box::new(renderer(selector)))),
+            vec![TILED_MODIFIER],
+        ),
+        (Draws::Script, Offer::TiledOnly) => unimplemented!("only the Rust renderer is wrapped"),
+        (Draws::Script, Offer::Driver) => {
+            let mut scene = script_scene();
+            let modifiers = scene
+                .targets()
+                .map(|targets| targets.scanout_modifiers())
+                .unwrap_or_default();
+            (Drawing::Script(scene), modifiers)
+        }
+    }
+}
+
+/// What the primary plane of the mock display takes for XRGB8888.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Plane {
+    /// No `IN_FORMATS` (as on virtio-gpu): linear memory only, and
+    /// framebuffers without modifiers.
+    NoModifiers,
+    /// `IN_FORMATS` with exactly the modifiers the renderer can export.
+    RendererModifiers,
+}
+
+impl Plane {
+    /// The modifiers the plane takes, as the backend sees them.
+    fn accepts(self, renderer: &[u64]) -> Vec<u64> {
+        match self {
+            Plane::NoModifiers => vec![MODIFIER_LINEAR],
+            Plane::RendererModifiers => renderer.to_vec(),
+        }
+    }
+}
+
+/// What the renderer says it can export a scanout target with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Offer {
+    /// What its driver offers.
+    Driver,
+    /// Only a tiled layout, not linear memory, as some drivers do. Any
+    /// device can play this part ([`TiledOnly`]).
+    TiledOnly,
+}
+
+/// A modifier no driver has, standing in for a driver's tiled layout.
+const TILED_MODIFIER: u64 = 0x00ff_ffff_ffff_fffe;
+
+/// The Rust renderer, made to say that it can export scanout targets with
+/// [`TILED_MODIFIER`] only.
+struct TiledOnly(Box<Renderer>);
+
+impl TargetProvider for TiledOnly {
+    fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, RenderError> {
+        self.0.create_target(desc)
+    }
+
+    fn scanout_modifiers(&self) -> Vec<u64> {
+        vec![TILED_MODIFIER]
+    }
+
+    fn create_scanout_target(
+        &mut self,
+        _desc: &TargetDesc,
+        _allowed_modifiers: &[u64],
+    ) -> Result<(TargetId, DmabufPlane), RenderError> {
+        Err(RenderError::ScanoutUnsupported)
+    }
+
+    fn destroy_target(&mut self, id: TargetId) {
+        self.0.destroy_target(id)
+    }
+
+    fn read_encoded_into(
+        &mut self,
+        target: TargetId,
+        destination: &mut [u8],
+        stride: usize,
+    ) -> Result<(), RenderError> {
+        self.0.read_encoded_into(target, destination, stride)
+    }
+}
+
+/// What draws, before the backend is made.
+enum Drawing {
+    Rust(Box<Renderer>),
+    TiledOnly(TiledOnly),
+    Script(ScriptScene),
+}
+
 struct Rig {
     compositor: Compositor<MockBackend>,
     device: MockDevice,
@@ -158,47 +280,76 @@ impl Rig {
         scanout: ScanoutPreference,
         draw_cursor: bool,
     ) -> Rig {
+        let (drawing, renderer_modifiers) = drawing(selector, draws, Offer::Driver);
+        Rig::with_plane(
+            drawing,
+            &renderer_modifiers,
+            scanout,
+            Plane::NoModifiers,
+            draw_cursor,
+        )
+        .expect("creating the KMS backend")
+    }
+
+    /// `renderer_modifiers` are the ones `drawing` can export.
+    fn with_plane(
+        drawing: Drawing,
+        renderer_modifiers: &[u64],
+        scanout: ScanoutPreference,
+        plane: Plane,
+        draw_cursor: bool,
+    ) -> Result<Rig, BackendError> {
         let clock = ManualClock::new(Duration::from_secs(100));
-        let device = MockDevice::new(
-            SnapshotBuilder::new("mock")
-                .connector("Virtual-1", true, &[(320, 240, 60, true)])
-                .build(),
-            clock.clone(),
-        );
+        let mut snapshot =
+            SnapshotBuilder::new("mock").connector("Virtual-1", true, &[(320, 240, 60, true)]);
+        if plane != Plane::NoModifiers {
+            snapshot = snapshot.modifiers(&plane.accepts(renderer_modifiers));
+        }
+        let device = MockDevice::new(snapshot.build(), clock.clone());
         let config = KmsConfig {
             scanout,
             ..Default::default()
         };
-        // For the dma-buf path, pretend the GPU that draws owns the (mock)
-        // display.
-        let on_kms_device = scanout == ScanoutPreference::Dmabuf;
+        // Unless the CPU copy is asked for, pretend the GPU that draws owns
+        // the (mock) display, so that the dma-buf path can be chosen.
+        let on_kms_device = scanout != ScanoutPreference::CpuCopy;
         let options = CompositorOptions {
             draw_cursor,
             ..Default::default()
         };
-        let compositor = match draws {
-            Draws::Rust => {
-                let mut renderer = renderer(selector);
+        let compositor = match drawing {
+            Drawing::Rust(mut renderer) => {
                 let backend = KmsBackend::new(
                     device.clone(),
                     clock,
                     config,
-                    hizukuri_render::targets_of(Some(&mut renderer)),
+                    hizukuri_render::targets_of(Some(&mut *renderer)),
                     on_kms_device,
-                )
-                .expect("creating the KMS backend");
+                )?;
+                Compositor::new(options, backend, Box::new(FlatScene::new(Some(*renderer))))
+                    .unwrap()
+            }
+            Drawing::TiledOnly(mut offering) => {
+                let backend = KmsBackend::new(
+                    device.clone(),
+                    clock,
+                    config,
+                    Some(&mut offering),
+                    on_kms_device,
+                )?;
+                // From here on the renderer itself draws; the backend only
+                // asks what it can export when it sets up an output.
+                let renderer = *offering.0;
                 Compositor::new(options, backend, Box::new(FlatScene::new(Some(renderer)))).unwrap()
             }
-            Draws::Script => {
-                let mut scene = script_scene();
+            Drawing::Script(mut scene) => {
                 let backend = KmsBackend::new(
                     device.clone(),
                     clock,
                     config,
                     scene.targets(),
                     on_kms_device,
-                )
-                .expect("creating the KMS backend");
+                )?;
                 Compositor::with_window_manager(
                     options,
                     backend,
@@ -208,11 +359,11 @@ impl Rig {
                 .unwrap()
             }
         };
-        Rig {
+        Ok(Rig {
             compositor,
             device,
             clients: Vec::new(),
-        }
+        })
     }
 
     fn add_client(&mut self, options: ClientOptions) -> usize {
@@ -269,18 +420,69 @@ fn close(actual: [u8; 3], expected: [u8; 3], tolerance: i32) -> bool {
     (0..3).all(|i| (actual[i] as i32 - expected[i] as i32).abs() <= tolerance)
 }
 
-/// A client's solid window shows up in the framebuffer KMS is scanning
-/// out, at the right place, on both scanout paths.
-fn a_client_window_reaches_the_screen(
+/// The scanout path the backend takes with this renderer and this plane:
+/// the dma-buf path when they share a modifier (and it is not ruled out),
+/// the CPU copy otherwise. Asking for the dma-buf path when they share none
+/// is a configuration error. On the path taken, a client's window reaches
+/// the screen.
+fn the_scanout_path_follows_the_modifiers(
     selector: &DeviceSelector,
     draws: Draws,
+    offer: Offer,
     scanout: ScanoutPreference,
+    plane: Plane,
 ) {
-    let mut rig = Rig::new(selector, draws, scanout, false);
-    let expected_path = match scanout {
-        ScanoutPreference::Dmabuf => ActiveScanout::Dmabuf,
-        _ => ActiveScanout::CpuCopy,
+    let (drawing, renderer_modifiers) = drawing(selector, draws, offer);
+    let accepted = plane.accepts(&renderer_modifiers);
+    let shared = renderer_modifiers.iter().any(|m| accepted.contains(m));
+    println!(
+        "{draws:?} {offer:?} {scanout:?} {plane:?}: renderer modifiers {renderer_modifiers:x?}, plane {accepted:x?}"
+    );
+    let expected = match (scanout, shared) {
+        (ScanoutPreference::CpuCopy, _) | (ScanoutPreference::Auto, false) => {
+            Some(ActiveScanout::CpuCopy)
+        }
+        (_, true) => Some(ActiveScanout::Dmabuf),
+        (ScanoutPreference::Dmabuf, false) => None,
     };
+    // On lavapipe, exporting a dma-buf needs /dev/udmabuf.
+    if expected == Some(ActiveScanout::Dmabuf)
+        && *selector == DeviceSelector::Cpu
+        && !udmabuf_wanted()
+    {
+        return;
+    }
+    let rig = Rig::with_plane(drawing, &renderer_modifiers, scanout, plane, false);
+    let Some(expected) = expected else {
+        match rig {
+            Err(BackendError::InvalidConfig(message)) => {
+                assert!(
+                    message.starts_with("the dma-buf path was requested but cannot work"),
+                    "{message}"
+                );
+                println!("{draws:?} {scanout:?} {plane:?}: refused ({message})");
+            }
+            Err(error) => panic!("{draws:?} {scanout:?} {plane:?}: {error}"),
+            Ok(mut rig) => panic!(
+                "{draws:?} {scanout:?} {plane:?}: the backend started on {:?}",
+                rig.compositor.backend().status().output.map(|o| o.scanout)
+            ),
+        }
+        return;
+    };
+    let rig = rig.unwrap_or_else(|error| panic!("{draws:?} {scanout:?} {plane:?}: {error}"));
+    a_client_window_reaches_the_screen(rig, draws, scanout, plane, expected);
+}
+
+/// A client's solid window shows up in the framebuffer KMS is scanning
+/// out, at the right place, on the expected scanout path.
+fn a_client_window_reaches_the_screen(
+    mut rig: Rig,
+    draws: Draws,
+    scanout: ScanoutPreference,
+    plane: Plane,
+    expected_path: ActiveScanout,
+) {
     assert_eq!(
         rig.compositor.backend().status().output.unwrap().scanout,
         expected_path
@@ -349,13 +551,17 @@ fn a_client_window_reaches_the_screen(
             for (x, y) in [(39, 30), (140, 89), (0, 0), (319, 239)] {
                 assert_eq!(screen.rgb(x, y), [0x20, 0x20, 0x20], "({x}, {y})");
             }
-            println!("{draws:?} {scanout:?}: pixels on the (mock) screen checked");
+            println!("{draws:?} {scanout:?} {plane:?}: pixels on the (mock) screen checked");
         }
         None => {
-            // A dma-buf this driver does not let anyone map: the screen
-            // cannot be read here, but the frame was accepted and flipped.
-            assert_eq!(scanout, ScanoutPreference::Dmabuf);
-            println!("{draws:?} {scanout:?}: the scanout dma-buf cannot be mapped on this device");
+            // A dma-buf that is tiled, or that this driver does not let
+            // anyone map: the screen cannot be read here, but the frame was
+            // accepted and flipped. The capture below checks the contents.
+            assert_eq!(expected_path, ActiveScanout::Dmabuf);
+            println!(
+                "{draws:?} {scanout:?} {plane:?}: the scanout dma-buf (modifier {:#x}) cannot be read as pixels",
+                screen.modifier
+            );
         }
     }
     assert!(
@@ -367,7 +573,7 @@ fn a_client_window_reaches_the_screen(
     // A capture through the control interface shows the same thing.
     let dir = std::env::temp_dir().join(format!("hzk-kms-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{scanout:?}.png"));
+    let path = dir.join(format!("{scanout:?}-{plane:?}.png"));
     rig.control(Request::Screenshot {
         path: path.clone(),
         composite_path: None,

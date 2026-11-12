@@ -20,19 +20,39 @@ fn triangle() {
 
     let pixels = read(&host, output);
     // Vertices (-0.5,-0.5) (0.5,-0.5) (0,0.5) in clip space, y down:
-    // pixels (16,16) (48,16) (32,48). Colour (1, 0.5, 0.25).
+    // pixels (16,16) (48,16) (32,48). Colour (1, 0.5, 0.25), clear colour
+    // (0, 0, 0.5); 0.5 lands on 127 or 128 (`UNORM8_CONVERSION`).
     let inside = [255, 128, 64, 255];
     let clear = [0, 0, 128, 255];
-    assert_eq!(px8(&pixels, 64, 32, 20), inside);
-    assert_eq!(px8(&pixels, 64, 32, 44), inside);
-    assert_eq!(px8(&pixels, 64, 20, 17), inside);
-    assert_eq!(px8(&pixels, 64, 44, 17), inside);
-    assert_eq!(px8(&pixels, 64, 32, 12), clear, "above the top edge");
-    assert_eq!(px8(&pixels, 64, 20, 40), clear, "left of the slanted edge");
-    assert_eq!(px8(&pixels, 64, 44, 40), clear, "right of the slanted edge");
-    assert_eq!(px8(&pixels, 64, 2, 2), clear);
+    let tolerance = UNORM8_CONVERSION;
+    assert_close8(px8(&pixels, 64, 32, 20), inside, tolerance, "inside");
+    assert_close8(px8(&pixels, 64, 32, 44), inside, tolerance, "inside");
+    assert_close8(px8(&pixels, 64, 20, 17), inside, tolerance, "inside");
+    assert_close8(px8(&pixels, 64, 44, 17), inside, tolerance, "inside");
+    assert_close8(
+        px8(&pixels, 64, 32, 12),
+        clear,
+        tolerance,
+        "above the top edge",
+    );
+    assert_close8(
+        px8(&pixels, 64, 20, 40),
+        clear,
+        tolerance,
+        "left of the slanted edge",
+    );
+    assert_close8(
+        px8(&pixels, 64, 44, 40),
+        clear,
+        tolerance,
+        "right of the slanted edge",
+    );
+    assert_close8(px8(&pixels, 64, 2, 2), clear, tolerance, "outside");
     // The triangle covers half of a 32x32 box: 512 pixels, give or take the edges.
-    let covered = pixels.chunks_exact(4).filter(|p| *p == inside).count();
+    let covered = pixels
+        .chunks_exact(4)
+        .filter(|p| close8((*p).try_into().unwrap(), inside, tolerance))
+        .count();
     assert!((480..=544).contains(&covered), "covered {covered} pixels");
     assert_no_validation_errors();
 }

@@ -63,6 +63,9 @@ crates/hizukuri/src/
 | `cpu-copy` | フレームを読み戻して、dumb buffer に書く | 上が成り立たないとき（lavapipe など） |
 
 - `--kms-scanout dmabuf|cpu` で、経路を固定できる。固定した経路が使えなければ、起動に失敗する。
+  既定の `auto` では、共通の modifier が無いときも、dma-buf の画像を作れなかったときも、`cpu-copy` になる。
+- 出せる modifier は、ドライバーごとに違う。LINEAR を出さず、自分の tiled の modifier だけを出すドライバーでは、
+  plane が LINEAR しか受け取らないとき（vkms など）、`auto` は `cpu-copy` になる。
 - 取り出せるかどうかだけでは、経路を決めない。lavapipe も dma-buf の取り出しに対応しているが、
   その画像は、KMS のデバイスのものではない。
 - plane に `IN_FORMATS` が無いドライバー（virtio-gpu）では、`DRM_FORMAT_MOD_LINEAR` だけを使い、

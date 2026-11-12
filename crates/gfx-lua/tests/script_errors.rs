@@ -24,8 +24,19 @@ fn next_frame_is_correct(host: &ScriptHost, output: Handle) {
     host.call_in_frame("frame", output.to_bits())
         .expect("next frame");
     let pixels = read(host, output);
-    assert_eq!(px8(&pixels, 64, 32, 20), [255, 128, 64, 255]);
-    assert_eq!(px8(&pixels, 64, 2, 2), [0, 0, 128, 255]);
+    let tolerance = UNORM8_CONVERSION;
+    assert_close8(
+        px8(&pixels, 64, 32, 20),
+        [255, 128, 64, 255],
+        tolerance,
+        "inside",
+    );
+    assert_close8(
+        px8(&pixels, 64, 2, 2),
+        [0, 0, 128, 255],
+        tolerance,
+        "outside",
+    );
 }
 
 fn runtime_message(result: Result<(), ScriptError>) -> String {
