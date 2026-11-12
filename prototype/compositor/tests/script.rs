@@ -3063,8 +3063,6 @@ fn the_script_takes_the_gestures_it_wants(device: Device) {
         &[
             "--output-size",
             "640x400",
-            "--wm",
-            "script",
             "--script",
             project.to_str().unwrap(),
         ],
