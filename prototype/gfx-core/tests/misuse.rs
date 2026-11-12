@@ -8,19 +8,7 @@ use proto_gfx_core::*;
 
 mod common;
 
-through_both_entries!(
-    destroyed_and_foreign_handles,
-    objects_destroyed_while_in_use,
-    recorded_draws_keep_their_resources_and_slots,
-    out_of_range_and_mismatched_sizes,
-    targets_that_do_not_fit,
-    draws_without_what_the_pipeline_needs,
-    bad_shaders_and_pipelines,
-    calls_in_the_wrong_state,
-    compute_misuse,
-    resource_exhaustion,
-    device_loss_and_recreation,
-);
+use common::{ShaderLanguage, ShaderSource};
 
 fn no_validation_errors() {
     assert_eq!(
@@ -270,6 +258,7 @@ fn gpu() -> Gpu {
     Gpu::new(GpuConfig::for_tests()).unwrap()
 }
 
+#[test]
 fn destroyed_and_foreign_handles() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -343,6 +332,7 @@ fn destroyed_and_foreign_handles() {
     no_validation_errors();
 }
 
+#[test]
 fn objects_destroyed_while_in_use() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -408,6 +398,7 @@ fn objects_destroyed_while_in_use() {
 
 /// What a recorded draw refers to must survive until the GPU has executed it,
 /// and its heap slot must not be handed out again before that.
+#[test]
 fn recorded_draws_keep_their_resources_and_slots() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -448,6 +439,7 @@ fn recorded_draws_keep_their_resources_and_slots() {
     no_validation_errors();
 }
 
+#[test]
 fn out_of_range_and_mismatched_sizes() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -569,6 +561,7 @@ fn out_of_range_and_mismatched_sizes() {
     no_validation_errors();
 }
 
+#[test]
 fn targets_that_do_not_fit() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -651,6 +644,7 @@ fn targets_that_do_not_fit() {
     no_validation_errors();
 }
 
+#[test]
 fn draws_without_what_the_pipeline_needs() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -730,35 +724,14 @@ fn draws_without_what_the_pipeline_needs() {
     no_validation_errors();
 }
 
+#[test]
 fn bad_shaders_and_pipelines() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
 
-    // Does not parse; does not type-check.
-    let e = expect!(
-        wgsl(&mut gpu, ShaderStage::Fragment, "fn main( {", "main"),
-        ShaderCompile
-    );
-    assert!(e.message.contains("expected"), "{e}");
-    expect!(
-        wgsl(
-            &mut gpu,
-            ShaderStage::Fragment,
-            "@fragment fn main() -> @location(0) vec4<f32> { return 1.0; }",
-            "main"
-        ),
-        ShaderCompile
-    );
-    expect!(
-        wgsl(
-            &mut gpu,
-            ShaderStage::Fragment,
-            "@fragment fn main() -> @location(0) vec4<f32> { return undefined_name; }",
-            "main"
-        ),
-        ShaderCompile
-    );
-    // No such entry point; entry point of another stage.
+    // Source errors are the compiler's, before the API sees anything (the
+    // build tool reports them). What the API sees is SPIR-V whose entry point
+    // is not the one asked for: none of that name, or one of another stage.
     expect!(
         wgsl(&mut gpu, ShaderStage::Fragment, QUAD, "nope"),
         ShaderCompile
@@ -788,45 +761,11 @@ fn bad_shaders_and_pipelines() {
         ),
         ShaderCompile
     );
-    // GLSL goes through the same path.
-    expect!(
-        common::create_shader(
-            &mut gpu,
-            &ShaderSource {
-                stage: ShaderStage::Fragment,
-                language: ShaderLanguage::Glsl,
-                source: "#version 450\nvoid main() { this is not glsl }",
-                entry: "main",
-            }
-        ),
+    // Modules beyond the size limit are refused before the checks see them.
+    let e = expect!(
+        gpu.create_shader_spirv(ShaderStage::Fragment, "main", &vec![0; MAX_SPIRV_BYTES + 4]),
         ShaderCompile
     );
-
-    // A long expression chain makes naga recurse deeply; on a default stack
-    // this aborts the process. The API compiles on a large stack.
-    let chain = format!(
-        "@fragment fn main() -> @location(0) vec4<f32> {{ return vec4(1.0{}); }}",
-        " + 1.0".repeat(4000)
-    );
-    wgsl(&mut gpu, ShaderStage::Fragment, &chain, "main").unwrap();
-    // Inputs beyond the size limit are refused before the compiler or the
-    // SPIR-V checks see them.
-    let e = match common::entry() {
-        common::Entry::Source => {
-            let huge = format!(
-                "@fragment fn main() -> @location(0) vec4<f32> {{ return vec4(1.0{}); }}",
-                " + 1.0".repeat(MAX_SHADER_SOURCE_BYTES / 6)
-            );
-            expect!(
-                wgsl(&mut gpu, ShaderStage::Fragment, &huge, "main"),
-                ShaderCompile
-            )
-        }
-        common::Entry::Spirv => expect!(
-            gpu.create_shader_spirv(ShaderStage::Fragment, "main", &vec![0; MAX_SPIRV_BYTES + 4]),
-            ShaderCompile
-        ),
-    };
     assert!(e.message.contains("limit"), "{e}");
 
     // Stages swapped.
@@ -950,29 +889,6 @@ fn bad_shaders_and_pipelines() {
         LimitExceeded
     );
     assert!(e.message.contains("push data"), "{e}");
-    // A push block far beyond it. naga 30.0.1 panics on this input in builds
-    // with overflow checks (`valid/immediates.rs`); the API turns the panic
-    // into an error. Without overflow checks the shader compiles and the
-    // pipeline is refused instead.
-    match wgsl(
-        &mut gpu,
-        ShaderStage::Fragment,
-        "struct Push { values: array<vec4<f32>, 64> }
-         var<immediate> pc: Push;
-         @fragment fn main() -> @location(0) vec4<f32> { return pc.values[63]; }",
-        "main",
-    ) {
-        Err(e) => {
-            assert_eq!(e.code, ErrorCode::ShaderCompile, "{e}");
-            assert!(e.message.contains("panicked"), "{e}");
-        }
-        Ok(fs_huge_push) => {
-            expect!(
-                gpu.create_render_pipeline(&quad_desc(vs_plain, fs_huge_push, Format::Rgba8Unorm)),
-                LimitExceeded
-            );
-        }
-    }
     // Writable storage in a render pipeline is outside the spike.
     let fs_storage = wgsl(
         &mut gpu,
@@ -991,6 +907,7 @@ fn bad_shaders_and_pipelines() {
     no_validation_errors();
 }
 
+#[test]
 fn calls_in_the_wrong_state() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -1035,6 +952,7 @@ fn calls_in_the_wrong_state() {
     no_validation_errors();
 }
 
+#[test]
 fn compute_misuse() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -1114,6 +1032,7 @@ fn compute_misuse() {
 
 /// Creating objects without end: every limit turns into an error, nothing is
 /// leaked, and the device keeps working.
+#[test]
 fn resource_exhaustion() {
     let mut config = GpuConfig::for_tests();
     config.limits = Limits {
@@ -1290,6 +1209,7 @@ fn resource_exhaustion() {
 }
 
 /// A lost device: every call reports it, and a new device starts clean.
+#[test]
 fn device_loss_and_recreation() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);

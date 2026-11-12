@@ -24,10 +24,10 @@ pub use device::{validation_error_count, validation_messages};
 pub use dmabuf::{DmabufDesc, DmabufFormat, DmabufPlaneDesc, ImportedImage};
 pub use error::{ErrorCode, GfxError, Result};
 pub use format::{Format, FormatCaps, NumClass, VertexFormat};
-pub use gpu::{Gpu, ImageInfo, MAX_SHADER_SOURCE_BYTES, MAX_SPIRV_BYTES, Stats};
+pub use gpu::{Gpu, ImageInfo, MAX_SPIRV_BYTES, Stats};
 pub use handle::{Handle, Kind};
 pub use host::{DeviceDescription, ScanoutPlane};
 pub use shader::{
-    BindingInfo, BindingKind, CompiledShader, IoVar, MAX_BINDINGS, MAX_TEXTURE_ARRAY, NagaCompiler,
-    Reflection, ShaderCompiler, ShaderLanguage, ShaderSource, ShaderStage, StorageAccess,
+    BindingInfo, BindingKind, IoVar, MAX_BINDINGS, MAX_TEXTURE_ARRAY, Reflection, ShaderStage,
+    StorageAccess,
 };

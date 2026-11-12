@@ -34,8 +34,8 @@ use crate::shader::{
 /// the device is created with (`device.rs`). Each one is also something the
 /// checks below understand. Adding one means enabling its feature too.
 const ALLOWED_CAPABILITIES: &[Capability] = &[
-    // Vulkan 1.0 core. (naga declares Sampled1D in every module it writes
-    // from GLSL; 1D images themselves are refused below.)
+    // Vulkan 1.0 core. (Some compilers declare Sampled1D in every module,
+    // naga for one; 1D images themselves are refused below.)
     Capability::Shader,
     Capability::Sampled1D,
     Capability::Matrix,
@@ -274,7 +274,7 @@ impl<'a> Ctx<'a> {
                     size = size.max(offset + member_size);
                 }
                 // A struct's size is rounded up to its alignment, as WGSL
-                // (and naga's reflection) count it.
+                // counts it.
                 size.next_multiple_of(self.align_of(ty)?)
             }
             other => return Err(format!("{other:?} has no size in a buffer")),
@@ -828,7 +828,6 @@ fn check_access_chain(ctx: &Ctx<'_>, inst: &Instruction) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shader::{NagaCompiler, ShaderCompiler, ShaderLanguage, ShaderSource};
 
     /// WGSL to SPIR-V with naga, without bounds checks.
     fn naga_words(stage: ShaderStage, source: &str) -> Vec<u32> {
@@ -868,10 +867,10 @@ mod tests {
         .unwrap()
     }
 
-    /// The reflection from SPIR-V agrees with naga's own, on the shader of
-    /// the naga compiler's test.
+    /// Bindings, push data, stage inputs and outputs, and which texture is
+    /// sampled with which sampler.
     #[test]
-    fn reflection_agrees_with_naga() {
+    fn reflects_bindings_io_and_push_data() {
         let source = r#"
             struct Push { tint: vec4<f32>, scale: f32 }
             var<immediate> push: Push;
@@ -885,28 +884,52 @@ mod tests {
                 return textureSample(tex, smp, uv) * push.tint * globals.gain * push.scale;
             }
         "#;
-        let from_naga = NagaCompiler
-            .compile(&ShaderSource {
-                stage: ShaderStage::Fragment,
-                language: ShaderLanguage::Wgsl,
-                source,
-                entry: "main",
-            })
-            .unwrap()
-            .reflection;
         let words = naga_words(ShaderStage::Fragment, source);
-        let from_spirv = crate::spirv_input::accept_spirv(&words, ShaderStage::Fragment, "main")
+        let r = crate::spirv_input::accept_spirv(&words, ShaderStage::Fragment, "main")
             .unwrap()
             .reflection;
-        assert_eq!(from_spirv.push_size, from_naga.push_size);
-        assert_eq!(from_spirv.inputs, from_naga.inputs);
-        assert_eq!(from_spirv.outputs, from_naga.outputs);
-        assert_eq!(from_spirv.sampling_pairs, from_naga.sampling_pairs);
+        // The struct of a vector and a scalar, rounded up to its alignment.
+        assert_eq!(r.push_size, 32);
+        let float = NumClass::Float;
+        assert_eq!(
+            r.inputs,
+            [
+                IoVar {
+                    location: 0,
+                    class: float,
+                    components: 2
+                },
+                IoVar {
+                    location: 2,
+                    class: NumClass::Uint,
+                    components: 1
+                },
+            ]
+        );
+        assert_eq!(
+            r.outputs,
+            [IoVar {
+                location: 0,
+                class: float,
+                components: 4
+            }]
+        );
+        assert_eq!(r.sampling_pairs, [(0, 1)]);
         // The unused texture does not reach the SPIR-V side at all. The API
-        // checks only the bindings that are used, so the two agree where it
-        // matters.
-        let used: Vec<_> = from_naga.bindings.into_iter().filter(|b| b.used).collect();
-        assert_eq!(from_spirv.bindings, used);
+        // checks only the bindings that are used.
+        let bindings: Vec<_> = r
+            .bindings
+            .iter()
+            .map(|b| (b.binding, b.kind, b.used))
+            .collect();
+        assert_eq!(
+            bindings,
+            [
+                (0, BindingKind::SampledTexture { class: float }, true),
+                (1, BindingKind::Sampler, true),
+                (3, BindingKind::UniformBuffer { min_size: 16 }, true),
+            ]
+        );
     }
 
     #[test]

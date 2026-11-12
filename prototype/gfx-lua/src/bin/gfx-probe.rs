@@ -135,61 +135,6 @@ fn shader_hang() {
     say("EXITING");
 }
 
-/// Shader sources that nest very deeply, to see whether the compiler survives.
-fn deep_shader(kind: &str, depth: usize) {
-    let source = match kind {
-        "parens" => format!(
-            "@fragment fn main() -> @location(0) vec4<f32> {{ return vec4({}1.0{}); }}",
-            "(".repeat(depth),
-            ")".repeat(depth)
-        ),
-        "blocks" => format!(
-            "@fragment fn main() -> @location(0) vec4<f32> {{ {} {} return vec4(1.0); }}",
-            "{".repeat(depth),
-            "}".repeat(depth)
-        ),
-        "sum" => format!(
-            "@fragment fn main() -> @location(0) vec4<f32> {{ return vec4(1.0{}); }}",
-            " + 1.0".repeat(depth)
-        ),
-        "ifs" => format!(
-            "@fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {{ {} return vec4(1.0); {} return vec4(0.0); }}",
-            "if p.x > 0.0 {".repeat(depth),
-            "}".repeat(depth)
-        ),
-        other => panic!("unknown kind {other}"),
-    };
-    say(&format!(
-        "COMPILING {kind} depth {depth} ({} bytes)",
-        source.len()
-    ));
-    let start = Instant::now();
-    let result = NagaCompiler.compile(&ShaderSource {
-        stage: ShaderStage::Fragment,
-        language: ShaderLanguage::Wgsl,
-        source: &source,
-        entry: "main",
-    });
-    match result {
-        Ok(shader) => say(&format!(
-            "COMPILED {} words in {:?}",
-            shader.spirv.len(),
-            start.elapsed()
-        )),
-        Err(message) => say(&format!(
-            "REJECTED in {:?}: {}",
-            start.elapsed(),
-            message
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(120)
-                .collect::<String>()
-        )),
-    }
-}
-
 /// Script sources that nest very deeply.
 fn deep_script(kind: &str, depth: usize) {
     let source = match kind {
@@ -224,24 +169,9 @@ fn main() {
     let number = |i: usize| args.get(i).and_then(|a| a.parse().ok()).unwrap_or(1000);
     match args.get(1).map(String::as_str) {
         Some("shader-hang") => shader_hang(),
-        Some("deep-shader") => {
-            let (kind, depth) = (args[2].clone(), number(3));
-            match args.get(4).and_then(|a| a.parse::<usize>().ok()) {
-                // Optional: run the compiler on a thread with this many MiB of stack.
-                Some(stack_mib) => std::thread::Builder::new()
-                    .stack_size(stack_mib << 20)
-                    .spawn(move || deep_shader(&kind, depth))
-                    .expect("spawn")
-                    .join()
-                    .expect("join"),
-                None => deep_shader(&kind, depth),
-            }
-        }
         Some("deep-script") => deep_script(&args[2], number(3)),
         _ => {
-            eprintln!(
-                "usage: gfx-probe shader-hang | deep-shader <kind> <depth> | deep-script <kind> <depth>"
-            );
+            eprintln!("usage: gfx-probe shader-hang | deep-script <kind> <depth>");
             std::process::exit(2);
         }
     }

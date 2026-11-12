@@ -8,11 +8,12 @@ publish.workspace = true
 [dependencies]
 vulkan.workspace = true
 vulkan-alloc.workspace = true
-naga.workspace = true
 spirv-tools.workspace = true
 rspirv.workspace = true
 rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
+# Writes the SPIR-V of the short shaders the tests give as WGSL.
+naga.workspace = true
 half.workspace = true
 rustix = { version = "1", features = ["fs"] }

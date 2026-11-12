@@ -2,7 +2,7 @@ use proto_gfx_core::*;
 
 mod common;
 
-through_both_entries!(triangle_smoke, glsl_fragment_shader);
+use common::{ShaderLanguage, ShaderSource};
 
 /// Checks an 8-bit UNORM pixel written from a float colour. Vulkan converts
 /// a float `f` to unsigned normalized fixed-point by taking either of the two
@@ -19,6 +19,7 @@ fn assert_unorm8(actual: &[u8], expected: [u8; 4]) {
     }
 }
 
+#[test]
 fn triangle_smoke() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
     eprintln!("device: {} / {}", gpu.device_name(), gpu.driver_name());
@@ -90,8 +91,9 @@ fn triangle_smoke() {
     assert_eq!(validation_error_count(), 0, "{:?}", validation_messages());
 }
 
-/// The compiler is behind a trait and takes a language tag: a GLSL fragment
-/// shader goes through the same reflection and checks as WGSL.
+/// SPIR-V written from GLSL (by naga here) goes through the same checks and
+/// reflection as any other module.
+#[test]
 fn glsl_fragment_shader() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
     let vs = common::create_shader(

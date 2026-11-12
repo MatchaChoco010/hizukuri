@@ -9,7 +9,7 @@ use proto_gfx_core::*;
 
 mod common;
 
-through_both_entries!(an_exported_image_is_imported_and_sampled);
+use common::{ShaderLanguage, ShaderSource};
 
 const WIDTH: u32 = 16;
 const HEIGHT: u32 = 8;
@@ -101,6 +101,7 @@ fn without_dmabufs(gpu: &Gpu, what: &str) {
     eprintln!("skipped: {} {what}", gpu.device_name());
 }
 
+#[test]
 fn an_exported_image_is_imported_and_sampled() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
     let xrgb = u32::from_le_bytes(*b"XR24");

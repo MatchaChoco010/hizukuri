@@ -17,7 +17,7 @@
 | `prototype/color` | image description、原色の行列、transfer function、輝度の対応づけ。CPU の参照計算。スクリプトの shader に渡す変換の数値 | なし |
 | `prototype/wl` | Wayland のサーバー側。Smithay の型を外へ出さない | Smithay |
 | `prototype/backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む）。バックエンドが、描くものに求める口（`target`: `TargetProvider`、`TargetDesc`、`OutputFormat`、`DmabufPlane`、`TargetError`） | `proto-color`、`calloop`、`drm`、Smithay（session、udev、libinput） |
-| `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込みと書き出し。shader の実行時のコンパイル。SPIR-V で渡された shader の検証と検査 | `vulkan-rs`、`naga`、`spirv-tools`（SPIRV-Tools）、`rspirv` |
+| `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込みと書き出し。SPIR-V で渡された shader の検証と検査 | `vulkan-rs`、`spirv-tools`（SPIRV-Tools）、`rspirv` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限。例のスクリプト（`scripts/`）と、その Slang の shader | `mlua` |
 | `prototype/slangc` | Slang のコンパイラー（`slangc`）を子のプロセスとして呼び、SPIR-V を得る。project の shader の名前と場所の決まりと、そのビルド（`project`）。`proto-compositor` と `proto-gfx-lua` の build script と、`build-shaders` が使う | `rustix`、`serde_json` |
 | `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目と、その言葉（`wm`: `WindowId`、`OutputId`、`Placement`、`ConfigureHint`）、座標と矩形（`geometry`）、スクリプトの層（`script/`、`scripts/`）、project の shader（`shaders`。SPIR-V を読む側と、道具 `proto-compositor build-shaders`）、スクリプトが動かないときと、誰も決めないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、取り込んだ画像とそのファイル（`image`: PNG と OpenEXR）、自己診断（`selftest`）、X11 の display と xwayland-satellite の起動（`x11`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて、`png` |
@@ -123,7 +123,7 @@ cargo build -j 8
 - Nix の devShell（`nix develop`）の中では、ビルドの結果が `target/` の直下ではなく、`$CARGO_TARGET_DIR`
   （`target/nix-<hash>/`）に入る。この文書の例の `target/debug/` は、`"$CARGO_TARGET_DIR/debug/"` に読み替える。
   devShell の中と外で、同じバイナリを使い回さない。
-- スクリプトの shader は Slang で書き、名前で指す（`build-shaders` で SPIR-V にしておく）。源を文字列で渡す経路は、実行時に、`proto-gfx-core` が `naga` で SPIR-V にする。
+- スクリプトの shader は Slang で書き、名前で指す（`build-shaders` で SPIR-V にしておく）。ランタイムは、shader をコンパイルしない。
 - `proto-compositor` のシェーダー（`prototype/compositor/shaders/` と、組み込みの project の `prototype/compositor/scripts/shaders/`）は Slang で書き、ビルド時に `slangc` で SPIR-V にして、
   バイナリに埋め込む。ビルドに `slangc` が要る（devShell には入っている。[開発環境](../dev/development-environment.md)）。
   無ければ、ビルドは、`nix develop` を使うように書いて失敗する。

@@ -221,14 +221,12 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   GPU が終えるまで残す。
 - すべての image は、操作の外では、決まった layout にある（サンプリングできるものは `SHADER_READ_ONLY_OPTIMAL`、
   それ以外は `GENERAL`）。遷移は、コアが出す。
-- shader を作る入口は 2 つある。どちらも、shader の中の配列の添字を範囲に切り詰め、device の `robustBufferAccess` と
+- shader は、SPIR-V の module（`.spv` のバイト列）から作る（`Gpu::create_shader_spirv`）。ランタイムは、shader の源を
+  受け取らず、コンパイルしない。スクリプトの `gfx.create_shader` は、host の loader が名前から探した SPIR-V を、この入口に渡す
+  （[project の shader](#project-の-shader)）。shader の中の配列の添字は範囲に切り詰め、device の `robustBufferAccess` と
   `robustImageAccess` を有効にする。reflection（binding の種類と、entry point が使うか、push の大きさ、入出力の location、
   どの texture をどの sampler で読むか、compute の workgroup の大きさ）は、コアが作る。
-  - `Gpu::create_shader`: 源を受け取り、`ShaderCompiler` という trait を通してコンパイルする。いまの実装は naga で、
-    WGSL と GLSL を受け取る。スクリプトの `gfx.create_shader` に `source` を渡すと、この入口を使う。
-  - `Gpu::create_shader_spirv`: SPIR-V の module（`.spv` のバイト列）を受け取る。module は、信頼しない入力として扱い、
-    device に渡す前に、次の順に通す（`prototype/gfx-core/src/spirv_input.rs`）。スクリプトの `gfx.create_shader` に
-    `shader` を渡すと、この入口を使う（[project の shader](#project-の-shader)）。
+  - module は、信頼しない入力として扱い、device に渡す前に、次の順に通す（`prototype/gfx-core/src/spirv_input.rs`）。
     1. SPIRV-Tools の validator（Vulkan 1.4 の環境）で検証する。
     2. SPIRV-Tools の optimizer で、`strip-nonsemantic-info`（device の拡張が要る reflection の decoration を除く）と
        `graphics-robust-access`（配列、ベクトル、行列への添字を、範囲に切り詰める）を走らせる。
@@ -349,7 +347,7 @@ shader を書くときの決まり:
   push data は、`[[vk::push_constant]] ConstantBuffer<T>` で書く。
 - vertex shader の頂点の番号は、`SV_VulkanVertexID` で受け取る。`SV_VertexID` は、`DrawParameters` の capability を要るので、
   拒まれる。
-- `select(cond, a, b)` は、`cond ? a : b` である。WGSL の `select(b, a, cond)` と、引数の順が逆である。
+- `select(cond, a, b)` は、`cond ? a : b` である。
 - 使える capability は、device が有効にしている範囲だけである: `Shader`、`Matrix`、`ImageQuery`、`DerivativeControl`、
   `StorageImageExtendedFormats`、`Sampled1D`、`ShaderNonUniform`、`SampledImageArrayDynamicIndexing`、
   `SampledImageArrayNonUniformIndexing`、`DemoteToHelperInvocation`。16 bit の浮動小数点、64 bit の整数、subgroup の操作、
