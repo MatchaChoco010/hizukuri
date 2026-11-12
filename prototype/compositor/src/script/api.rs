@@ -373,7 +373,7 @@ pub fn register(lua: &Lua, shared: &SharedRef, gpu: &Rc<RefCell<Gpu>>) -> mlua::
                 t.set("y", cursor.position.1)?;
                 match &cursor.image {
                     CursorImage::Default => {
-                        let (_, slot) = super::fallback::arrow(&state, &mut gpu.borrow_mut())
+                        let (_, slot) = super::arrow_texture(&state, &mut gpu.borrow_mut())
                             .map_err(mlua::Error::external)?;
                         t.set("texture", slot.to_bits())?;
                         t.set("width", crate::scene::ARROW_WIDTH)?;

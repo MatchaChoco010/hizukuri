@@ -39,6 +39,8 @@ use proto_render::{
 use proto_wl::{BufferContents, BufferTransform, BufferUpdate, DamageRect, ShmFormat, SurfaceId};
 use serde_json::{Value, json};
 
+use crate::fallback;
+
 /// How a window is drawn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VisualWindow {
@@ -606,7 +608,7 @@ impl Scene for FlatScene {
         windows: &[WindowView],
         accepts_input: &dyn Fn(SurfaceId, f64, f64) -> bool,
     ) -> Option<Hit> {
-        flat_hit_test(
+        fallback::hit_test(
             |window| self.windows.get(&window).map(|v| v.position),
             point,
             windows,
@@ -620,7 +622,7 @@ impl Scene for FlatScene {
         surface: SurfaceId,
         windows: &[WindowView],
     ) -> Option<(f64, f64)> {
-        flat_locate(
+        fallback::locate(
             |window| self.windows.get(&window).map(|v| v.position),
             point,
             surface,
@@ -654,56 +656,6 @@ impl Scene for FlatScene {
             "frames_rendered": self.frames,
         })
     }
-}
-
-/// Hit test for windows drawn flat at a position: the topmost surface that
-/// takes input at `point`. `position` gives where a window is drawn.
-pub fn flat_hit_test(
-    position: impl Fn(WindowId) -> Option<(f64, f64)>,
-    point: (f64, f64),
-    windows: &[WindowView],
-    accepts_input: &dyn Fn(SurfaceId, f64, f64) -> bool,
-) -> Option<Hit> {
-    // Topmost window first, and within a window the topmost surface.
-    for window in windows.iter().rev() {
-        let Some(origin) = position(window.window) else {
-            continue;
-        };
-        for surface in window.surfaces.iter().rev() {
-            // Going from the screen to the surface is a translation.
-            let local = (
-                point.0 - (origin.0 + surface.offset.0 as f64),
-                point.1 - (origin.1 + surface.offset.1 as f64),
-            );
-            if accepts_input(surface.surface, local.0, local.1) {
-                return Some(Hit {
-                    window: window.window,
-                    surface: surface.surface,
-                    local,
-                });
-            }
-        }
-    }
-    None
-}
-
-/// [`Scene::locate`] for windows drawn flat at a position.
-pub fn flat_locate(
-    position: impl Fn(WindowId) -> Option<(f64, f64)>,
-    point: (f64, f64),
-    surface: SurfaceId,
-    windows: &[WindowView],
-) -> Option<(f64, f64)> {
-    for window in windows {
-        if let Some(view) = window.surfaces.iter().find(|s| s.surface == surface) {
-            let origin = position(window.window)?;
-            return Some((
-                point.0 - (origin.0 + view.offset.0 as f64),
-                point.1 - (origin.1 + view.offset.1 as f64),
-            ));
-        }
-    }
-    None
 }
 
 /// The built-in arrow cursor: `X` is the black outline, `.` the white

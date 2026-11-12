@@ -358,7 +358,7 @@ fn terminals_in_tiles(device: Device) {
     // The built-in fallback: the same windows at the same places, with the
     // marker along the top edge; and back.
     session.send(Request::ScriptMode {
-        mode: "safe".into(),
+        mode: "fallback".into(),
     });
     let fallback = session.screenshot_png("fallback");
     let marker = fallback.pixel(640, 1);

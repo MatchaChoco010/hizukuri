@@ -108,7 +108,7 @@ pub enum Request {
         path: Option<PathBuf>,
     },
     /// Hands drawing and window management to the script (`running`) or to
-    /// the built-in fallback (`safe`).
+    /// the built-in fallback (`fallback`).
     ScriptMode {
         mode: String,
     },

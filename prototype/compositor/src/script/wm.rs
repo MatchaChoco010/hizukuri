@@ -7,10 +7,11 @@
 //! makes the protocol side agree (configure events, keyboard focus).
 //!
 //! The table has sensible contents without the script: a new window is put
-//! in a cascade, and it is focused unless the script's `window_opened`
-//! handled it. That is what a window gets when the script defines no
-//! `window_opened`, when the callback fails, and in the fallback mode. A
-//! broken script therefore cannot make a window unreachable.
+//! in the fallback's cascade ([`crate::fallback::placement`]), and it is
+//! focused unless the script's `window_opened` handled it. That is what a
+//! window gets when the script defines no `window_opened`, when the callback
+//! fails, and in the fallback mode. A broken script therefore cannot make a
+//! window unreachable.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,11 +21,9 @@ use proto_gfx_core::{ErrorCode, GfxError};
 use proto_layout::{ConfigureHint, OutputId, Placement, Point, Rect, Size, WindowId};
 
 use super::{ScriptRuntime, Shared};
+use crate::fallback;
 use crate::scene::Hit;
 use crate::wm::{Modifiers, WindowManager, WmRequest};
-
-const CASCADE_STEP: i32 = 32;
-const CASCADE_SLOTS: i32 = 8;
 
 #[derive(Debug, Clone, Copy)]
 struct Window {
@@ -56,7 +55,8 @@ pub(crate) struct WmState {
     outputs: Vec<(OutputId, Rect)>,
     events: Vec<Event>,
     requests: Vec<WmRequest>,
-    placed: i32,
+    /// Where new windows go before the script says otherwise.
+    cascade: fallback::Cascade,
     /// Bumped by every change, so the core can tell whether to re-apply.
     revision: u64,
     /// The revision the core last applied.
@@ -307,22 +307,10 @@ impl WindowManager for ScriptWm {
             if let Some(existing) = wm.window(id) {
                 return existing.placement;
             }
-            // The default place, in case the script has nothing to say: a
-            // cascade on the first output, on top. Whether it is focused is
-            // decided when the script was asked (`dispatch`).
-            let output = wm.outputs.first().copied();
-            let origin = output.map(|(_, rect)| rect.origin()).unwrap_or_default();
-            let slot = wm.placed % CASCADE_SLOTS;
-            wm.placed += 1;
-            let placement = Placement {
-                window: id,
-                output: output.map(|(o, _)| o),
-                position: Point::new(
-                    origin.x + CASCADE_STEP * (slot + 1),
-                    origin.y + CASCADE_STEP * (slot + 1),
-                ),
-                size: None,
-            };
+            // The default place, in case the script has nothing to say: the
+            // fallback's cascade on the first output, on top. Whether it is
+            // focused is decided when the script was asked (`dispatch`).
+            let placement = wm.cascade.place(id, wm.outputs.first().copied());
             wm.windows.push(Window {
                 placement,
                 configure: None,

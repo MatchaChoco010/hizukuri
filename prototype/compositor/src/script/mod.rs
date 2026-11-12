@@ -15,13 +15,12 @@
 //! - Every call into the script runs under a time budget, and every failure
 //!   comes back here as a value. What happens next is decided here, not by
 //!   the script: keep the last frame, or draw the windows with the small
-//!   built-in fallback ([`fallback`]).
+//!   built-in fallback ([`crate::fallback`]).
 //!
 //! The script language is provisional (Luau through `proto-gfx-lua`).
 
 mod api;
 mod dmabuf;
-mod fallback;
 mod wm;
 
 use std::cell::RefCell;
@@ -44,9 +43,10 @@ use proto_wl::{
 };
 use serde_json::{Value, json};
 
+use crate::fallback;
 use crate::scene::{
-    Capture, CursorView, DrawStatus, Hit, Scene, SceneError, SceneRequest, VisualWindow,
-    WindowView, WorldSnapshot, flat_hit_test, flat_locate,
+    Capture, CursorView, DrawStatus, Hit, Scene, SceneError, SceneRequest, SurfaceView,
+    VisualWindow, WindowView, WorldSnapshot, arrow_image,
 };
 
 pub use wm::ScriptWm;
@@ -148,7 +148,7 @@ pub enum OnError {
     Hold,
     /// Draw the windows with the built-in fallback until the script is
     /// reloaded.
-    Safe,
+    Fallback,
 }
 
 /// Which code currently draws and decides.
@@ -160,7 +160,7 @@ pub enum Mode {
     /// the script is retried from time to time.
     Hold,
     /// The built-in fallback draws, hit tests and places windows.
-    Safe,
+    Fallback,
 }
 
 impl Mode {
@@ -168,7 +168,7 @@ impl Mode {
         match self {
             Mode::Running => "running",
             Mode::Hold => "hold",
-            Mode::Safe => "safe",
+            Mode::Fallback => "fallback",
         }
     }
 }
@@ -202,7 +202,7 @@ impl Default for ScriptOptions {
     fn default() -> Self {
         Self {
             project: Project::Builtin,
-            on_error: OnError::Safe,
+            on_error: OnError::Fallback,
             call_budget: Duration::from_millis(250),
             init_budget: Duration::from_secs(10),
             memory_limit: Some(256 << 20),
@@ -343,7 +343,7 @@ pub struct ScriptRuntime {
     pub(crate) host: ScriptHost,
     pub(crate) shared: Rc<RefCell<Shared>>,
     pub(crate) options: ScriptOptions,
-    fallback: RefCell<fallback::Fallback>,
+    fallback: RefCell<fallback::Drawer>,
 }
 
 fn gfx(context: &str, error: GfxError) -> String {
@@ -397,12 +397,12 @@ impl ScriptRuntime {
             host,
             shared,
             options,
-            fallback: RefCell::new(fallback::Fallback::default()),
+            fallback: RefCell::new(fallback::Drawer::default()),
         });
         if let Err(error) = runtime.load(None) {
             tracing::error!("the script failed to load: {error}");
             runtime.record("load", &error);
-            runtime.shared.borrow_mut().mode = Mode::Safe;
+            runtime.shared.borrow_mut().mode = Mode::Fallback;
         }
         Ok(runtime)
     }
@@ -530,7 +530,7 @@ impl ScriptRuntime {
             Err(error) => {
                 self.record("load", &error);
                 let mut shared = self.shared.borrow_mut();
-                shared.mode = Mode::Safe;
+                shared.mode = Mode::Fallback;
                 shared.requests.push(SceneRequest::Redraw);
                 Err(format!("the script failed to load: {error}"))
             }
@@ -578,19 +578,19 @@ impl ScriptRuntime {
     /// budget each time, makes the session unusable while every single
     /// event is "handled". A timeout therefore ends the script's turn at
     /// once, and so do [`MAX_STRIKES`] failures in a row. The session goes
-    /// on with the built-in behaviour until the script is reloaded.
+    /// on with the built-in fallback until the script is reloaded.
     pub(crate) fn record_event_failure(&self, what: &str, error: &ScriptError) {
         self.record(what, error);
         let mut shared = self.shared.borrow_mut();
         shared.strikes += 1;
         let timeout = matches!(error, ScriptError::Timeout(_));
-        if shared.mode != Mode::Safe && (timeout || shared.strikes >= MAX_STRIKES) {
+        if shared.mode != Mode::Fallback && (timeout || shared.strikes >= MAX_STRIKES) {
             tracing::error!(
                 what,
                 strikes = shared.strikes,
-                "the script keeps failing on events; the built-in behaviour takes over"
+                "the script keeps failing on events; the built-in fallback takes over"
             );
-            shared.mode = Mode::Safe;
+            shared.mode = Mode::Fallback;
             shared.requests.push(SceneRequest::Redraw);
         }
     }
@@ -624,7 +624,7 @@ impl ScriptRuntime {
         name: &'static str,
         args: A,
     ) -> Option<Result<R, ScriptError>> {
-        if self.mode() == Mode::Safe || !self.defines(name) {
+        if self.mode() == Mode::Fallback || !self.defines(name) {
             return None;
         }
         let started = Instant::now();
@@ -720,7 +720,7 @@ impl ScriptRuntime {
                 "mode": shared.mode.name(),
                 "on_error": match self.options.on_error {
                     OnError::Hold => "hold",
-                    OnError::Safe => "safe",
+                    OnError::Fallback => "fallback",
                 },
                 "frames": shared.frames,
                 "fallback_frames": shared.fallback_frames,
@@ -753,6 +753,81 @@ impl ScriptRuntime {
             },
         })
     }
+
+    /// Draws the windows and the cursor into `image` with the built-in
+    /// fallback, at the positions in the core's table. A GPU frame is open.
+    fn draw_fallback(
+        &self,
+        output: &OutputInfo,
+        image: Handle,
+        background: [f32; 3],
+        windows: &[WindowView],
+        cursor: Option<&CursorView>,
+    ) -> Result<(), GfxError> {
+        let mut gpu = self.gpu();
+        let (_, arrow) = arrow_texture(&self.shared, &mut gpu)?;
+        let shared = self.shared.borrow();
+        let placed: Vec<fallback::draw::Window<'_>> = windows
+            .iter()
+            .filter_map(|window| {
+                let placed = shared
+                    .world
+                    .windows
+                    .iter()
+                    .find(|w| w.window == window.window)?;
+                Some(fallback::draw::Window {
+                    position: (placed.position.0 as f64, placed.position.1 as f64),
+                    opacity: shared.opacity.get(&window.window).copied().unwrap_or(1.0),
+                    surfaces: &window.surfaces,
+                })
+            })
+            .collect();
+        let texture = |surface: &SurfaceView| {
+            let texture = shared.textures.get(&surface.surface)?;
+            let source = surface.source?;
+            let uv = api::uv_transform(texture, source).map(|v| v as f32);
+            Some((texture.slot, uv))
+        };
+        self.fallback.borrow_mut().draw(
+            &mut gpu,
+            &fallback::draw::Frame {
+                output,
+                image,
+                background,
+                arrow,
+                windows: &placed,
+                cursor,
+            },
+            &texture,
+        )
+    }
+}
+
+/// The built-in arrow cursor as a texture: (image, slot). Created on first
+/// use; needs a GPU frame for the upload and opens one if none is open.
+pub(crate) fn arrow_texture(
+    shared: &Rc<RefCell<Shared>>,
+    gpu: &mut Gpu,
+) -> Result<(Handle, Handle), GfxError> {
+    if let Some(arrow) = shared.borrow().arrow {
+        return Ok(arrow);
+    }
+    let (width, height, pixels) = arrow_image();
+    let image = gpu.create_image(&ImageDesc {
+        format: Format::Bgra8Unorm,
+        width,
+        height,
+        usage: ImageUsage::SAMPLED | ImageUsage::COPY_DST,
+    })?;
+    if !gpu.is_recording() {
+        gpu.begin_frame()?;
+    }
+    gpu.upload_image(image, &pixels)?;
+    let slot = gpu.create_texture_slot(image)?;
+    gpu.protect(image);
+    gpu.protect(slot);
+    shared.borrow_mut().arrow = Some((image, slot));
+    Ok((image, slot))
 }
 
 fn output_format(format: OutputFormat) -> Format {
@@ -920,7 +995,7 @@ impl ScriptScene {
         let mut shared = self.runtime.shared.borrow_mut();
         match shared.mode {
             Mode::Running => true,
-            Mode::Safe => false,
+            Mode::Fallback => false,
             Mode::Hold => {
                 let due = shared
                     .hold_since
@@ -1264,7 +1339,7 @@ impl Scene for ScriptScene {
                             shared.mode = Mode::Hold;
                             shared.hold_since = Some(Instant::now());
                         }
-                        OnError::Safe => shared.mode = Mode::Safe,
+                        OnError::Fallback => shared.mode = Mode::Fallback,
                     }
                 }
             }
@@ -1287,12 +1362,9 @@ impl Scene for ScriptScene {
             // the built-in fallback does. Close what the script left open
             // first.
             runtime.finish_frame(false);
-            let drew = runtime.ensure_frame().and_then(|()| {
-                runtime
-                    .fallback
-                    .borrow_mut()
-                    .draw(&runtime, output, image, background, windows, cursor)
-            });
+            let drew = runtime
+                .ensure_frame()
+                .and_then(|()| runtime.draw_fallback(output, image, background, windows, cursor));
             match drew {
                 Ok(()) => {
                     runtime.shared.borrow_mut().fallback_frames += 1;
@@ -1331,7 +1403,7 @@ impl Scene for ScriptScene {
         accepts_input: &dyn Fn(SurfaceId, f64, f64) -> bool,
     ) -> Option<Hit> {
         let runtime = &self.runtime;
-        if runtime.mode() != Mode::Safe && runtime.defines("hit_test") {
+        if runtime.mode() != Mode::Fallback && runtime.defines("hit_test") {
             // The script gets a function to ask what only the protocol side
             // knows: whether a surface takes input at a point.
             let started = Instant::now();
@@ -1368,7 +1440,7 @@ impl Scene for ScriptScene {
                 Err(error) => runtime.record_event_failure("hit_test", &error),
             }
         }
-        flat_hit_test(|w| self.position(w), point, windows, accepts_input)
+        fallback::hit_test(|w| self.position(w), point, windows, accepts_input)
     }
 
     fn locate(
@@ -1378,7 +1450,7 @@ impl Scene for ScriptScene {
         windows: &[WindowView],
     ) -> Option<(f64, f64)> {
         let runtime = &self.runtime;
-        if runtime.mode() != Mode::Safe && runtime.defines("locate") {
+        if runtime.mode() != Mode::Fallback && runtime.defines("locate") {
             match runtime.host.call_function::<_, (Option<f64>, Option<f64>)>(
                 "locate",
                 (surface.0, point.0, point.1),
@@ -1395,7 +1467,7 @@ impl Scene for ScriptScene {
                 Err(error) => runtime.record_event_failure("locate", &error),
             }
         }
-        flat_locate(|w| self.position(w), point, surface, windows)
+        fallback::locate(|w| self.position(w), point, surface, windows)
     }
 
     fn capture(&mut self, target: TargetId) -> Result<Capture, SceneError> {
@@ -1473,8 +1545,8 @@ impl Scene for ScriptScene {
                     runtime.set_mode(Mode::Running);
                     Ok(json!({}))
                 }
-                Some("safe") => {
-                    runtime.set_mode(Mode::Safe);
+                Some("fallback") => {
+                    runtime.set_mode(Mode::Fallback);
                     Ok(json!({}))
                 }
                 other => Err(format!("unknown mode {other:?}")),
