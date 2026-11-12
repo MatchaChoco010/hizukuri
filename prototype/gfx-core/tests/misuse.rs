@@ -6,6 +6,22 @@
 
 use proto_gfx_core::*;
 
+mod common;
+
+through_both_entries!(
+    destroyed_and_foreign_handles,
+    objects_destroyed_while_in_use,
+    recorded_draws_keep_their_resources_and_slots,
+    out_of_range_and_mismatched_sizes,
+    targets_that_do_not_fit,
+    draws_without_what_the_pipeline_needs,
+    bad_shaders_and_pipelines,
+    calls_in_the_wrong_state,
+    compute_misuse,
+    resource_exhaustion,
+    device_loss_and_recreation,
+);
+
 fn no_validation_errors() {
     assert_eq!(
         validation_error_count(),
@@ -56,12 +72,15 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 "#;
 
 fn wgsl(gpu: &mut Gpu, stage: ShaderStage, source: &str, entry: &str) -> Result<Handle> {
-    gpu.create_shader(&ShaderSource {
-        stage,
-        language: ShaderLanguage::Wgsl,
-        source,
-        entry,
-    })
+    common::create_shader(
+        gpu,
+        &ShaderSource {
+            stage,
+            language: ShaderLanguage::Wgsl,
+            source,
+            entry,
+        },
+    )
 }
 
 fn f32_bytes(values: &[f32]) -> Vec<u8> {
@@ -251,7 +270,6 @@ fn gpu() -> Gpu {
     Gpu::new(GpuConfig::for_tests()).unwrap()
 }
 
-#[test]
 fn destroyed_and_foreign_handles() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -325,7 +343,6 @@ fn destroyed_and_foreign_handles() {
     no_validation_errors();
 }
 
-#[test]
 fn objects_destroyed_while_in_use() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -391,7 +408,6 @@ fn objects_destroyed_while_in_use() {
 
 /// What a recorded draw refers to must survive until the GPU has executed it,
 /// and its heap slot must not be handed out again before that.
-#[test]
 fn recorded_draws_keep_their_resources_and_slots() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -432,7 +448,6 @@ fn recorded_draws_keep_their_resources_and_slots() {
     no_validation_errors();
 }
 
-#[test]
 fn out_of_range_and_mismatched_sizes() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -554,7 +569,6 @@ fn out_of_range_and_mismatched_sizes() {
     no_validation_errors();
 }
 
-#[test]
 fn targets_that_do_not_fit() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -637,7 +651,6 @@ fn targets_that_do_not_fit() {
     no_validation_errors();
 }
 
-#[test]
 fn draws_without_what_the_pipeline_needs() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -717,7 +730,6 @@ fn draws_without_what_the_pipeline_needs() {
     no_validation_errors();
 }
 
-#[test]
 fn bad_shaders_and_pipelines() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -778,12 +790,15 @@ fn bad_shaders_and_pipelines() {
     );
     // GLSL goes through the same path.
     expect!(
-        gpu.create_shader(&ShaderSource {
-            stage: ShaderStage::Fragment,
-            language: ShaderLanguage::Glsl,
-            source: "#version 450\nvoid main() { this is not glsl }",
-            entry: "main",
-        }),
+        common::create_shader(
+            &mut gpu,
+            &ShaderSource {
+                stage: ShaderStage::Fragment,
+                language: ShaderLanguage::Glsl,
+                source: "#version 450\nvoid main() { this is not glsl }",
+                entry: "main",
+            }
+        ),
         ShaderCompile
     );
 
@@ -794,15 +809,24 @@ fn bad_shaders_and_pipelines() {
         " + 1.0".repeat(4000)
     );
     wgsl(&mut gpu, ShaderStage::Fragment, &chain, "main").unwrap();
-    // Sources beyond the size limit are refused before the compiler sees them.
-    let huge = format!(
-        "@fragment fn main() -> @location(0) vec4<f32> {{ return vec4(1.0{}); }}",
-        " + 1.0".repeat(MAX_SHADER_SOURCE_BYTES / 6)
-    );
-    let e = expect!(
-        wgsl(&mut gpu, ShaderStage::Fragment, &huge, "main"),
-        ShaderCompile
-    );
+    // Inputs beyond the size limit are refused before the compiler or the
+    // SPIR-V checks see them.
+    let e = match common::entry() {
+        common::Entry::Source => {
+            let huge = format!(
+                "@fragment fn main() -> @location(0) vec4<f32> {{ return vec4(1.0{}); }}",
+                " + 1.0".repeat(MAX_SHADER_SOURCE_BYTES / 6)
+            );
+            expect!(
+                wgsl(&mut gpu, ShaderStage::Fragment, &huge, "main"),
+                ShaderCompile
+            )
+        }
+        common::Entry::Spirv => expect!(
+            gpu.create_shader_spirv(ShaderStage::Fragment, "main", &vec![0; MAX_SPIRV_BYTES + 4]),
+            ShaderCompile
+        ),
+    };
     assert!(e.message.contains("limit"), "{e}");
 
     // Stages swapped.
@@ -967,7 +991,6 @@ fn bad_shaders_and_pipelines() {
     no_validation_errors();
 }
 
-#[test]
 fn calls_in_the_wrong_state() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -1012,7 +1035,6 @@ fn calls_in_the_wrong_state() {
     no_validation_errors();
 }
 
-#[test]
 fn compute_misuse() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);
@@ -1092,7 +1114,6 @@ fn compute_misuse() {
 
 /// Creating objects without end: every limit turns into an error, nothing is
 /// leaked, and the device keeps working.
-#[test]
 fn resource_exhaustion() {
     let mut config = GpuConfig::for_tests();
     config.limits = Limits {
@@ -1269,7 +1290,6 @@ fn resource_exhaustion() {
 }
 
 /// A lost device: every call reports it, and a new device starts clean.
-#[test]
 fn device_loss_and_recreation() {
     let mut gpu = gpu();
     let f = Fixture::new(&mut gpu);

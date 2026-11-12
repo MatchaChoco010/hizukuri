@@ -262,7 +262,9 @@ impl DeviceCtx {
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
                 .synchronization2(true)
                 .dynamic_rendering(true)
-                .robust_image_access(true);
+                .robust_image_access(true)
+                // `discard` in SPIR-V 1.6 is OpDemoteToHelperInvocation.
+                .shader_demote_to_helper_invocation(true);
             let mut features14 = vk::PhysicalDeviceVulkan14Features::default().maintenance5(true);
             let device = match instance.create_device(
                 picked.physical_device,
@@ -526,6 +528,7 @@ unsafe fn pick_physical_device(
                 || features13.synchronization2 == 0
                 || features13.dynamic_rendering == 0
                 || features13.robust_image_access == 0
+                || features13.shader_demote_to_helper_invocation == 0
                 || features14.maintenance5 == 0
                 || robust_buffer_access == 0
                 || dynamic_indexing == 0

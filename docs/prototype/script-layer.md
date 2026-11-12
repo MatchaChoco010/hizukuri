@@ -175,8 +175,23 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   GPU が終えるまで残す。
 - すべての image は、操作の外では、決まった layout にある（サンプリングできるものは `SHADER_READ_ONLY_OPTIMAL`、
   それ以外は `GENERAL`）。遷移は、コアが出す。
-- shader は、`ShaderCompiler` という trait を通してコンパイルする。いまの実装は naga で、WGSL と GLSL を受け取る。
-  配列と buffer の読み出しは範囲に切り詰め、device の `robustBufferAccess` と `robustImageAccess` を有効にする。
+- shader を作る入口は 2 つある。どちらも、shader の中の配列の添字を範囲に切り詰め、device の `robustBufferAccess` と
+  `robustImageAccess` を有効にする。reflection（binding の種類と、entry point が使うか、push の大きさ、入出力の location、
+  どの texture をどの sampler で読むか、compute の workgroup の大きさ）は、コアが作る。
+  - `Gpu::create_shader`: 源を受け取り、`ShaderCompiler` という trait を通してコンパイルする。いまの実装は naga で、
+    WGSL と GLSL を受け取る。スクリプトの `gfx.create_shader` は、この入口を使う。
+  - `Gpu::create_shader_spirv`: SPIR-V の module（`.spv` のバイト列）を受け取る。module は、信頼しない入力として扱い、
+    device に渡す前に、次の順に通す（`prototype/gfx-core/src/spirv_input.rs`）。スクリプトからは、まだ使えない。
+    1. SPIRV-Tools の validator（Vulkan 1.4 の環境）で検証する。
+    2. SPIRV-Tools の optimizer で、`strip-nonsemantic-info`（device の拡張が要る reflection の decoration を除く）と
+       `graphics-robust-access`（配列、ベクトル、行列への添字を、範囲に切り詰める）を走らせる。
+       device address、variable pointer、長さの無い descriptor の配列を使う module は、ここで拒む。
+    3. もう一度、validator で検証する。
+    4. 自前の検査（`spirv_check.rs`）で、使ってよい capability と extension、Logical の addressing model、
+       SPIR-V 1.4 以上、entry point が 1 つであること、resource が `set 0 / binding N`（N < 16）であること、
+       添字が定数か、範囲に切り詰められていることを確かめ、reflection を作る。2 の pass が、切り詰めずに成功を返す形
+       （untyped pointer など）があるので、2 の結果を信頼しない。
+  - SPIRV-Tools は C++ で、同じプロセスの中で動く。その中で落ちると、プロセスごと落ちる。
 - 記録の呼び出しは、引数と状態を検査してから記録する。エラーを返した呼び出しは、何も記録していない。
 - depth と stencil、MSAA、mip、テクスチャの配列と 3D、cube、indirect draw、query は、未実装である。
 
