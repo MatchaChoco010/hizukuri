@@ -430,7 +430,7 @@ fn animation_cost() {
     use std::fmt::Write as _;
     use std::time::Instant;
 
-    let device = Device::new(common::Gpu::Lavapipe, common::Drawing::Script);
+    let device = Device::new(common::Gpu::Lavapipe);
     let mut table = String::from(
         "| windows | `animate.frame` alone (µs) | per window (µs) | whole `frame` (µs) |\n| ---: | ---: | ---: | ---: |\n",
     );
@@ -442,8 +442,6 @@ fn animation_cost() {
             &[
                 "--output-size",
                 "1920x1080",
-                "--wm",
-                "script",
                 "--clock",
                 "manual",
                 "--script",
