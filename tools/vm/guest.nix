@@ -49,23 +49,6 @@ let
     chmod 0755 $out/bin/*
   '';
 
-  # For a VM with a GPU (HIZUKURI_VM_GPU=venus): where the QEMU of this file
-  # finds the Mesa it was built with. On NixOS that is /run/opengl-driver;
-  # anywhere else EGL, GBM and the Vulkan loader have to be told. The Vulkan
-  # manifests are the ones for real GPUs.
-  hostGraphics = pkgs.runCommand "hizukuri-vm-host-graphics" { } ''
-    dir=$out/share/hizukuri-vm
-    mkdir -p $dir/icd.d
-    ln -s ${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json $dir/egl-vendor.json
-    ln -s ${pkgs.mesa}/lib/gbm $dir/gbm
-    for manifest in ${pkgs.mesa}/share/vulkan/icd.d/*.json; do
-      case "$(basename $manifest)" in
-        lvp_icd.* | virtio_icd.* | gfxstream_vk_icd.* | dzn_icd.*) ;;
-        *) ln -s $manifest $dir/icd.d/ ;;
-      esac
-    done
-  '';
-
   # The input method the IME checks use: fcitx5 with the Anthy engine for
   # Japanese, nothing else (no Qt, no GTK modules, no configuration tool).
   # The wrapper tells fcitx5 where the engine's addon is, as nixpkgs'
@@ -191,14 +174,11 @@ let
       services.seatd.enable = true;
       systemd.services.seatd.wantedBy = lib.mkForce [ ];
 
-      # Mesa: lavapipe, and the virtio-gpu drivers (Venus, virgl) for a VM
-      # that is started with a GPU. The Vulkan loader is pointed at those two
-      # drivers only; the drivers for real GPUs have nothing to find here.
+      # Mesa. The guest renders on the CPU: the Vulkan loader is pointed at
+      # lavapipe only; the drivers for real GPUs have nothing to find here.
       hardware.graphics.enable = true;
-      environment.sessionVariables.VK_DRIVER_FILES = lib.concatStringsSep ":" [
-        "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json"
-        "/run/opengl-driver/share/vulkan/icd.d/virtio_icd.x86_64.json"
-      ];
+      environment.sessionVariables.VK_DRIVER_FILES =
+        "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json";
 
       # Japanese text: what the input method composes, in the terminal and
       # in the candidate window.
@@ -257,7 +237,6 @@ in
       openssh
       rsync
       python3
-      hostGraphics
     ];
   };
 

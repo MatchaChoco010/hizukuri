@@ -18,10 +18,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::target::Targets;
 use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Dispatcher, EventLoop, Interest, LoopHandle, Mode, PostAction};
-use proto_render::Targets;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource as SmithayAxisSource, ButtonState, Event, InputEvent,
     KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
@@ -50,7 +50,7 @@ const TIMEOUT_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 
 /// A session with its DRM device open, before the backend is started.
 ///
-/// Opening is separate from starting so that the renderer can be created in
+/// Opening is separate from starting so that what draws can be created in
 /// between, for the GPU this device belongs to.
 pub struct OpenedSession {
     session: LibSeatSession,
@@ -165,8 +165,8 @@ impl OpenedSession {
         self,
         handle: &LoopHandle<'static, D>,
         config: KmsConfig,
-        renderer: Targets<'_>,
-        renderer_is_kms_device: bool,
+        targets: Targets<'_>,
+        draws_on_kms_device: bool,
     ) -> Result<RealKmsBackend, BackendError> {
         let OpenedSession {
             session,
@@ -185,13 +185,8 @@ impl OpenedSession {
             .try_clone_to_owned()
             .map_err(|e| BackendError::Device(format!("duplicating the DRM descriptor: {e}")))?;
 
-        let backend = KmsBackend::new(
-            device,
-            MonotonicClock,
-            config,
-            renderer,
-            renderer_is_kms_device,
-        )?;
+        let backend =
+            KmsBackend::new(device, MonotonicClock, config, targets, draws_on_kms_device)?;
 
         // libinput, opening its devices through the session.
         let mut libinput = Libinput::new_with_udev(LibinputSessionInterface::from(session.clone()));

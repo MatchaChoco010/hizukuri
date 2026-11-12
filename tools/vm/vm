@@ -32,14 +32,6 @@ VM_MEMORY="${HIZUKURI_VM_MEMORY:-6G}"
 VM_XRES="${HIZUKURI_VM_XRES:-1280}"
 VM_YRES="${HIZUKURI_VM_YRES:-800}"
 VM_OUTPUTS="${HIZUKURI_VM_OUTPUTS:-2}"
-# none:  virtio-gpu as a display only. The guest renders on the CPU
-#        (lavapipe). Works on any machine.
-# venus: virtio-gpu with Venus. The guest gets a Vulkan device that renders
-#        on the GPU of the machine that runs QEMU.
-VM_GPU="${HIZUKURI_VM_GPU:-none}"
-VM_HOSTMEM="${HIZUKURI_VM_HOSTMEM:-4G}"
-# Optional, with venus: the render node QEMU's display uses.
-VM_RENDERNODE="${HIZUKURI_VM_RENDERNODE:-}"
 # Optional: another qemu-system-x86_64 than the one guest.nix provides.
 VM_QEMU="${HIZUKURI_VM_QEMU:-}"
 SSH_PORT_FIRST=22044
@@ -58,7 +50,6 @@ QMP_SOCK="$RUN_DIR/qmp.sock"
 VNC_SOCK="$RUN_DIR/vnc.sock"
 PORT_FILE="$RUN_DIR/ssh.port"
 MODE_FILE="$RUN_DIR/display.mode"
-GPU_FILE="$RUN_DIR/gpu.mode"
 LOCK_FILE="$VM_DIR/.lock"
 
 die() {
@@ -125,16 +116,10 @@ Operation
 Environment (read by `start`)
   HIZUKURI_VM_DIR        Where keys, logs and sockets go
                          (default $XDG_STATE_HOME/hizukuri-vm)
-  HIZUKURI_VM_GPU        none (default): the guest renders on the CPU.
-                         venus: the guest gets a Vulkan device backed by the
-                         GPU of this machine.
   HIZUKURI_VM_OUTPUTS    Number of outputs of the virtual GPU (default 2)
   HIZUKURI_VM_CPU        CPU model (default host; host,-hypervisor makes the
                          guest look like real hardware to software that asks)
   HIZUKURI_VM_CPUS, HIZUKURI_VM_MEMORY, HIZUKURI_VM_XRES, HIZUKURI_VM_YRES
-  HIZUKURI_VM_HOSTMEM, HIZUKURI_VM_RENDERNODE
-                         With venus: memory for GPU resources, and the render
-                         node QEMU's display uses.
   HIZUKURI_VM_QEMU       Another qemu-system-x86_64 than the one of guest.nix
 EOF
 }
@@ -241,10 +226,6 @@ cmd_start() {
         esac
         shift
     done
-    case "$VM_GPU" in
-        none | venus) ;;
-        *) die "HIZUKURI_VM_GPU must be none or venus, not: $VM_GPU" ;;
-    esac
     mkdir -p "$VM_DIR"
 
     # Serialize concurrent starts.
@@ -252,13 +233,13 @@ cmd_start() {
     flock -n 9 || die "another vm command holds the lock"
 
     if pid="$(running_pid)"; then
-        info "already running (pid $pid, display $(cat "$MODE_FILE" 2>/dev/null || echo '?'), gpu $(cat "$GPU_FILE" 2>/dev/null || echo '?'))"
+        info "already running (pid $pid, display $(cat "$MODE_FILE" 2>/dev/null || echo '?'))"
         return 0
     fi
     [[ -r /dev/kvm && -w /dev/kvm ]] || die "KVM is not usable: /dev/kvm is missing or not writable for this user"
 
     cmd_build
-    rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE" "$GPU_FILE"
+    rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE"
     # The guest makes a new host key every time it boots.
     rm -f "$KNOWN_HOSTS"
 
@@ -267,31 +248,16 @@ cmd_start() {
     [[ "$store" == /nix/store ]] || die "the Nix store is at $store; the guest expects /nix/store"
 
     port="$(free_port)"
-    local -a vnc_args=() machine_args=()
-    if [[ "$VM_GPU" == "venus" ]]; then
-        # Venus keeps GPU resources in guest memory that QEMU and the
-        # renderer share (memfd).
-        video="virtio-vga-gl,id=video0,hostmem=$VM_HOSTMEM,blob=true,venus=true"
-        machine_args=(
-            -machine "q35,accel=kvm,memory-backend=mem0"
-            -object "memory-backend-memfd,id=mem0,size=$VM_MEMORY"
-        )
-    else
-        video="virtio-vga,id=video0"
-        machine_args=(-machine "q35,accel=kvm")
-    fi
-    video+=",xres=$VM_XRES,yres=$VM_YRES,max_outputs=$VM_OUTPUTS"
+    local -a vnc_args=()
+    # virtio-gpu as a display only: the guest renders on the CPU (lavapipe).
+    video="virtio-vga,id=video0,xres=$VM_XRES,yres=$VM_YRES,max_outputs=$VM_OUTPUTS"
 
     if [[ "$mode" == "gtk" ]]; then
         display="gtk,show-cursor=on"
-        [[ "$VM_GPU" == "venus" ]] && display+=",gl=on"
     else
         # The screen is read through a VNC server on a Unix socket; no TCP
-        # port is opened. With venus the guest scans out through GL, and
-        # egl-headless is what reads those frames back for VNC (QMP's
-        # `screendump` cannot).
+        # port is opened.
         display="none"
-        [[ "$VM_GPU" == "venus" ]] && display="egl-headless"
         vnc_args=(-vnc "unix:$VNC_SOCK")
         # One more VNC server per additional output: it is how that output's
         # screen is read, and how the output is connected (`vm output`). An
@@ -301,13 +267,10 @@ cmd_start() {
             vnc_args+=(-vnc "unix:$RUN_DIR/vnc-$head.sock,id=vnc$head,display=video0,head=$head")
         done
     fi
-    if [[ -n "$VM_RENDERNODE" && "$VM_GPU" == "venus" ]]; then
-        display+=",rendernode=$VM_RENDERNODE"
-    fi
 
     local -a args=(
         -name "$VM_NAME"
-        "${machine_args[@]}"
+        -machine "q35,accel=kvm"
         -cpu "$VM_CPU"
         -smp "$VM_CPUS"
         -m "$VM_MEMORY"
@@ -336,20 +299,7 @@ cmd_start() {
         -daemonize
     )
 
-    if [[ "$VM_GPU" == "venus" && -z "$VM_QEMU" ]]; then
-        # The QEMU of guest.nix renders with the Mesa of guest.nix. Outside
-        # NixOS nothing points it there.
-        local graphics="$TOOLS_LINK/share/hizukuri-vm" manifest drivers=""
-        for manifest in "$graphics"/icd.d/*.json; do
-            drivers+="${drivers:+:}$manifest"
-        done
-        export __EGL_VENDOR_LIBRARY_FILENAMES="$graphics/egl-vendor.json"
-        export GBM_BACKENDS_PATH="$graphics/gbm"
-        export VK_DRIVER_FILES="$drivers"
-        unset VK_ICD_FILENAMES VK_ADD_DRIVER_FILES
-    fi
-
-    info "starting ($mode, gpu $VM_GPU, ssh port $port)"
+    info "starting ($mode, ssh port $port)"
     # 9>&-: the daemonized qemu must not inherit (and keep) the start lock.
     if ! "${VM_QEMU:-qemu-system-x86_64}" "${args[@]}" 2>>"$LOG_DIR/qemu-stderr.log" 9>&-; then
         tail -n 20 "$LOG_DIR/qemu-stderr.log" >&2 || true
@@ -357,7 +307,6 @@ cmd_start() {
     fi
     echo "$port" >"$PORT_FILE"
     echo "$mode" >"$MODE_FILE"
-    echo "$VM_GPU" >"$GPU_FILE"
     pid="$(running_pid)" || die "qemu exited right after starting (see $LOG_DIR/qemu-stderr.log)"
     info "running (pid $pid)"
 }
@@ -387,7 +336,6 @@ cmd_status() {
         echo "state: running"
         echo "pid: $pid"
         echo "display: $(cat "$MODE_FILE" 2>/dev/null || echo '?')"
-        echo "gpu: $(cat "$GPU_FILE" 2>/dev/null || echo '?')"
         echo "ssh: $VM_USER@127.0.0.1 port $(cat "$PORT_FILE" 2>/dev/null || echo '?')"
         echo "qmp: $QMP_SOCK"
     else
@@ -404,7 +352,7 @@ cmd_stop() {
     [[ "${1:-}" == "--force" ]] && force=1
     if ! pid="$(running_pid)"; then
         info "not running"
-        rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE" "$GPU_FILE"
+        rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE"
         return 0
     fi
     if ((force == 0)); then
@@ -432,7 +380,7 @@ cmd_stop() {
             kill -KILL "$pid" || true
         fi
     fi
-    rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE" "$GPU_FILE"
+    rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE"
     info "stopped"
 }
 

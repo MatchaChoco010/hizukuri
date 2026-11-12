@@ -2,18 +2,18 @@
 //! hit testing and window management written in a script, on a headless
 //! backend, on each device listed in `HIZUKURI_TEST_DEVICES`.
 //!
-//! `tests/headless.rs` already runs every drawing scenario of the Rust
-//! renderer with the built-in script project as well. The scenarios here are
-//! about what only the script layer has.
+//! `tests/headless.rs` runs the drawing scenarios that any compositor has,
+//! with the script drawing. The scenarios here are about what only the
+//! script layer has.
 
 mod common;
 
 use std::os::fd::AsFd;
 
-use common::{DRAW_ONLY_SESSION, Device, Drawing, Session, options, script_project, window};
+use common::{DRAW_ONLY_SESSION, Device, Session, options, script_project, window};
 use proto_color::{AlphaMode, CompositeSpace, DecodeTransform, ImageDescription, Primaries};
 use proto_compositor::control::Request;
-use proto_render::{CompositeImage, EncodedImage};
+use proto_compositor::image::{CompositeImage, EncodedImage};
 use proto_test_client::{
     ClientEvent, ClientOptions, ConstraintRequest, ExternalDmabuf, InputMethodMode, Pattern,
     PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform, create_udmabuf,
@@ -26,8 +26,8 @@ const BLUE: [u8; 4] = [50, 80, 210, 255];
 const WHITE: [u8; 4] = [235, 235, 235, 255];
 const QUADRANTS: Pattern = Pattern::Quadrants([RED, GREEN, BLUE, WHITE]);
 
-script_tests!(
-    both_renderers_draw_the_same_pixels,
+device_tests!(
+    a_mixed_scene_matches_the_cpu_reference,
     the_working_space_is_the_scripts_choice,
     a_script_sees_what_the_core_knows_about_a_surface,
     real_dmabufs_become_textures_without_a_copy,
@@ -74,30 +74,6 @@ fn assert_rgb(image: &EncodedImage, x: u32, y: u32, expected: [u8; 4], tolerance
         worst <= tolerance,
         "{what}: pixel ({x}, {y}) is {actual:?}, expected {expected:?} within {tolerance}"
     );
-}
-
-/// The largest difference between two captures, in code values and in
-/// compositing values.
-fn difference(
-    a: &(EncodedImage, CompositeImage),
-    b: &(EncodedImage, CompositeImage),
-) -> (u32, f32) {
-    assert_eq!((a.0.width, a.0.height), (b.0.width, b.0.height));
-    let mut encoded = 0u32;
-    let mut composite = 0f32;
-    for y in 0..a.0.height {
-        for x in 0..a.0.width {
-            let (p, q) = (a.0.pixel(x, y), b.0.pixel(x, y));
-            for i in 0..4 {
-                encoded = encoded.max((p[i] as i32 - q[i] as i32).unsigned_abs());
-            }
-            let (p, q) = (a.1.pixel(x, y), b.1.pixel(x, y));
-            for i in 0..4 {
-                composite = composite.max((p[i] - q[i]).abs());
-            }
-        }
-    }
-    (encoded, composite)
 }
 
 /// A 2D affine transform, laid out like the script's: `(x, y)` goes to
@@ -219,9 +195,9 @@ fn assert_near(actual: (f64, f64), expected: (f64, f64), what: &str) {
 // Drawing
 // ---------------------------------------------------------------------------
 
-/// One scene with everything the Rust renderer can draw: an opaque window
-/// with a subsurface, a translucent window with its own image description
-/// and an opacity on top of it, and the cursor.
+/// One scene with an opaque window with a subsurface, a translucent window
+/// with its own image description and an opacity on top of it, and the
+/// cursor.
 fn draw_scene(name: &str, device: Device, args: &[&str]) -> (EncodedImage, CompositeImage) {
     let mut all = vec!["--output-size", "320x240", "--cursor", "on"];
     all.extend_from_slice(args);
@@ -267,22 +243,76 @@ fn draw_scene(name: &str, device: Device, args: &[&str]) -> (EncodedImage, Compo
 
     let capture = session.screenshot("scene");
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
     capture
 }
 
-/// The same scene through the Rust renderer and through the script: the
-/// pixels of the output and of the compositing buffer agree.
-///
-/// The two share no drawing code. The shaders are written separately (GLSL
-/// in `proto-render`, WGSL in `scripts/`), so agreement is up to
-/// rounding: the last bit of a half float, and what that becomes after the
-/// output's transfer function.
-fn both_renderers_draw_the_same_pixels(device: Device) {
-    let cases: [(&str, &[&str], u32, f64); 4] = [
-        ("sdr", &[], 1, 1.0),
+/// The scene of [`draw_scene`] against the CPU reference in `proto-color`,
+/// on four outputs: where the background, an opaque window, and a
+/// translucent window with its own image description and an opacity are
+/// seen, the compositing buffer and the encoded output hold what the
+/// reference computes.
+fn a_mixed_scene_matches_the_cpu_reference(device: Device) {
+    use proto_color::{EncodeTransform, blend_over, quantize_unorm};
+    const SPACE: CompositeSpace = CompositeSpace::BT2020_LINEAR;
+    let decode = |description: &ImageDescription, rgba: [u8; 4]| {
+        DecodeTransform::new(description, AlphaMode::PremultipliedElectrical, &SPACE)
+            .unwrap()
+            .apply(rgba.map(|v| v as f32 / 255.0))
+    };
+    let unmanaged = ImageDescription::SRGB_GAMMA22;
+    let background = decode(&unmanaged, [0x20, 0x20, 0x20, 0xff]);
+    let red = decode(&unmanaged, RED);
+    let white = decode(&unmanaged, WHITE);
+    // Premultiplied Display P3, drawn with opacity 0.7.
+    let glass = decode(&ImageDescription::DISPLAY_P3, [120, 60, 30, 128]).map(|v| v * 0.7);
+    // (what, logical point, expected compositing value)
+    let points = [
+        ("background", (5.0, 5.0), background),
+        ("opaque window", (30.0, 30.0), red),
         (
+            "glass over a window",
+            (130.0, 110.0),
+            blend_over(white, glass),
+        ),
+        (
+            "glass over the background",
+            (200.0, 150.0),
+            blend_over(background, glass),
+        ),
+    ];
+
+    /// One output setup.
+    struct Case {
+        label: &'static str,
+        args: &'static [&'static str],
+        output: ImageDescription,
+        bits: u32,
+        /// Allowed difference in code values. At 16 bit the half float
+        /// error of the compositing buffer is several code values; at 8 bit,
+        /// a pure power curve stretches the error near zero to up to 3.
+        tolerance: u32,
+        scale: f64,
+    }
+    let sixteen_bit = |label, description, output| Case {
+        label,
+        args: description,
+        output,
+        bits: 16,
+        tolerance: 64,
+        scale: 1.0,
+    };
+    let cases = [
+        Case {
+            label: "sdr",
+            args: &[],
+            output: unmanaged,
+            bits: 8,
+            tolerance: 3,
+            scale: 1.0,
+        },
+        sixteen_bit(
             "p3-16bit",
             &[
                 "--output-image-description",
@@ -290,11 +320,9 @@ fn both_renderers_draw_the_same_pixels(device: Device) {
                 "--output-format",
                 "rgba16",
             ],
-            // 16 bit code values: 1/65535 each.
-            64,
-            1.0,
+            ImageDescription::DISPLAY_P3,
         ),
-        (
+        sixteen_bit(
             "pq",
             &[
                 "--output-image-description",
@@ -302,37 +330,61 @@ fn both_renderers_draw_the_same_pixels(device: Device) {
                 "--output-format",
                 "rgba16",
             ],
-            64,
-            1.0,
+            ImageDescription::BT2020_PQ,
         ),
-        ("scale-1.5", &["--output-scale", "1.5"], 1, 1.5),
+        Case {
+            label: "scale-1.5",
+            args: &["--output-scale", "1.5"],
+            output: unmanaged,
+            bits: 8,
+            tolerance: 3,
+            scale: 1.5,
+        },
     ];
-    for (label, args, tolerance, scale) in cases {
-        let rust = draw_scene(
-            &format!("same-{label}-rust"),
-            device.with(Drawing::Rust),
-            args,
-        );
-        let script = draw_scene(&format!("same-{label}-script"), device, args);
-        let (encoded, composite) = difference(&rust, &script);
-        println!(
-            "{} {label}: largest difference {encoded} code value(s), {composite:.2e} in the compositing buffer",
-            device.name()
-        );
-        // The scene is not trivially empty: the window, the glass over it
-        // and the background differ.
-        let at = |x: f64, y: f64| script.0.pixel((x * scale) as u32, (y * scale) as u32);
-        assert_ne!(at(30.0, 30.0), at(5.0, 5.0));
-        assert_ne!(at(130.0, 110.0), at(30.0, 30.0));
-        // The cursor is in it, over the glass.
-        assert_ne!(at(152.0, 104.0), at(140.0, 104.0));
-        assert!(
-            encoded <= tolerance,
-            "{label}: the outputs differ by {encoded} code values"
-        );
-        assert!(
-            composite <= 2e-3,
-            "{label}: the compositing buffers differ by {composite}"
+    for Case {
+        label,
+        args,
+        output,
+        bits,
+        tolerance,
+        scale,
+    } in cases
+    {
+        let (encoded, composite) = draw_scene(&format!("reference-{label}"), device, args);
+        let at = |(x, y): (f64, f64)| ((x * scale) as u32, (y * scale) as u32);
+        for (what, point, expected) in points {
+            let (x, y) = at(point);
+            let actual = composite.pixel(x, y);
+            for i in 0..4 {
+                let allowed = 2e-5 + expected[i].abs() * 1e-3;
+                assert!(
+                    (actual[i] - expected[i]).abs() <= allowed,
+                    "{label}, {what}: compositing value {actual:?}, expected {expected:?}"
+                );
+            }
+            let code = EncodeTransform::new(&SPACE, &output)
+                .unwrap()
+                .apply([expected[0], expected[1], expected[2]])
+                .map(|v| quantize_unorm(v, bits));
+            let pixel = encoded.pixel(x, y);
+            let worst = (0..3)
+                .map(|i| (pixel[i] as i64 - code[i] as i64).unsigned_abs())
+                .max()
+                .unwrap();
+            assert!(
+                worst <= tolerance as u64,
+                "{label}, {what}: pixel {pixel:?}, expected {code:?} within {tolerance}"
+            );
+        }
+        // The cursor is in the scene, over the glass.
+        let pixel = |point| {
+            let (x, y) = at(point);
+            encoded.pixel(x, y)
+        };
+        assert_ne!(
+            pixel((152.0, 104.0)),
+            pixel((140.0, 104.0)),
+            "{label}: cursor"
         );
     }
 }
@@ -399,7 +451,7 @@ fn the_working_space_is_the_scripts_choice(device: Device) {
     assert!(error.contains("unknown primaries"), "{error}");
     // The calls refused above were recorded.
     session.assert_script_running(1);
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -544,7 +596,7 @@ fn a_script_sees_what_the_core_knows_about_a_surface(device: Device) {
     assert_ne!(encoded.pixel(100, 80), encoded.pixel(5, 5));
     // The calls refused above were recorded.
     session.assert_script_running(2);
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -665,7 +717,7 @@ fn real_dmabufs_become_textures_without_a_copy(device: Device) {
     assert!(mapped["fallbacks"].as_u64().unwrap() >= 1, "{mapped}");
 
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -783,7 +835,7 @@ fn imported_dmabufs_are_shown_upright(device: Device) {
         assert_rgb(&inverted, x, y, color, 1, "bottom-up quadrant");
     }
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -839,7 +891,7 @@ fn frames_are_drawn_only_when_something_changed(device: Device) {
         "more than one frame for one commit"
     );
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -904,7 +956,7 @@ fn the_icon_of_a_drag_is_drawn_by_the_script(device: Device) {
     let (encoded, _) = session.screenshot("dropped");
     assert_rgb(&encoded, 198, 138, GREEN, 1, "the target, without the icon");
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -990,7 +1042,7 @@ fn the_popup_of_an_input_method_is_drawn_by_the_cursor(device: Device) {
         "no popup once the field is disabled",
     );
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1138,7 +1190,7 @@ fn a_transformed_window_is_drawn_and_hit_where_the_script_put_it(device: Device)
     );
     assert_rgb(&encoded, x + 25, y + 15, RED, 1, "untransformed");
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1208,7 +1260,7 @@ fn a_press_holds_the_pointer_on_a_transformed_window(device: Device) {
     assert_eq!(session.state()["focus"]["window"], id);
     let _ = other_id;
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1321,7 +1373,7 @@ fn popups_follow_the_transform_of_their_window(device: Device) {
         .expect("the popup is dismissed by a press outside");
     button(&mut session, false);
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1401,7 +1453,7 @@ fn the_script_decides_what_a_point_hits(device: Device) {
     let (encoded, _) = session.screenshot("ghost");
     assert_rgb(&encoded, 80, 60, RED, 1, "the ghost is drawn");
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1474,13 +1526,9 @@ fn wait_tiles(
 /// The built-in tiling script: windows side by side, sharing the output;
 /// the logo key with H and L moves the focus, with shift swaps neighbours,
 /// with Q closes. Positions, sizes (through configure events), focus and
-/// stacking are the script's; `proto-layout` is not in the session.
+/// stacking are the script's.
 fn windows_are_tiled_by_the_script(device: Device) {
-    let mut session = Session::start(
-        "tile",
-        device,
-        &["--output-size", "640x400", "--wm", "script"],
-    );
+    let mut session = Session::start_builtin("tile", device, &["--output-size", "640x400"]);
     assert_eq!(session.state()["window_manager"], "script");
     // 640 wide with a gap of 8: one window is 624 wide, two are 308, three
     // are 202. All are 384 high.
@@ -1643,7 +1691,7 @@ fn windows_are_tiled_by_the_script(device: Device) {
     assert_eq!(state["focus"]["window"], idb);
     assert_eq!(session.script_state()["failures"], 0);
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1728,8 +1776,6 @@ fn a_window_manager_script_hears_what_happens(device: Device) {
         &[
             "--output-size",
             "400x300",
-            "--wm",
-            "script",
             "--script",
             project.to_str().unwrap(),
         ],
@@ -1852,7 +1898,7 @@ fn a_window_manager_script_hears_what_happens(device: Device) {
     assert_eq!(session.state()["focus"]["window"], id1);
     // The calls refused above were recorded.
     session.assert_script_running(2);
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -2068,7 +2114,7 @@ fn a_script_that_fails_to_draw_leaves_a_usable_session(device: Device) {
         state["script"]["gpu"]["images"].as_u64().unwrap() <= 8,
         "{state:#}"
     );
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -2164,7 +2210,7 @@ fn holding_the_last_frame_while_the_script_fails(device: Device) {
     );
     let back = session.screenshot_png("once-back");
     assert_rgb(&back, 90, 60, BLUE, 1, "after one failure");
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -2181,8 +2227,6 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
         &[
             "--output-size",
             "640x400",
-            "--wm",
-            "script",
             "--script",
             project.to_str().unwrap(),
             // Long next to what a handler takes, also on a slow machine:
@@ -2317,7 +2361,7 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
         &mut [&mut a, &mut b, &mut c],
         &[("a", [8, 8], [308, 384]), ("b", [324, 8], [308, 384])],
     );
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -2336,8 +2380,6 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
         &[
             "--output-size",
             "640x400",
-            "--wm",
-            "script",
             "--script",
             project.to_str().unwrap(),
         ],
@@ -2521,7 +2563,7 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
     });
     assert_eq!(session.script("which", json!([])), "other");
     assert_eq!(session.script_state()["project"], other.to_str().unwrap());
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -2551,8 +2593,6 @@ fn a_module_that_does_not_compile_is_not_taken(device: Device) {
         &[
             "--output-size",
             "640x400",
-            "--wm",
-            "script",
             "--script",
             project.to_str().unwrap(),
         ],
@@ -2632,7 +2672,7 @@ fn a_module_that_does_not_compile_is_not_taken(device: Device) {
     assert_eq!(session.script_state()["mode"], "running");
     let encoded = session.screenshot_png("module-fixed");
     assert_fallback_marker(&encoded, false, "after the fix");
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -2686,8 +2726,6 @@ fn the_script_decides_when_the_pointer_is_held(device: Device) {
         &[
             "--output-size",
             "400x300",
-            "--wm",
-            "script",
             "--script",
             project.to_str().unwrap(),
         ],

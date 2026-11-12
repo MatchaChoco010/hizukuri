@@ -8,8 +8,6 @@ publish.workspace = true
 
 [dependencies]
 proto-color.workspace = true
-proto-render.workspace = true
-proto-layout.workspace = true
 proto-wl.workspace = true
 proto-backend.workspace = true
 proto-gfx-core.workspace = true
@@ -23,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["fs", "event"] }
+png = "0.18"
 
 [dev-dependencies]
 proto-test-client.workspace = true

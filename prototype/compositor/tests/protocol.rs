@@ -2,7 +2,7 @@
 //!
 //! The compositor core and the test clients run in one thread, connected by
 //! socket pairs. The test steps both by hand, so the order of events is
-//! fixed and no test waits on a clock. There is no renderer: these tests
+//! fixed and no test waits on a clock. Nothing draws: these tests
 //! check what clients are told and what the compositor believes, not
 //! pixels. The headless backend's frame clock is ticked explicitly.
 
@@ -208,7 +208,7 @@ fn window_is_configured_mapped_and_described() {
     assert_eq!(state["focus"]["window"], window);
     assert_eq!(state["focus"]["keyboard_surface"], w["surface"]);
     assert_eq!(state["backend"], "headless");
-    assert_eq!(state["renderer"], Value::Null);
+    assert_eq!(state["gpu"], Value::Null);
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
         "luminance:x(80/80) | primaries:bt2020->srgb | clip[0,1] | inverse-eotf:gamma22"

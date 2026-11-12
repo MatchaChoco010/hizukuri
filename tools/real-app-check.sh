@@ -108,7 +108,7 @@ ctl state > "$OUT/state-after.json"
 python3 - "$OUT/state-after.json" <<'PY'
 import json, sys
 state = json.load(open(sys.argv[1]))
-print("renderer:", state["renderer"]["device"])
+print("gpu:", state["gpu"]["device"])
 print("focus:", state["focus"])
 for window in state["windows"]:
     print("window", window["id"], repr(window["title"]), "position", window["position"], "size", window["size"])

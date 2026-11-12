@@ -24,14 +24,14 @@ What is on screen is read back through the VM's VNC socket and compared as
 numbers.
 
 The compositor draws with the script. Unless an item is about the script's
-window management (`--wm script` with the built-in project), it runs the
-draw-only project: the built-in renderer, and the core's fallback places
+window management (the built-in project, which tiles the windows), it runs
+the draw-only project: the built-in drawing, and the core's fallback places
 the windows, so that windows stay where the items put them.
 
-The part `script` runs the script layer (the script renderer and the script
-window manager, on lavapipe) with real applications: tiling, faults in every
-hook, editing and reloading a script, VT switching, the watchdog, a pixel
-comparison with the Rust renderer, frame times, and the `hzk script` launcher.
+The part `script` runs the script layer (the script's drawing and window
+management, on lavapipe) with real applications: tiling, faults in every
+hook, editing and reloading a script, VT switching, the watchdog, frame
+times, and the `hzk script` launcher.
 
 The part `vkms` runs the compositor and its self test on the virtual KMS
 driver over SSH alone, without a VT. `safety` covers the watchdog; `outputs`
@@ -49,9 +49,9 @@ failed is kept under the output directory (default
     <path>/client.log, foot.log      the clients' output
     <path>/script-*.log              the clients of the script layer item
     <path>/selftest*/                the reports of `proto-compositor kms-selftest`
-    script/screen-*.png              the script layer: real applications tiled, the scene
-                                     drawn by both renderers, four busy windows at 1920x1080
-    script/frame-time-apps-1080p.json  frame times of the Rust and the script renderer
+    script/screen-*.png              the script layer: real applications tiled, four busy
+                                     windows at 1920x1080
+    script/frame-time-apps-1080p.json  frame times, with the fallback's placement and tiled
     ime/screen-candidates.png        the candidate window of fcitx5 by foot's cursor
     ime/fcitx5.log, fcitx5-requests.txt  fcitx5's log with WAYLAND_DEBUG, and the
                                      requests it made in the order of first use
@@ -98,7 +98,7 @@ PATHS = {
         "args": ["--vulkan-device", "cpu", "--kms-scanout", "cpu"],
         "selftest": ["--vulkan-device", "cpu", "--scanout", "cpu"],
         "scanout": "cpu-copy",
-        "renderer": lambda r: r.get("kind") == "cpu"
+        "gpu": lambda r: r.get("kind") == "cpu"
         or "llvmpipe" in r.get("device", "").lower(),
     },
 }
@@ -107,16 +107,13 @@ PATHS = {
 DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs", "ime"]
 
 
-def drawing(args):
-    """The compositor's arguments with what draws and what places windows:
-    the draw-only project unless the arguments choose a project or the
-    window manager, and the Rust layout with the Rust renderer."""
+def drawing(args, builtin=False):
+    """The compositor's arguments with the project it runs: the draw-only
+    project, unless the arguments name one or `builtin` asks for the
+    built-in project (which tiles the windows)."""
     args = list(args)
-    if "--wm" not in args:
-        if "--renderer" in args and args[args.index("--renderer") + 1] == "rust":
-            args += ["--wm", "rust"]
-        elif "--script" not in args:
-            args += ["--script", DRAW_ONLY]
+    if not builtin and "--script" not in args:
+        args += ["--script", DRAW_ONLY]
     return args
 
 
@@ -323,11 +320,11 @@ class Run:
                 return int(line.split(":")[1])
         return None
 
-    def start(self, *extra):
+    def start(self, *extra, builtin=False):
         vm(
             "tty-run", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms",
             "--socket", SOCKET, "--background", BACKGROUND_ARG, "--cursor", "on",
-            *drawing([*self.spec["args"], *extra]),
+            *drawing([*self.spec["args"], *extra], builtin),
         )
         try:
             wait_for("the control socket to answer", lambda: self.unit_active()
@@ -375,14 +372,14 @@ class Run:
             raise Failed("the session is not active")
         return f"DRM/KMS session on tty{self.active_vt()}, control socket {self.control}"
 
-    def check_renderer(self):
-        renderer = self.state()["renderer"]
-        if not renderer:
-            raise Failed("the compositor runs without a renderer")
-        description = f"{renderer['device']} ({renderer['driver']})"
-        if not self.spec["renderer"](renderer):
-            raise Failed(f"the renderer is {description}, not the one this path is about")
-        errors = renderer.get("validation_errors")
+    def check_gpu(self):
+        gpu = self.state()["gpu"]
+        if not gpu:
+            raise Failed("the compositor runs without drawing")
+        description = f"{gpu['device']} ({gpu['driver']})"
+        if not self.spec["gpu"](gpu):
+            raise Failed(f"the script draws on {description}, not the device this part is about")
+        errors = gpu.get("validation_errors")
         return description + (f", validation errors: {errors}" if errors is not None else "")
 
     def check_scanout_path(self):
@@ -904,11 +901,11 @@ class Run:
 
     def check_script_layer(self):
         """Drawing and window management by the script layer, on a real KMS
-        session: the script renderer on lavapipe with the CPU copy path, the
+        session: the script's drawing on lavapipe with the CPU copy path, the
         tiling script, input to a window the script turned, and recovery
         from a script that fails. `prototype/compositor/tests/script.rs` checks
         the same things on a headless backend."""
-        self.start("--renderer", "script", "--wm", "script", "--exit-after", "240")
+        self.start("--exit-after", "240", builtin=True)
         screen = tuple(int(v) for v in vm("screen-size").strip().split("x"))
         notes = []
         state = self.state()
@@ -916,8 +913,8 @@ class Run:
         if script.get("mode") != "running" or state.get("window_manager") != "script":
             raise Failed(f"the script is not in charge: {script}, "
                          f"window manager {state.get('window_manager')!r}")
-        if state["renderer"].get("kind") != "cpu":
-            raise Failed(f"the script draws on {state['renderer']}, not on lavapipe")
+        if state["gpu"].get("kind") != "cpu":
+            raise Failed(f"the script draws on {state['gpu']}, not on lavapipe")
 
         def script_call(function, *args):
             return self.ctl("script-call", function, *[json.dumps(a) for a in args])
@@ -1190,7 +1187,7 @@ class Run:
     def run(self):
         self.stop()
         if self.item("start", self.check_start):
-            self.item("renderer", self.check_renderer)
+            self.item("gpu", self.check_gpu)
             self.item("scanout-path", self.check_scanout_path)
             if self.item("mode", self.check_mode):
                 self.item("background", self.check_background)
@@ -1383,9 +1380,9 @@ class Part:
     def unit_active(self):
         return "ActiveState=active" in vm("tty-status", check=False)
 
-    def start(self, *args):
+    def start(self, *args, builtin=False):
         vm("tty-run", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms", "--socket", SOCKET,
-           "--background", BACKGROUND_ARG, "--vulkan-device", "cpu", *drawing(args))
+           "--background", BACKGROUND_ARG, "--vulkan-device", "cpu", *drawing(args, builtin))
         try:
             wait_for("the control socket to answer", lambda: self.unit_active()
                      and self.ctl("ping").get("ok"), seconds=20)
@@ -1506,8 +1503,7 @@ def check_outputs(out, uid, results):
 
     def script_layer_hotplug():
         """The same unplug and plug with the script drawing and tiling."""
-        part.start("--renderer", "script", "--wm", "script", "--kms-output", "Virtual-2",
-                   "--exit-after", "90")
+        part.start("--kms-output", "Virtual-2", "--exit-after", "90", builtin=True)
         try:
             colors = {"hzk-hot-a": (200, 100, 50), "hzk-hot-b": (60, 160, 220)}
             for title, color in colors.items():
@@ -1552,7 +1548,7 @@ def check_outputs(out, uid, results):
             if script["mode"] != "running" or script["failures"]:
                 raise Failed(f"the script did not get through the hotplug: {script['mode']}, "
                              f"{script['last_failures']}")
-            return (f"script renderer and script tiling on Virtual-2: unplugged, the script "
+            return (f"script drawing and tiling on Virtual-2: unplugged, the script "
                     f"stays loaded with no failure; plugged back, the two tiles are drawn "
                     f"again ({values})")
         finally:
@@ -1643,38 +1639,15 @@ end
 """
 
 
-def read_png(path):
-    """Rows of RGB bytes of a PNG written by tools/vm/vnc.py (8 bit RGB, no
-    filtering)."""
-    import struct
-    import zlib
-    with open(path, "rb") as file:
-        data = file.read()
-    position, compressed, width, height = 8, b"", 0, 0
-    while position < len(data):
-        length, = struct.unpack(">I", data[position:position + 4])
-        kind = data[position + 4:position + 8]
-        body = data[position + 8:position + 8 + length]
-        position += 12 + length
-        if kind == b"IHDR":
-            width, height = struct.unpack(">II", body[:8])
-        elif kind == b"IDAT":
-            compressed += body
-    raw = zlib.decompress(compressed)
-    stride = width * 3 + 1
-    return width, height, [raw[y * stride + 1:(y + 1) * stride] for y in range(height)]
-
-
 def check_script(out, uid, results):
     """The script layer (drawing and window management written in the
     scripting language) as a DRM/KMS session, beyond what
     `lavapipe/script-layer` covers: real applications, faults in every hook,
     editing the script while it runs, VT switching, the watchdog, and a
-    comparison with the Rust renderer. Runs on lavapipe."""
+    frame times. Runs on lavapipe."""
     part = Part("script", out, uid, results)
     project = f"{GUEST_DIR}/script-project"
     env = f"env -u DISPLAY XDG_RUNTIME_DIR={part.runtime} WAYLAND_DISPLAY={SOCKET}"
-    script_args = ["--renderer", "script", "--wm", "script"]
     apps = ["foot", "weston-terminal", "alacritty"]
     app_pids = []
 
@@ -1713,7 +1686,7 @@ def check_script(out, uid, results):
         return windows if good and len(windows) == len(apps) else None
 
     def real_apps():
-        part.start(*script_args, "--script", project, "--exit-after", "240")
+        part.start("--script", project, "--exit-after", "240")
         current = state()
         if current["window_manager"] != "script" or current["script"]["mode"] != "running":
             raise Failed(f"the script is not in charge: {current['script']}")
@@ -1891,7 +1864,7 @@ def check_script(out, uid, results):
         return "Ctrl+Alt+Backspace ended the session"
 
     def watchdog():
-        part.start(*script_args, "--watchdog", "5", "--exit-after", "60")
+        part.start("--watchdog", "5", "--exit-after", "60", builtin=True)
         pid = main_pid()
         if pid is None:
             raise Failed("the unit has no main process")
@@ -1904,71 +1877,15 @@ def check_script(out, uid, results):
               f"{part.runtime}/{SOCKET}.lock")
         return f"main thread frozen: aborted after {int(answer[1]) / 1000:.1f} s (--watchdog 5)"
 
-    def scene():
-        """A fixed scene, with windows placed by the control socket: the same
-        for both renderers."""
-        client = f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} --duration 90"
-        placed = []
-        for title, size, color, x, y in (("a", "300x200", "C86432FF", 100, 100),
-                                         ("b", "300x200", "3CA0DCFF", 250, 200),
-                                         ("c", "200x300", "50C83C80", 500, 80)):
-            spawn(f"{client} --title scene-{title} --size {size} --color {color}",
-                  f"scene-{title}.log")
-            window = wait_for(f"window {title}", lambda: next(
-                (w for w in state()["windows"] if w["title"] == f"scene-{title}"
-                 and w["mapped"]), None), seconds=10)
-            part.ctl("move-window", str(window["id"]), str(x), str(y))
-            placed.append(window["id"])
-        part.ctl("set-window-opacity", str(placed[1]), "0.6")
-        before = {w["id"] for w in state()["windows"]}
-        spawn(f"{env} foot --window-size-pixels=500x300 sh -c "
-              f"'echo the same scene, drawn twice; sleep 80'", "scene-foot.log")
-        window = wait_for("foot", lambda: next(
-            (w for w in state()["windows"] if w["id"] not in before and w["mapped"]
-             and w["surfaces"] and w["surfaces"][0]["has_contents"]), None), seconds=15)
-        part.ctl("move-window", str(window["id"]), "600", "300")
-        vm("move", "900", "650")
-        time.sleep(0.2)
-        vm("move", "700", "150")
-        time.sleep(1.5)
-
-    def same_pixels():
-        shots = {}
-        for renderer in ("rust", "script"):
-            part.stop()
-            part.start("--renderer", renderer, "--exit-after", "120")
-            scene()
-            shots[renderer] = os.path.join(part.out, f"screen-same-scene-{renderer}.png")
-            vm("screendump", shots[renderer])
-            if renderer == "script" and script_state()["mode"] != "running":
-                raise Failed(f"the script renderer is not running: {script_state()}")
-        part.stop()
-        width, height, rust = read_png(shots["rust"])
-        _, _, script = read_png(shots["script"])
-        different, largest = 0, 0
-        for row_a, row_b in zip(rust, script):
-            if row_a != row_b:
-                for index in range(0, len(row_a), 3):
-                    if row_a[index:index + 3] != row_b[index:index + 3]:
-                        different += 1
-                        largest = max(largest, *(abs(row_a[index + k] - row_b[index + k])
-                                                 for k in range(3)))
-        if different:
-            raise Failed(f"{different} of {width * height} pixels differ between the Rust "
-                         f"renderer and the script renderer (largest difference {largest})")
-        return (f"opaque, translucent and real windows and the cursor: all {width * height} "
-                f"pixels of the VM's screen are equal for the Rust and the script renderer")
-
     def apps_1080p():
         busy = "sh -c 'while :; do seq 1 3000; done'"
         commands = [f"foot {busy}", f"foot {busy}", "weston-terminal",
                     f"env VK_DRIVER_FILES={LAVAPIPE_ICD} vkcube --wsi wayland"]
         measured = {}
-        for label, args in (("rust", ["--renderer", "rust"]),
-                            ("script", ["--renderer", "script"]),
-                            ("script-tiling", script_args)):
+        for label in ("script", "script-tiling"):
             part.stop()
-            part.start(*args, "--kms-mode", "1920x1080", "--exit-after", "120")
+            part.start("--kms-mode", "1920x1080", "--exit-after", "120",
+                       builtin=label == "script-tiling")
             for index, command in enumerate(commands):
                 spawn(f"{env} {command}", f"busy-{index}.log")
             windows = wait_for("four busy windows", lambda: (lambda ws: ws if len(ws) == 4
@@ -2082,7 +1999,6 @@ def check_script(out, uid, results):
         part.stop()
         part.item("watchdog", watchdog)
     part.stop()
-    part.item("same-pixels-as-rust", same_pixels)
     part.item("apps-1080p", apps_1080p)
     part.stop()
     part.item("hzk-script-launcher", launcher)
@@ -2191,7 +2107,7 @@ def check_ime(out, uid, results):
               f"cat > {work}/config/fcitx5/config <<'EOF'\n{FCITX5_CONFIG}EOF\n"
               f"cat > {work}/reader.sh <<'EOF'\n{IME_READER}EOF\n"
               f"chmod +x {work}/reader.sh")
-        part.start("--renderer", "script", "--wm", "script", "--exit-after", "300")
+        part.start("--exit-after", "300", builtin=True)
         fcitx5["pid"] = spawn(
             f"{env} XDG_CONFIG_HOME={work}/config WAYLAND_DEBUG=1 dbus-run-session -- "
             f"fcitx5 --verbose '*=3'", "ime-fcitx5.log")

@@ -21,18 +21,18 @@ use calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use proto_backend::headless::{HeadlessBackend, HeadlessConfig, HeadlessOutputConfig};
 use proto_backend::{Backend, BackendError, BackendEvent, BackendHost, OutputId, OutputInfo};
+use proto_backend::{OutputFormat, TargetId, Targets};
 use proto_color::ImageDescription;
 use proto_compositor::compositor::{Compositor, CompositorOptions};
 use proto_compositor::control::{self, Request};
 use proto_compositor::fallback;
 use proto_compositor::safety::{self, MachineFacts, Watchdog, virtualization};
-use proto_compositor::scene::{FlatScene, NullScene, Scene};
+use proto_compositor::scene::{NullScene, Scene};
 use proto_compositor::script::{
     OnError, Project, ScriptOptions, ScriptRuntime, ScriptScene, ScriptWm,
 };
 use proto_compositor::wm::WindowManager;
 use proto_gfx_core::GpuConfig;
-use proto_render::{DeviceSelector, OutputFormat, Renderer, RendererOptions, TargetId, Targets};
 use proto_wl::{DmabufConfig, DmabufFormat, ServerConfig, SocketConfig};
 
 mod kms;
@@ -54,25 +54,6 @@ enum CursorMode {
     Auto,
     On,
     Off,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum RendererKind {
-    /// Drawing assembled by a script through the checked GPU API.
-    Script,
-    /// The renderer written in Rust (`proto-render`), to compare the
-    /// script's drawing against. Needs `--wm rust`.
-    Rust,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum WmKind {
-    /// Placement, focus and key bindings decided by the script. Where the
-    /// project decides nothing, the fallback does.
-    Script,
-    /// The floating layout written in Rust (`proto-layout`), to compare
-    /// against.
-    Rust,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -175,10 +156,10 @@ struct RunArgs {
     #[arg(long)]
     vulkan_validation: bool,
 
-    /// Run without anything that draws and without a script: no GPU is
-    /// used. Everything works except drawing; the fallback places windows.
-    #[arg(long, conflicts_with_all = ["renderer", "wm", "script"])]
-    no_renderer: bool,
+    /// Run without drawing and without a script: no GPU is used.
+    /// Everything works except drawing; the fallback places windows.
+    #[arg(long, conflicts_with = "script")]
+    no_drawing: bool,
 
     /// Whether clients may send dmabufs (`zwp_linux_dmabuf_v1`).
     #[arg(long, value_enum, default_value_t = DmabufMode::Off)]
@@ -188,18 +169,8 @@ struct RunArgs {
     #[arg(long)]
     exit_after: Option<f64>,
 
-    /// What draws: a script, or the Rust renderer.
-    #[arg(long, value_enum, default_value = "script")]
-    renderer: RendererKind,
-
-    /// What places windows and decides the focus: the script (with the
-    /// fallback where the project decides nothing), or the Rust layout.
-    /// `script` needs `--renderer script`.
-    #[arg(long, value_enum, default_value = "script")]
-    wm: WmKind,
-
-    /// Directory of the script project (with `main.luau`). Without it the
-    /// built-in project is used.
+    /// Directory of the script project (with `main.luau`), which draws and
+    /// manages the windows. Without it the built-in project is used.
     #[arg(long)]
     script: Option<PathBuf>,
 
@@ -220,8 +191,8 @@ struct RunArgs {
     #[arg(long, default_value_t = 1000)]
     script_retry_ms: u64,
 
-    /// Wait for the GPU after every frame the script draws, like the Rust
-    /// renderer does. For comparing frame times.
+    /// Wait for the GPU after every frame the script draws. For measuring
+    /// frame times.
     #[arg(long)]
     script_wait_gpu: bool,
 
@@ -231,10 +202,9 @@ struct RunArgs {
 
 /// Whatever draws, before it is wrapped into a scene.
 pub enum Drawing {
-    /// Nothing draws (`--no-renderer`).
+    /// Nothing draws (`--no-drawing`).
     Nothing,
     Script(Box<ScriptScene>, Rc<ScriptRuntime>),
-    Rust(Box<Renderer>),
 }
 
 impl Drawing {
@@ -242,7 +212,6 @@ impl Drawing {
         match self {
             Drawing::Nothing => None,
             Drawing::Script(scene, _) => scene.targets(),
-            Drawing::Rust(renderer) => proto_render::targets_of(Some(renderer)),
         }
     }
 }
@@ -327,14 +296,14 @@ impl Backend for AnyBackend {
     fn request_frame(&mut self, output: OutputId) {
         self.inner_mut().request_frame(output);
     }
-    fn present(&mut self, renderer: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
-        self.inner_mut().present(renderer, output)
+    fn present(&mut self, targets: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
+        self.inner_mut().present(targets, output)
     }
-    fn reconfigure(&mut self, renderer: Targets<'_>) -> Result<(), BackendError> {
-        self.inner_mut().reconfigure(renderer)
+    fn reconfigure(&mut self, targets: Targets<'_>) -> Result<(), BackendError> {
+        self.inner_mut().reconfigure(targets)
     }
-    fn shutdown(&mut self, renderer: Targets<'_>) {
-        self.inner_mut().shutdown(renderer);
+    fn shutdown(&mut self, targets: Targets<'_>) {
+        self.inner_mut().shutdown(targets);
     }
     fn describe(&self) -> serde_json::Value {
         self.inner().describe()
@@ -438,11 +407,11 @@ enum DmabufMode {
     Off,
     /// Offered for 8 bit RGB in linear memory. Each buffer is mapped and
     /// copied, like a `wl_shm` buffer. Buffers the driver does not let a
-    /// process map (most GPU memory) show nothing. This is what the
-    /// verification renderer can do; it is for testing the protocol.
+    /// process map (most GPU memory) show nothing. It is for testing the
+    /// protocol.
     Cpu,
-    /// Offered for what the script renderer's device can import. Buffers
-    /// become textures without a copy. Needs `--renderer script`.
+    /// Offered for what the device the script draws with can import.
+    /// Buffers become textures without a copy.
     Gpu,
 }
 
@@ -481,16 +450,6 @@ fn desktop_session_present() -> bool {
     ["WAYLAND_DISPLAY", "DISPLAY"]
         .iter()
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
-}
-
-fn create_renderer(
-    selector: DeviceSelector,
-    validation: bool,
-) -> Result<Renderer, proto_render::RenderError> {
-    Renderer::new(&RendererOptions {
-        device: selector,
-        validation,
-    })
 }
 
 /// The GPU of the script layer, or of the KMS self test, for a
@@ -557,16 +516,6 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
     let mut event_loop: EventLoop<App> =
         EventLoop::try_new().map_err(|e| format!("failed to create the event loop: {e}"))?;
     let handle = event_loop.handle();
-    let user_selector: DeviceSelector = args
-        .vulkan_device
-        .parse()
-        .expect("device selectors always parse");
-
-    if !args.no_renderer && args.wm == WmKind::Script && args.renderer != RendererKind::Script {
-        return Err(
-            "--wm script needs --renderer script; give --wm rust with --renderer rust".into(),
-        );
-    }
 
     // What draws is created by the backend's setup, because on KMS it should
     // run on the GPU that drives the display, which is only known once the
@@ -581,39 +530,24 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
             ScriptErrorPolicy::Fallback => OnError::Fallback,
         },
         call_budget: std::time::Duration::from_millis(args.script_budget_ms.max(1)),
-        manage_windows: args.wm == WmKind::Script,
+        manage_windows: true,
         memory_limit: Some(args.script_memory_mb.max(1) << 20),
         retry_after: std::time::Duration::from_millis(args.script_retry_ms),
         wait_for_gpu: args.script_wait_gpu,
         ..ScriptOptions::default()
     };
     let mut make_drawing = |display_gpu: Option<(u32, u32)>| -> Result<(Drawing, bool), String> {
-        if args.no_renderer {
+        if args.no_drawing {
             return Ok((Drawing::Nothing, false));
         }
-        match args.renderer {
-            RendererKind::Rust => {
-                let (renderer, on_display_gpu) = kms::pick_renderer(
-                    &kms::RendererRequest {
-                        selector: user_selector.clone(),
-                        validation: args.vulkan_validation,
-                    },
-                    display_gpu,
-                )?;
-                Ok((Drawing::Rust(Box::new(renderer)), on_display_gpu))
-            }
-            RendererKind::Script => {
-                let mut options = script_options.clone();
-                options.gpu = gpu_config(&args.vulkan_device, args.vulkan_validation, display_gpu);
-                let runtime = ScriptRuntime::new(options)?;
-                let on_display_gpu =
-                    display_gpu.is_some() && runtime.device().drm_primary == display_gpu;
-                Ok((
-                    Drawing::Script(Box::new(ScriptScene::new(Rc::clone(&runtime))), runtime),
-                    on_display_gpu,
-                ))
-            }
-        }
+        let mut options = script_options.clone();
+        options.gpu = gpu_config(&args.vulkan_device, args.vulkan_validation, display_gpu);
+        let runtime = ScriptRuntime::new(options)?;
+        let on_display_gpu = display_gpu.is_some() && runtime.device().drm_primary == display_gpu;
+        Ok((
+            Drawing::Script(Box::new(ScriptScene::new(Rc::clone(&runtime))), runtime),
+            on_display_gpu,
+        ))
     };
 
     let composite_space = HeadlessConfig::default().composite_space;
@@ -670,15 +604,11 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         BackendKind::Auto => unreachable!("resolved by choose_backend"),
     };
 
-    // Clients are pointed at the renderer's device, when it has one.
+    // Clients are pointed at the device the script draws with.
     let dmabuf = match args.dmabuf {
         DmabufMode::Off => None,
         DmabufMode::Cpu => Some(DmabufConfig::cpu_readable(match &drawing {
             Drawing::Nothing => None,
-            Drawing::Rust(renderer) => {
-                let info = renderer.device_info();
-                info.drm_render.or(info.drm_primary)
-            }
             Drawing::Script(_, runtime) => {
                 let device = runtime.device();
                 device.drm_render.or(device.drm_primary)
@@ -702,8 +632,8 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
                     main_device: device.drm_render.or(device.drm_primary),
                 })
             }
-            Drawing::Rust(_) | Drawing::Nothing => {
-                return Err("--dmabuf gpu needs --renderer script".to_string());
+            Drawing::Nothing => {
+                return Err("--dmabuf gpu cannot be combined with --no-drawing".to_string());
             }
         },
     };
@@ -718,17 +648,7 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
             Box::new(NullScene::new()),
             Box::new(fallback::Windows::new()),
         ),
-        Drawing::Rust(renderer) => (
-            Box::new(FlatScene::new(Some(*renderer))),
-            Box::new(proto_layout::Layout::new()),
-        ),
-        Drawing::Script(scene, runtime) => {
-            let wm: Box<dyn WindowManager> = match args.wm {
-                WmKind::Script => Box::new(ScriptWm::new(runtime)?),
-                WmKind::Rust => Box::new(proto_layout::Layout::new()),
-            };
-            (scene, wm)
-        }
+        Drawing::Script(scene, runtime) => (scene, Box::new(ScriptWm::new(runtime)?)),
     };
     let mut compositor = Compositor::with_window_manager(options, backend, scene, wm)
         .map_err(|e| format!("failed to start the compositor: {e}"))?;

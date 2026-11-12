@@ -184,7 +184,7 @@ fn the_scanout_path_on_this_gpu_is_dmabuf_with_shared_modifiers() {
     let pipeline = plan_output(&snapshot, &request("DP-1")).unwrap();
     // The modifiers a Vulkan driver for this GPU reports for rendering to
     // B8G8R8A8.
-    let renderer = vec![
+    let targets = vec![
         0x0200_0000_0008_2305,
         0x0200_0000_0004_2305,
         0x0200_0000_0008_2405,
@@ -197,8 +197,8 @@ fn the_scanout_path_on_this_gpu_is_dmabuf_with_shared_modifiers() {
     ];
     let path = choose_scanout_path(&ScanoutFacts {
         preference: ScanoutPreference::Auto,
-        renderer_modifiers: renderer,
-        renderer_is_kms_device: true,
+        export_modifiers: targets,
+        draws_on_kms_device: true,
         plane_modifiers: pipeline.plane_modifiers.clone(),
         dumb_buffers: snapshot.caps.dumb_buffer,
     })
@@ -324,15 +324,15 @@ const VKMS: [&str; 2] = [
 
 fn facts(
     preference: ScanoutPreference,
-    renderer_modifiers: &[u64],
-    renderer_is_kms_device: bool,
+    export_modifiers: &[u64],
+    draws_on_kms_device: bool,
     snapshot: &DeviceSnapshot,
 ) -> ScanoutFacts {
     let pipeline = plan_output(snapshot, &OutputRequest::default()).unwrap();
     ScanoutFacts {
         preference,
-        renderer_modifiers: renderer_modifiers.to_vec(),
-        renderer_is_kms_device,
+        export_modifiers: export_modifiers.to_vec(),
+        draws_on_kms_device,
         plane_modifiers: pipeline.plane_modifiers,
         dumb_buffers: snapshot.caps.dumb_buffer,
     }
@@ -373,9 +373,9 @@ fn virtio_gpu_is_planned_as_the_vm_measurements_say() {
         // No tearing, no VRR to speak of, as expected of a virtual device.
         assert!(!snapshot.caps.atomic_async_page_flip);
 
-        // Venus (the renderer is the KMS device, can export linear):
+        // Drawing on the KMS device that can export linear memory:
         // dma-buf, restricted to linear because the driver takes no
-        // modifiers. A renderer that could only export tiled images must
+        // modifiers. Drawing that could only export tiled images must
         // not be used for scanout: virtio-gpu would show garbage.
         const TILED: u64 = 0x0200_0000_0000_0001;
         assert_eq!(

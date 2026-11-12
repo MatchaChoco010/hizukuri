@@ -32,11 +32,15 @@
 
 pub mod headless;
 pub mod kms;
+pub mod target;
 
 use std::time::Duration;
 
 use proto_color::ImageDescription;
-use proto_render::{OutputFormat, RenderError, TargetId, Targets};
+pub use target::{
+    DRM_FORMAT_XRGB8888, DmabufPlane, OutputFormat, TargetDesc, TargetError, TargetId,
+    TargetProvider, Targets,
+};
 
 /// Identifies an output of a backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -45,8 +49,8 @@ pub struct OutputId(pub u64);
 /// Errors of a backend.
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
-    #[error("renderer error: {0}")]
-    Render(#[from] RenderError),
+    #[error("render target error: {0}")]
+    Target(#[from] TargetError),
     #[error("unknown output")]
     UnknownOutput,
     #[error("invalid output configuration: {0}")]
@@ -188,7 +192,7 @@ pub enum BackendEvent {
     /// The session has its devices again. Everything needs a redraw.
     SessionResumed,
     /// The set of displays may have changed. The core answers by calling
-    /// [`Backend::reconfigure`] with the renderer, which the backend needs
+    /// [`Backend::reconfigure`] with the targets provider, which the backend needs
     /// to create or destroy render targets.
     Reconfigure,
     /// The user asked the compositor to stop with the emergency key
@@ -222,7 +226,7 @@ pub trait Backend {
     /// The render target for the next frame of an output. Ask again for
     /// every frame: a backend that flips between buffers hands out a
     /// different one each time. `None` when the backend runs without a
-    /// renderer, the output is unknown, or the session is paused.
+    /// target provider, the output is unknown, or the session is paused.
     fn render_target(&mut self, output: OutputId) -> Option<TargetId>;
 
     /// Asks for a [`BackendEvent::Frame`] as soon as the output can take a
@@ -231,19 +235,19 @@ pub trait Backend {
 
     /// Shows the frame last rendered into the output's render target.
     /// [`BackendEvent::Presented`] follows when it reached the output.
-    fn present(&mut self, renderer: Targets<'_>, output: OutputId) -> Result<(), BackendError>;
+    fn present(&mut self, targets: Targets<'_>, output: OutputId) -> Result<(), BackendError>;
 
     /// Brings the outputs in line with the displays that are there now,
     /// creating and destroying render targets as needed. Called by the core
     /// in answer to [`BackendEvent::Reconfigure`]. Resulting changes are
     /// reported as `OutputAdded` / `OutputRemoved` events.
-    fn reconfigure(&mut self, _renderer: Targets<'_>) -> Result<(), BackendError> {
+    fn reconfigure(&mut self, _targets: Targets<'_>) -> Result<(), BackendError> {
         Ok(())
     }
 
     /// Releases the outputs for a clean exit: turns them off where that is
     /// the backend's job and frees their render targets.
-    fn shutdown(&mut self, _renderer: Targets<'_>) {}
+    fn shutdown(&mut self, _targets: Targets<'_>) {}
 
     /// Describes the backend's own state for state dumps and diagnostics.
     fn describe(&self) -> serde_json::Value {

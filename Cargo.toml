@@ -2,8 +2,6 @@
 resolver = "3"
 members = [
     "prototype/color",
-    "prototype/render",
-    "prototype/layout",
     "prototype/wl",
     "prototype/backend",
     "prototype/compositor",
@@ -20,15 +18,13 @@ publish = false
 
 [workspace.dependencies]
 proto-color = { path = "prototype/color" }
-proto-render = { path = "prototype/render" }
-proto-layout = { path = "prototype/layout" }
 proto-wl = { path = "prototype/wl" }
 proto-backend = { path = "prototype/backend" }
 proto-compositor = { path = "prototype/compositor" }
 proto-test-client = { path = "tools/test-client" }
 
-# Pinned to the published vulkan-rs revision. Only proto-render and
-# proto-gfx-core may depend on these directly.
+# Pinned to the published vulkan-rs revision. Only proto-gfx-core may
+# depend on these directly.
 vulkan = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0", features = ["wayland"] }
 vulkan-alloc = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0" }
 

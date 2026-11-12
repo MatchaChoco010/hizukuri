@@ -9,7 +9,7 @@
 //! - [`DecodeTransform`] / [`EncodeTransform`]: the two halves of the
 //!   compositing pipeline (content → compositing space → output).
 //!
-//! The renderer consumes the same [`DecodeTransform`] and
+//! The script layer's shaders get the same [`DecodeTransform`] and
 //! [`EncodeTransform`] values that the CPU reference implementation in this
 //! crate evaluates, so GPU results can be compared against CPU results
 //! numerically.

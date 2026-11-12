@@ -16,7 +16,6 @@ kms = ["dep:drm", "dep:drm-ffi", "dep:smithay"]
 
 [dependencies]
 proto-color.workspace = true
-proto-render.workspace = true
 calloop.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

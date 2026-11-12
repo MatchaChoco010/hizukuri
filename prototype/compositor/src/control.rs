@@ -101,7 +101,7 @@ pub enum Request {
         alpha_mode: Option<String>,
     },
     /// Calls a global function of the running script with JSON arguments
-    /// and returns what it returns. Only with `--renderer script`.
+    /// and returns what it returns. Not with `--no-drawing`.
     ScriptCall {
         function: String,
         #[serde(default)]

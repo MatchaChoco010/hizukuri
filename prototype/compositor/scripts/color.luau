@@ -1,4 +1,4 @@
--- Transfer functions for the shaders of the renderer.
+-- Transfer functions for the shaders of the built-in drawing.
 --
 -- The identifiers match what `hz.decode_transform` and `hz.encode_transform`
 -- return as `transfer_id`.

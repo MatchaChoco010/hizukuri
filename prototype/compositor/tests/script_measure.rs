@@ -1,6 +1,6 @@
-//! Measurements of the script layer: the time of a frame with the Rust
-//! renderer and with the script renderer, the cost of the script's hit
-//! test, and how long a reload takes.
+//! Measurements of the script layer: the time of a frame, with and without
+//! waiting for the GPU after each frame, the cost of the script's hit test,
+//! and how long a reload takes.
 //!
 //! Not a test: it asserts nothing about the numbers and is ignored by
 //! default. Run it on a quiet machine, optimized:
@@ -17,7 +17,7 @@ mod common;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use common::{Device, Drawing, Gpu, Session, options};
+use common::{Device, Gpu, Session, options};
 use proto_compositor::control::Request;
 use proto_test_client::TestClient;
 use serde_json::Value;
@@ -36,8 +36,7 @@ struct Row {
     first_frame_ms: f64,
 }
 
-/// `wait`: the script renderer waits for the GPU after every frame, which
-/// the Rust renderer always does.
+/// `wait`: the script's drawing waits for the GPU after every frame.
 fn measure(device: Device, windows: usize, wait: bool) -> Row {
     let started = Instant::now();
     let mut args = vec!["--output-size", "1920x1080"];
@@ -76,28 +75,24 @@ fn measure(device: Device, windows: usize, wait: bool) -> Row {
     let number = |v: &Value| v.as_f64().unwrap_or(f64::NAN);
 
     // Hit tests: the pointer crosses the windows.
-    let (mut hit_test_us, mut script_frame_us, mut reload_ms) = (None, None, None);
-    if device.is_script() {
-        for step in 0..400 {
-            session.send(Request::PointerMotion {
-                x: 10.0 + step as f64 * 4.7,
-                y: 10.0 + (step % 100) as f64 * 10.3,
-            });
-        }
-        let timing = session.script_state()["timing"].take();
-        hit_test_us = timing["hit_test"]["mean_us"].as_f64();
-        script_frame_us = timing["frame"]["mean_us"].as_f64();
-        let started = Instant::now();
-        session.send(Request::ScriptReload { path: None });
-        session.screenshot("reloaded");
-        reload_ms = Some(started.elapsed().as_secs_f64() * 1e3);
-        session.assert_script_healthy();
+    for step in 0..400 {
+        session.send(Request::PointerMotion {
+            x: 10.0 + step as f64 * 4.7,
+            y: 10.0 + (step % 100) as f64 * 10.3,
+        });
     }
+    let timing = session.script_state()["timing"].take();
+    let hit_test_us = timing["hit_test"]["mean_us"].as_f64();
+    let script_frame_us = timing["frame"]["mean_us"].as_f64();
+    let started = Instant::now();
+    session.send(Request::ScriptReload { path: None });
+    session.screenshot("reloaded");
+    let reload_ms = Some(started.elapsed().as_secs_f64() * 1e3);
+    session.assert_script_healthy();
     let row = Row {
-        device: match (device.is_script(), wait) {
-            (false, _) => format!("{}, Rust renderer", device.gpu_name()),
-            (true, true) => format!("{}, script", device.gpu_name()),
-            (true, false) => format!("{}, script, not waiting for the GPU", device.gpu_name()),
+        device: match wait {
+            true => format!("{}, waiting for the GPU", device.gpu_name()),
+            false => format!("{}, not waiting for the GPU", device.gpu_name()),
         },
         windows,
         draw_median: number(&times["draw"]["median"]),
@@ -120,12 +115,8 @@ fn frame_times() {
     let mut rows = Vec::new();
     for gpu in [Gpu::Hardware, Gpu::Lavapipe] {
         for windows in [1, 8, 30] {
-            for (drawing, wait) in [
-                (Drawing::Rust, false),
-                (Drawing::Script, true),
-                (Drawing::Script, false),
-            ] {
-                let device = Device::new(gpu, drawing);
+            for wait in [true, false] {
+                let device = Device::new(gpu);
                 if device.enabled() {
                     rows.push(measure(device, windows, wait));
                 }
