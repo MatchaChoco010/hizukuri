@@ -13,7 +13,7 @@
                         ┌──────────────── スクリプトの層（Luau。仮） ────────────────┐
                         │ main.luau → session.luau                                   │
                         │   render.luau  描画（2 pass）、当たり判定、変形             │
-                        │   color.luau   伝達関数の WGSL        affine.luau  2D の変換 │
+                        │   shaders/     surface.slang、encode.slang  affine.luau  2D の変換 │
                         │   tile.luau    タイルの配置とキー操作                        │
                         └───────▲───────────────────────────────▲────────────────────┘
                          gfx.*（GPU）                      hz.*（compositor のコア）
@@ -46,8 +46,9 @@
 ## スクリプトの置き場所
 
 - 組み込みのプロジェクトは、`prototype/compositor/scripts/` にあり、バイナリに埋め込まれる。入口は `main.luau` である。
-- `--script DIR` で、別のプロジェクト（`main.luau` のあるディレクトリ）を使う。プロジェクトに無いモジュールは、
-  組み込みのものを使う。`hz.include("session")` の 1 行で、組み込みの動作から始めて、変えたい関数だけを置き換えられる。
+  shader の源は、ほかのプロジェクトと同じく、その中の `shaders/` にある（[project の shader](#project-の-shader)）。
+- `--script DIR` で、別のプロジェクト（`main.luau` のあるディレクトリ）を使う。プロジェクトに無いモジュールと shader は、
+  組み込みのものを使う。プロジェクトの shader は、使う前に `proto-compositor build-shaders DIR` で SPIR-V にしておく。`hz.include("session")` の 1 行で、組み込みの動作から始めて、変えたい関数だけを置き換えられる。
 - `--script` を付けなければ、組み込みのプロジェクトが、描画と、ウィンドウをタイルに並べることを受け持つ。
 - `--no-drawing` では、スクリプトを使わない（何も描かず、ウィンドウは fallback が管理する）。`--script` と一緒には指定できない。
 - ウィンドウ管理の関数（`window_opened`、`window_changed`、`window_closed`、`focus_changed`、`outputs_changed`、
@@ -73,7 +74,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 
 組み込みのプロジェクト:
 
-- 描画（`render.luau`）: 作業用の色空間のバッファに合成してから、出力の符号の値に変換する、2 つの pass。
+- 描画（`render.luau`、`shaders/surface.slang`、`shaders/encode.slang`）: 作業用の色空間のバッファに合成してから、
+  出力の符号の値に変換する、2 つの pass。
   作業用の色空間は、名前（`bt2020`、`srgb`、`display-p3`、`adobe-rgb`）か、色度の表で選ぶ。
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。入力メソッドの候補ウィンドウも、同じである。
@@ -169,8 +171,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - 輝度の対応（reference white と黒をそろえる倍率）は、行列に入っている。伝達関数の定数（`transfer_param`）は、
   べき乗の指数、BT.1886 の黒の水準（`(最小 / 最大)^(1/2.4)`）、HLG の OOTF の system gamma である。
 - 伝達関数の番号は、0 が linear、1 が IEC 61966-2-1 の区分的な関数、2 がべき乗、3 が PQ、4 が BT.1886、5 が HLG である
-  （`color.luau`）。HLG は、伝達関数で場面の光に戻した後、`ootf_coefficients`（表面の原色での輝度の係数）で求めた輝度で、
-  OOTF をかける（`render.luau`）。HLG と BT.1886 を、出力へ符号化する shader は無い。
+  （コアの Slang の module `color`。`prototype/compositor/shaders/color.slang`）。HLG は、伝達関数で場面の光に戻した後、`ootf_coefficients`（表面の原色での輝度の係数）で求めた輝度で、
+  OOTF をかける（組み込みの project の `shaders/surface.slang`）。HLG と BT.1886 を、出力へ符号化する shader は無い。
 - 表面の記述が、クライアントが `wp_color_management_v1` で伝えたものか、制御口が上書きしたものかは、スクリプトには見せない。
   変換の数値は、どちらでも同じである。
 
@@ -217,9 +219,10 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   `robustImageAccess` を有効にする。reflection（binding の種類と、entry point が使うか、push の大きさ、入出力の location、
   どの texture をどの sampler で読むか、compute の workgroup の大きさ）は、コアが作る。
   - `Gpu::create_shader`: 源を受け取り、`ShaderCompiler` という trait を通してコンパイルする。いまの実装は naga で、
-    WGSL と GLSL を受け取る。スクリプトの `gfx.create_shader` は、この入口を使う。
+    WGSL と GLSL を受け取る。スクリプトの `gfx.create_shader` に `source` を渡すと、この入口を使う。
   - `Gpu::create_shader_spirv`: SPIR-V の module（`.spv` のバイト列）を受け取る。module は、信頼しない入力として扱い、
-    device に渡す前に、次の順に通す（`prototype/gfx-core/src/spirv_input.rs`）。スクリプトからは、まだ使えない。
+    device に渡す前に、次の順に通す（`prototype/gfx-core/src/spirv_input.rs`）。スクリプトの `gfx.create_shader` に
+    `shader` を渡すと、この入口を使う（[project の shader](#project-の-shader)）。
     1. SPIRV-Tools の validator（Vulkan 1.4 の環境）で検証する。
     2. SPIRV-Tools の optimizer で、`strip-nonsemantic-info`（device の拡張が要る reflection の decoration を除く）と
        `graphics-robust-access`（配列、ベクトル、行列への添字を、範囲に切り詰める）を走らせる。
@@ -230,9 +233,10 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
        添字が定数か、範囲に切り詰められていることを確かめ、reflection を作る。2 の pass が、切り詰めずに成功を返す形
        （untyped pointer など）があるので、2 の結果を信頼しない。
   - SPIRV-Tools は C++ で、同じプロセスの中で動く。その中で落ちると、プロセスごと落ちる。
-- コアの shader は、Slang で書く（`prototype/compositor/shaders/`）。`proto-compositor` の `build.rs` が、`slangc` で
+- コアの shader（fallback の `prototype/compositor/shaders/fallback.slang`）と、組み込みの project の shader
+  （`prototype/compositor/scripts/shaders/`）は、Slang で書く。`proto-compositor` の `build.rs` が、`slangc` で
   entry point ごとに SPIR-V にし、バイナリに埋め込む。実行時は、`Gpu::create_shader_spirv` で作る。Slang のコンパイラーが
-  無い機械でも、fallback は描ける。いまは、fallback の shader（`fallback.slang`）が、これに当たる。
+  無い機械でも、fallback と組み込みの project は描ける。
 - `slangc` は、`prototype/slangc`（`proto-slangc`）が、子のプロセスとして呼ぶ。源は、ファイルか、標準入力で渡し、
   SPIR-V は、標準出力で受け取る。子には、時間の上限（過ぎたら、PID で止める）と、アドレス空間の上限を付け、
   core dump を残させない。環境変数は、引き継がない。エラーは、`ファイル:行:列: error 番号: 文` の形で返す。
@@ -241,6 +245,52 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - depth と stencil、MSAA、mip、テクスチャの配列と 3D、cube、indirect draw、query は、未実装である。
 
 関数の一覧は、`prototype/gfx-lua/src/api.rs` にある。
+
+## project の shader
+
+project（`--script` で渡すディレクトリ）は、スクリプトと、shader の Slang の源を持つ。源は、project の中の `shaders/` に置く。
+**compositor は、shader をコンパイルしない。** 読むのは、道具が作った SPIR-V だけである。
+
+| | 決まり |
+| --- | --- |
+| 源 | `<project>/shaders/<名前>.slang`（下にディレクトリを作ってよい） |
+| 道具 | `proto-compositor build-shaders <project>`。`shaders/` の下の `.slang` を、entry point ごとに SPIR-V にする。`slangc` が要る（`HIZUKURI_SLANGC`、無ければ `PATH`） |
+| SPIR-V の場所 | `<project>/.build/shaders/<名前>.slang.<entry point>.spv`。`.build/` は git に入れない |
+| スクリプトから | `gfx.create_shader({ stage = "vertex", shader = "shaders/surface.slang", entry = "vs_main" })` |
+
+- 道具は、`.slang` の `[shader("vertex")]`、`[shader("fragment")]`、`[shader("compute")]` の付いた関数を、entry point として
+  1 つずつコンパイルする。エラーは、`ファイル:行:列: error 番号: 文` の形で標準エラーに出し、0 でない状態で終わる。
+  SPIR-V が、project のすべての `.slang`（と、コアの module）より新しければ、作り直さない。消えた源の SPIR-V は、消す。
+- スクリプトが shader を名前で指すと、compositor は、その時点の `.spv` を読む。スクリプトを読み直すと、読み直す。
+  `.spv` が無ければ、`gfx.create_shader` は、`build-shaders` を走らせるように書いた、エラーの値を返す。
+  compositor は、源を読まない。源と `.spv` が食い違わないようにするのは、道具と、道具を呼ぶ手順である
+  （テストの `Session`、`tools/vm/try-hizukuri`、`tools/vm-check.py` は、project を使う前に、道具を通す）。
+- project に無い shader（`shaders/` に、その名前の源が無いもの）は、組み込みの project のものを使う。モジュールと同じである。
+  組み込みの `render` を `hz.include` する project は、組み込みの描画の shader で描く。
+  組み込みの project の shader は、ディスクの上の `.spv` ではなく、バイナリに埋め込んだものを読む。
+- 道具は、コアの Slang の module を、`<project>/.build/modules/` に書き出し、`slangc` の探す場所（`-I`）に渡す。
+  作者の shader は、`import color;` で使える。
+
+コアの module:
+
+| module | 中身 |
+| --- | --- |
+| `color` | 伝達関数の番号（`TF_LINEAR`、`TF_SRGB`、`TF_POWER`、`TF_PQ`、`TF_BT1886`、`TF_HLG`）と、`tf_decode(e, tf, param)`、`tf_encode(l, tf, param)`。番号と `param` は、`hz.decode_transform` と `hz.encode_transform` が返すもの |
+
+shader を書くときの決まり:
+
+- 浮動小数点の計算は、いつも `-fp-mode precise` でコンパイルされる。
+- resource は、`[[vk::binding(N, 0)]]` で、set 0 の binding N（N < 16）に置く。`gfx.bind(N, slot)` が、それに当たる。
+  push data は、`[[vk::push_constant]] ConstantBuffer<T>` で書く。
+- vertex shader の頂点の番号は、`SV_VulkanVertexID` で受け取る。`SV_VertexID` は、`DrawParameters` の capability を要るので、
+  拒まれる。
+- `select(cond, a, b)` は、`cond ? a : b` である。WGSL の `select(b, a, cond)` と、引数の順が逆である。
+- 使える capability は、device が有効にしている範囲だけである: `Shader`、`Matrix`、`ImageQuery`、`DerivativeControl`、
+  `StorageImageExtendedFormats`、`Sampled1D`、`ShaderNonUniform`、`SampledImageArrayDynamicIndexing`、
+  `SampledImageArrayNonUniformIndexing`、`DemoteToHelperInvocation`。16 bit の浮動小数点、64 bit の整数、subgroup の操作、
+  device address、長さの無い texture の配列、Slang の `DescriptorHandle`（descriptor heap を直接引くもの）は、使えない。
+- 1D、3D、cube、配列の texture と、combined image sampler（`Sampler2D`）は、使えない。texture と `SamplerState` を分けて書く。
+  texture の配列は、長さを決めて書く（`Texture2D<float4> textures[8]`）。
 
 ## コアに残っているもの
 

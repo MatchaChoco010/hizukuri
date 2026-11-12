@@ -349,6 +349,16 @@ impl Session {
         if project == DefaultProject::DrawOnly && !extra_args.contains(&"--script") {
             command.arg("--script").arg(draw_only_project());
         }
+        // The compositor reads a project's shaders as SPIR-V and never
+        // compiles them: build them first, as the build tool would.
+        let script = extra_args
+            .iter()
+            .position(|a| *a == "--script")
+            .map(|i| PathBuf::from(extra_args[i + 1]))
+            .or((project == DefaultProject::DrawOnly).then(draw_only_project));
+        if let Some(dir) = script {
+            build_shaders(&dir);
+        }
         // The tests are not about how fast the machine is: a call into the
         // script only times out when it is stuck. A scenario about the
         // budget itself passes its own.
@@ -781,6 +791,18 @@ pub fn draw_only_project() -> PathBuf {
 /// includes `session` and is to run without the tiling has this module as
 /// its `session`.
 pub const DRAW_ONLY_SESSION: &str = include_str!("../../projects/draw-only/session.luau");
+
+/// Compiles the shaders of the project in `dir` (`proto-compositor
+/// build-shaders`); a project without `shaders/` is left as it is.
+pub fn build_shaders(dir: &Path) {
+    if let Err(errors) = proto_compositor::shaders::build_project(dir) {
+        panic!(
+            "the shaders of {} did not compile:\n{}",
+            dir.display(),
+            errors.join("\n")
+        );
+    }
+}
 
 /// Writes a script project (module name, source) for a test and returns its
 /// directory. Modules it does not have come from the built-in project.

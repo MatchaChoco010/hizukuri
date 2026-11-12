@@ -85,6 +85,46 @@ enum Command {
     /// Drive one output with a test pattern for a few seconds, measure the
     /// page flips, write a report and exit. Takes over the display.
     KmsSelftest(kms::SelftestArgs),
+    /// Compile the Slang shaders of a project (`<PROJECT>/shaders/*.slang`)
+    /// to SPIR-V in `<PROJECT>/.build/shaders/`, one file per entry point.
+    /// The compositor reads that SPIR-V; it does not compile shaders itself.
+    /// Needs slangc (`HIZUKURI_SLANGC`, or on `PATH`).
+    BuildShaders(BuildShadersArgs),
+}
+
+#[derive(Debug, Args)]
+struct BuildShadersArgs {
+    /// The project directory.
+    project: PathBuf,
+}
+
+/// `proto-compositor build-shaders`: errors go to standard error, one per
+/// line, as `file:line:column: error ...`.
+fn build_shaders(args: BuildShadersArgs) -> Result<(), String> {
+    match proto_compositor::shaders::build_project(&args.project) {
+        Ok(built) => {
+            for warning in &built.warnings {
+                eprintln!("{warning}");
+            }
+            for (rel, entries) in &built.compiled {
+                println!("compiled shaders/{rel}: {}", entries.join(", "));
+            }
+            if !built.up_to_date.is_empty() {
+                println!("{} up to date", built.up_to_date.len());
+            }
+            Ok(())
+        }
+        Err(errors) => {
+            for error in &errors {
+                eprintln!("{error}");
+            }
+            Err(format!(
+                "the shaders of {} did not compile ({} failed)",
+                args.project.display(),
+                errors.len()
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -378,7 +418,7 @@ fn main() -> ExitCode {
     // environment concurrently.
     let icd = match &cli.command {
         Some(Command::KmsSelftest(args)) => args.vulkan_icd.clone(),
-        Some(Command::KmsInfo(_)) => None,
+        Some(Command::KmsInfo(_) | Command::BuildShaders(_)) => None,
         None => cli.run.vulkan_icd.clone(),
     };
     if let Some(icd) = icd {
@@ -398,6 +438,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Some(Command::KmsInfo(args)) => kms::info(args),
         Some(Command::KmsSelftest(args)) => stop_signals().and_then(|s| kms::selftest(args, s)),
+        Some(Command::BuildShaders(args)) => build_shaders(args),
         None => stop_signals().and_then(|s| run(cli.run, s)),
     };
     match result {

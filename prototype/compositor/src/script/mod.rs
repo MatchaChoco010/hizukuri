@@ -33,7 +33,7 @@ use proto_backend::OutputInfo;
 use proto_backend::{DmabufPlane, TargetDesc, TargetError, TargetId, TargetProvider, Targets};
 use proto_color::{AlphaMode, CompositeSpace, ImageDescription, Primaries};
 use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, GpuConfig, Handle, ImageDesc, ImageUsage};
-use proto_gfx_lua::{HostOptions, ScriptError, ScriptHost};
+use proto_gfx_lua::{HostOptions, ScriptError, ScriptHost, ShaderLoader};
 use proto_wl::{
     BufferContents, BufferSource, BufferTransform, BufferUpdate, DamageRect, ShmFormat, SurfaceId,
 };
@@ -63,7 +63,6 @@ pub enum Project {
 const BUILTIN: &[(&str, &str)] = &[
     ("main", include_str!("../../scripts/main.luau")),
     ("session", include_str!("../../scripts/session.luau")),
-    ("color", include_str!("../../scripts/color.luau")),
     ("affine", include_str!("../../scripts/affine.luau")),
     ("render", include_str!("../../scripts/render.luau")),
     ("tile", include_str!("../../scripts/tile.luau")),
@@ -379,12 +378,20 @@ impl ScriptRuntime {
         let for_api = Rc::clone(&shared);
         let windows = Rc::new(RefCell::new(fallback::Windows::new()));
         let windows_for_api = Rc::clone(&windows);
+        // Shaders the script names come from its project (or the built-in
+        // one), as whatever the project is when the script asks.
+        let for_shaders = Rc::clone(&shared);
+        let shader_loader = ShaderLoader(Rc::new(move |shader: &str, entry: &str| {
+            let project = for_shaders.borrow().project.clone();
+            crate::shaders::load(&project, shader, entry)
+        }));
         let host = ScriptHost::with_setup(
             gpu,
             HostOptions {
                 memory_limit: options.memory_limit,
                 time_budget: Some(options.call_budget),
                 sandbox: true,
+                shader_loader: Some(shader_loader),
             },
             move |lua, gpu| api::register(lua, &for_api, &windows_for_api, gpu),
         )

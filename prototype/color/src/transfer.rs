@@ -19,10 +19,10 @@
 //! ([`crate::DecodeTransform`]).
 //!
 //! The same formulas are implemented in the shaders of the script layer
-//! (`prototype/compositor/scripts/color.luau`). [`TransferFunction::shader_id`]
-//! and [`TransferFunction::param`] are the bridge between the two, handed to
-//! scripts by `hz.decode_transform` and `hz.encode_transform`; keep them in
-//! sync with that module.
+//! (the `color` Slang module, `prototype/compositor/shaders/color.slang`).
+//! [`TransferFunction::shader_id`] and [`TransferFunction::param`] are the
+//! bridge between the two, handed to scripts by `hz.decode_transform` and
+//! `hz.encode_transform`; keep them in sync with that module.
 
 use crate::description::Luminance;
 
@@ -230,7 +230,7 @@ impl TransferFunction {
     }
 
     /// Identifier of this function in the shaders
-    /// (`prototype/compositor/scripts/color.luau`).
+    /// (the `color` Slang module, `prototype/compositor/shaders/color.slang`).
     pub fn shader_id(&self) -> u32 {
         match self {
             TransferFunction::Linear => 0,

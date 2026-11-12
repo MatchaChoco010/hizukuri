@@ -207,7 +207,7 @@ fn color_attachments(t: &Table) -> mlua::Result<Vec<ColorAttachment>> {
 }
 
 /// Installs the global `gfx` table.
-pub fn register(lua: &Lua, gpu: &Shared) -> mlua::Result<()> {
+pub fn register(lua: &Lua, gpu: &Shared, loader: Option<crate::ShaderLoader>) -> mlua::Result<()> {
     let gfx = lua.create_table()?;
 
     // Each entry: name, closure taking (&Lua, &mut Gpu, args).
@@ -276,14 +276,36 @@ pub fn register(lua: &Lua, gpu: &Shared) -> mlua::Result<()> {
             .map_err(gfx_err)?;
         gpu.copy_image(handle(src), handle(dst)).map_err(gfx_err)
     });
+    // A shader is named (`shader`: the host's loader finds its SPIR-V) or
+    // given as source (`source`: compiled here).
     def!("create_shader", |lua, gpu, t: Table| {
-        let source: mlua::LuaString = field(&t, "source")?;
+        let stage = name_field(&t, "stage", None, ShaderStage::from_name)?;
         let entry: Option<String> = field(&t, "entry")?;
+        let entry = entry.as_deref().unwrap_or("main");
+        let shader: Option<String> = field(&t, "shader")?;
+        if let Some(shader) = shader {
+            if t.contains_key("source")? || t.contains_key("language")? {
+                return Err(arg_err("give either `shader` or `source`, not both"));
+            }
+            let shader_error =
+                |message: String| gfx_err(GfxError::new(ErrorCode::ShaderCompile, message));
+            let Some(loader) = &loader else {
+                return Err(shader_error(
+                    "this host does not load shaders by name; give `source`".into(),
+                ));
+            };
+            let spirv = (loader.0)(&shader, entry).map_err(shader_error)?;
+            return gpu
+                .create_shader_spirv(stage, entry, &spirv)
+                .map(Handle::to_bits)
+                .map_err(gfx_err);
+        }
+        let source: mlua::LuaString = field(&t, "source")?;
         gpu.create_shader(&ShaderSource {
-            stage: name_field(&t, "stage", None, ShaderStage::from_name)?,
+            stage,
             language: name_field(&t, "language", Some("wgsl"), ShaderLanguage::from_name)?,
             source: &source.to_str()?,
-            entry: entry.as_deref().unwrap_or("main"),
+            entry,
         })
         .map(Handle::to_bits)
         .map_err(gfx_err)
