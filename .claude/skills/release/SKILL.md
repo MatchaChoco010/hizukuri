@@ -36,13 +36,23 @@ description: hizukuri のリリースを切る。その時点の develop を rel
 
 1. `origin/develop` の先頭から、ブランチ `release-candidate/<YYYYMMDD>-<連番>` を切って、push する。
    この後、このブランチに、commit を足さない。
-2. このブランチへの push で、検査が動く。**すべてが通るのを待つ。**
+2. このブランチへの push で、検査が動く。候補のブランチでは、変わったファイルによらず、すべての検査が回る。
 
    | workflow | 内容 |
    | --- | --- |
    | `ci.yml` | 書式、lint、テスト |
    | `vm.yml` | VM の中の、DRM/KMS の session の試験 |
    | `gpu.yml` | ハードウェアの GPU の上の検査 |
+
+   **すべてが通るのを待つ。** 待つのと、結果を確かめるのには、`tools/ci-status.sh` を使う。
+
+   ```sh
+   tools/ci-status.sh --wait release-candidate/<YYYYMMDD>-<連番>
+   ```
+
+   3 つの workflow が、すべて `passed` のときだけ、0 で終わる。0 で終わらなければ、通っていない。
+   run が成功でも、ジョブが飛ばされていれば `incomplete`、起動していなければ `not-started` で、どちらも通ったことにしない。
+   workflow の一覧を見て、目で判断しない。
 
 3. **どれかが落ちたら、`release` に取り込まない。**
    - コードが原因で落ちたとき: 何が落ちたかを報告する。直しを `develop` に入れてから、新しい連番で、候補を切り直す。
