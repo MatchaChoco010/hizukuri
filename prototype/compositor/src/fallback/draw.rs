@@ -17,50 +17,16 @@ use std::collections::HashMap;
 use proto_backend::OutputInfo;
 use proto_gfx_core::{
     AddressMode, Blend, ColorAttachment, ColorTarget, CullMode, Filter, Format, GfxError, Gpu,
-    Handle, LoadOp, RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderSource, ShaderStage,
-    Topology,
+    Handle, LoadOp, RenderPipelineDesc, SamplerDesc, ShaderStage, Topology,
 };
 
 use crate::scene::{ARROW_HEIGHT, ARROW_WIDTH, CursorImage, CursorView, SurfaceView};
 
-const SHADER: &str = r#"
-struct Push {
-    rect: vec4<f32>,        // x, y, width, height in target pixels
-    uv_u: vec4<f32>,        // a, b, tx: u = a*s + b*t + tx over the unit square
-    uv_v: vec4<f32>,        // c, d, ty: v = c*s + d*t + ty
-    color: vec4<f32>,       // used when solid != 0
-    target_size: vec2<f32>,
-    opacity: f32,
-    solid: f32,
-}
-var<immediate> pc: Push;
-
-struct VsOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs(@builtin(vertex_index) index: u32) -> VsOut {
-    let corner = vec2<f32>(f32(index & 1u), f32((index >> 1u) & 1u));
-    var out: VsOut;
-    out.position = vec4((pc.rect.xy + corner * pc.rect.zw) / pc.target_size * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = vec2<f32>(dot(pc.uv_u.xy, corner) + pc.uv_u.z, dot(pc.uv_v.xy, corner) + pc.uv_v.z);
-    return out;
-}
-
-@group(0) @binding(0) var surface_texture: texture_2d<f32>;
-@group(0) @binding(1) var surface_sampler: sampler;
-
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    let texel = textureSampleLevel(surface_texture, surface_sampler, in.uv, 0.0);
-    if pc.solid != 0.0 {
-        return pc.color;
-    }
-    return texel * pc.opacity;
-}
-"#;
+/// The fallback's shader (`shaders/fallback.slang`), compiled to SPIR-V by
+/// `build.rs`. It is in the binary, so the fallback draws even where no Slang
+/// compiler is.
+const VERTEX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fallback.vs.spv"));
+const FRAGMENT_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fallback.fs.spv"));
 
 /// Height of the bar that marks fallback frames, in physical pixels.
 pub const MARKER_HEIGHT: u32 = 4;
@@ -127,19 +93,14 @@ impl Drawer {
         let (vertex, fragment) = match self.shaders {
             Some(shaders) => shaders,
             None => {
-                let mut shader = |stage, entry| {
-                    let handle = gpu.create_shader(&ShaderSource {
-                        stage,
-                        language: ShaderLanguage::Wgsl,
-                        source: SHADER,
-                        entry,
-                    })?;
+                let mut shader = |stage, entry, spirv| {
+                    let handle = gpu.create_shader_spirv(stage, entry, spirv)?;
                     gpu.protect(handle);
                     Ok::<_, GfxError>(handle)
                 };
                 let shaders = (
-                    shader(ShaderStage::Vertex, "vs")?,
-                    shader(ShaderStage::Fragment, "fs")?,
+                    shader(ShaderStage::Vertex, "vs", VERTEX_SPIRV)?,
+                    shader(ShaderStage::Fragment, "fs", FRAGMENT_SPIRV)?,
                 );
                 self.shaders = Some(shaders);
                 shaders

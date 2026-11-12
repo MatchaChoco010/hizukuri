@@ -7,6 +7,7 @@ members = [
     "prototype/compositor",
     "prototype/gfx-core",
     "prototype/gfx-lua",
+    "prototype/slangc",
     "tools/test-client",
 ]
 
@@ -35,6 +36,8 @@ smithay = { git = "https://github.com/Smithay/smithay", rev = "8fd9fe0c74e5c13a1
 # The checked GPU API for scripts and its script binding.
 proto-gfx-core = { path = "prototype/gfx-core" }
 proto-gfx-lua = { path = "prototype/gfx-lua" }
+# Runs slangc, the Slang compiler, as a child process: for build scripts.
+proto-slangc = { path = "prototype/slangc" }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-in", "spv-out"] }
 # What proto-gfx-core uses to check SPIR-V it is handed: SPIRV-Tools (the
 # validator and the graphics-robust-access pass, built from its C++ source

@@ -91,7 +91,7 @@ HIZUKURI_TEST_DEVICES=gpu,lavapipe tools/ci.sh
 | --- | --- | --- |
 | 用途 | ふだんの開発 | CI |
 | Rust | `rust-toolchain.toml` の版と component に、`rust-src`、`rust-analyzer` を足したもの | `rust-toolchain.toml` の版と component |
-| ビルドの道具 | `pkg-config`、gcc、`cargo-nextest` | 同じ |
+| ビルドの道具 | `pkg-config`、gcc、`cargo-nextest`、Slang のコンパイラー（`shader-slang` 2026.21。`slangc`） | 同じ |
 | ライブラリ | wayland、libxkbcommon、libinput、libseat、libudev、libdrm、libgbm、libdisplay-info 0.3、vulkan-loader | 同じ |
 | Vulkan | Mesa、validation layer、`vulkaninfo`、`vkcube` | 同じ |
 | テストが既定で使うアプリ | weston（`weston-terminal`）、wl-clipboard、foot | 同じ |
@@ -130,6 +130,7 @@ Rust も、ライブラリも、入っていない。リリースの報告のス
 | `VK_DRIVER_FILES` | nixpkgs の Mesa の、lavapipe の manifest | loader が使うドライバーを、これだけにする |
 | `VK_LAYER_PATH` | nixpkgs の validation layer | explicit layer を、nixpkgs のものだけにする |
 | `VK_IMPLICIT_LAYER_PATH` | 空のディレクトリ | システムの implicit layer を読ませない |
+| `HIZUKURI_SLANGC` | nixpkgs の `shader-slang` の `slangc` | build script が `.slang` を SPIR-V にするときに使う `slangc`（`prototype/slangc`）。`PATH` より先に見る |
 | `HIZUKURI_ICD_LAVAPIPE` | lavapipe の manifest のパス | 手で lavapipe を選ぶときに使う |
 | `HIZUKURI_ICD_DIRS` | nixpkgs の Mesa の `icd.d` | テストが、lavapipe の manifest を探す場所。システムの場所より先に見る。nixpkgs の Mesa の、すべてのドライバーの manifest がある |
 | `CARGO_TARGET_DIR` | `<リポジトリ>/target/nix-<hash>` | システムのライブラリでビルドした結果と、分ける。すでに設定されていれば、変えない |

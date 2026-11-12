@@ -196,6 +196,13 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
        添字が定数か、範囲に切り詰められていることを確かめ、reflection を作る。2 の pass が、切り詰めずに成功を返す形
        （untyped pointer など）があるので、2 の結果を信頼しない。
   - SPIRV-Tools は C++ で、同じプロセスの中で動く。その中で落ちると、プロセスごと落ちる。
+- コアの shader は、Slang で書く（`prototype/compositor/shaders/`）。`proto-compositor` の `build.rs` が、`slangc` で
+  entry point ごとに SPIR-V にし、バイナリに埋め込む。実行時は、`Gpu::create_shader_spirv` で作る。Slang のコンパイラーが
+  無い機械でも、fallback は描ける。いまは、fallback の shader（`fallback.slang`）が、これに当たる。
+- `slangc` は、`prototype/slangc`（`proto-slangc`）が、子のプロセスとして呼ぶ。源は、ファイルか、標準入力で渡し、
+  SPIR-V は、標準出力で受け取る。子には、時間の上限（過ぎたら、PID で止める）と、アドレス空間の上限を付け、
+  core dump を残させない。環境変数は、引き継がない。エラーは、`ファイル:行:列: error 番号: 文` の形で返す。
+  浮動小数点の計算は、いつも `-fp-mode precise` でコンパイルする（呼ぶ側が外す口は無い）。
 - 記録の呼び出しは、引数と状態を検査してから記録する。エラーを返した呼び出しは、何も記録していない。
 - depth と stencil、MSAA、mip、テクスチャの配列と 3D、cube、indirect draw、query は、未実装である。
 
