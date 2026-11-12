@@ -242,7 +242,6 @@ workflow は、3 つある。
 | キャッシュ | 鍵 | 中身 | 保存する workflow |
 | --- | --- | --- | --- |
 | `/nix`（devShell） | `nix-`。`flake.nix`、`flake.lock`、`rust-toolchain.toml` の hash | `ci` の devShell | `ci.yml`（`check (test)`）。`check` の 2 つが読む |
-| `/nix`（VM） | `nix-vm-`。上の 3 つと、`tools/vm/guest.nix`、`tools/vm/guest/` の hash | devShell、QEMU、ゲスト | `vm.yml`。鍵が一致しなければ、`ci.yml` の `nix-` から始める |
 | cargo（lint） | `cargo-lint-`。`flake.lock`、`rust-toolchain.toml`、`Cargo.lock` の hash | registry、git の依存、`target/`（clippy の結果） | `ci.yml` |
 | cargo（test） | `cargo-test-`。同じ | registry、git の依存、`target/`（テストのビルド） | `ci.yml` |
 | cargo（VM） | `cargo-vm-`。同じ | registry、git の依存、`target/`（dev のプロファイルのビルド） | `vm.yml` |
