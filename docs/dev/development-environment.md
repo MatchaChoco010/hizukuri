@@ -42,7 +42,7 @@ Wayland のサーバー側（Smithay）と、KMS のバックエンドが使う�
 | libdisplay-info（0.3 の系列） | EDID の解析（KMS） | `libdisplay-info-devel` |
 | Vulkan の loader | 実行時に `dlopen` で読み込む | `vulkan-loader` |
 
-- shader は、WGSL と GLSL で書き、ビルド時に `naga` で SPIR-V にする。外部の shader のコンパイラーは、要らない。
+- shader は、WGSL と GLSL で書き、実行時に、`proto-gfx-core` が `naga` で SPIR-V にする。外部の shader のコンパイラーは、要らない。
 - スクリプト言語は、決まっていない。いまは、仮の言語として Luau を使っている。`mlua` が、Luau をソースからビルドする。
   システムのライブラリは、要らない。
 
@@ -57,8 +57,8 @@ hizukuri は、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバー�
 | validation layer | Vulkan の使い方の誤りの検出。`HIZUKURI_TEST_VALIDATION=1` を付けたテストに要る |
 | `vulkaninfo` | デバイスと拡張の確認。ドライバーが、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つかは、これで見る |
 
-- スクリプトの描画と、`kms-selftest` のパターンの描画は、スクリプトに見せる GPU の API（`proto-gfx-core`）の上で動き、
-  Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。Rust のレンダラー（`proto-render`。`--renderer rust` のときだけ使う）が要るのは、Vulkan 1.3 である。
+- 描くもの（スクリプトの描画と、`kms-selftest` のパターンの描画）は、どれもスクリプトに見せる GPU の API（`proto-gfx-core`）の上で動き、
+  Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
 - **どのデバイスで描いたかを、いつも明示する。** デバイスの選び方は、3 つある。
 
 | 手段 | 内容 |
@@ -70,9 +70,9 @@ hizukuri は、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバー�
 - テストに使うデバイスは、環境変数 `HIZUKURI_TEST_DEVICES` で選ぶ（[テストと CI](testing-and-ci.md)）。既定は、lavapipe である。
 - GPU なしで dma-buf を扱うテストは、kernel の `/dev/udmabuf` を使う。テストを走らせる利用者が、このデバイスを開けることが要る
   （[テストと CI](testing-and-ci.md)）。
-- テストは、lavapipe の manifest を、環境変数 `HIZUKURI_ICD_DIRS`（`:` で区切ったディレクトリの並び）、
+- テストは、lavapipe の manifest を、テストの共通の部品（`prototype/compositor/tests/common/icd.rs`）で、環境変数 `HIZUKURI_ICD_DIRS`（`:` で区切ったディレクトリの並び）、
   `/usr/share/vulkan/icd.d`、`/usr/local/share/vulkan/icd.d`、`/etc/vulkan/icd.d` の順に探す。
-- 選ばれたデバイスは、`proto-compositor` の起動時のログと、制御口の `state` の `renderer` に出る。
+- 選ばれたデバイスは、`proto-compositor` の起動時のログと、制御口の `state` の `gpu` に出る。
 
 ## 検証に使うクライアント
 

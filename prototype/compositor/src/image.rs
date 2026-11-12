@@ -1,4 +1,4 @@
-//! CPU-side images read back from the renderer, and their file formats.
+//! Images read back from what draws, and their file formats.
 //!
 //! - [`EncodedImage`]: the output after encoding, written as PNG (8 or 16
 //!   bit RGBA).
@@ -15,7 +15,7 @@ use std::path::Path;
 
 use proto_color::{CompositeSpace, ImageDescription, Primaries};
 
-use crate::renderer::OutputFormat;
+use proto_backend::OutputFormat;
 
 /// Errors of reading and writing image files.
 #[derive(Debug, thiserror::Error)]
@@ -92,7 +92,7 @@ impl EncodedImage {
                 let mut writer = encoder.write_header()?;
                 // PNG wants R, G, B, A. The fourth byte of a scanout format
                 // is padding as far as the display is concerned; the
-                // renderer writes the compositing alpha there.
+                // drawing may write the compositing alpha there.
                 let rgba: Vec<u8> = self
                     .data
                     .chunks_exact(4)
@@ -459,7 +459,7 @@ mod tests {
     use super::*;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("proto-render-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("proto-image-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }

@@ -1,6 +1,6 @@
 //! The KMS backend on the mock device: modes, flips, timing, the session
 //! going away and coming back, displays being unplugged, failing commits,
-//! emergency keys. No hardware, no VT, no VM, and no renderer: the output
+//! emergency keys. No hardware, no VT, no VM, and nothing that draws: the output
 //! shows black frames, which is all these tests need.
 
 use std::time::Duration;
@@ -123,7 +123,7 @@ fn startup_announces_the_output_without_touching_the_display() {
     let status = rig.backend.status();
     assert_eq!(status.driver, "mock");
     assert_eq!(status.output.unwrap().scanout, ActiveScanout::CpuCopy);
-    // Without a renderer there is nothing to render into.
+    // Without a target provider there is nothing to draw into.
     assert_eq!(rig.backend.render_target(OutputId(1)), None);
 }
 
@@ -146,7 +146,7 @@ fn first_frame_is_a_modeset_and_later_frames_are_flips() {
         (first.width, first.height, first.format),
         (1920, 1080, FOURCC_XRGB8888)
     );
-    // No renderer: black.
+    // Nothing draws: black.
     assert_eq!(first.rgb(0, 0), [0, 0, 0]);
     assert_eq!(first.rgb(1919, 1079), [0, 0, 0]);
 
@@ -662,7 +662,7 @@ fn shutdown_turns_the_output_off() {
 }
 
 #[test]
-fn forcing_the_dmabuf_path_without_a_renderer_fails_clearly() {
+fn forcing_the_dmabuf_path_without_a_target_provider_fails_clearly() {
     let config = KmsConfig {
         scanout: ScanoutPreference::Dmabuf,
         ..Default::default()

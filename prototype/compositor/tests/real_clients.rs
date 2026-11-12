@@ -20,7 +20,7 @@ mod common;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use common::{Device, Drawing, Gpu, Session, TIMEOUT, options, real_client_wanted as wanted};
+use common::{Device, Gpu, Session, TIMEOUT, options, real_client_wanted as wanted};
 use proto_compositor::control::Request;
 use proto_test_client::{ClientEvent, SurfaceKind};
 use serde_json::Value;
@@ -31,11 +31,11 @@ const BTN_RIGHT: u32 = 0x111;
 /// The device these tests run on: one is enough, they are about protocols.
 /// The script draws; the fallback places the windows.
 fn device() -> Device {
-    let hardware = Device::new(Gpu::Hardware, Drawing::Script);
+    let hardware = Device::new(Gpu::Hardware);
     if hardware.enabled() {
         hardware
     } else {
-        Device::new(Gpu::Lavapipe, Drawing::Script)
+        Device::new(Gpu::Lavapipe)
     }
 }
 
@@ -180,7 +180,7 @@ fn a_toolkit_menu_opens_as_a_popup_and_is_dismissed_by_a_press_outside() {
         (!popups(&window).is_empty()).then_some(())
     });
     session.screenshot("menu-open-again");
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -357,7 +357,7 @@ fn fractional_terminal(name: &str, program: &str, app_id: &str, dmabuf: bool) {
         assert_eq!(surface["buffer_kind"], "dmabuf", "{surface:#}");
     }
     session.screenshot("terminal");
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 

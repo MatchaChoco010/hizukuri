@@ -387,11 +387,11 @@ pub fn disable_request(pipeline: &Pipeline) -> AtomicRequest {
 /// How rendered frames get to the primary plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanoutPath {
-    /// The renderer allocates the scanout images and exports them as
+    /// Whatever draws allocates the scanout images and exports them as
     /// dma-bufs; KMS scans them out directly. The modifiers are the ones
     /// both sides accept.
     Dmabuf { modifiers: Vec<u64> },
-    /// The renderer draws offscreen; each frame is read back and copied
+    /// Whatever draws draws offscreen; each frame is read back and copied
     /// into a dumb buffer on the CPU.
     CpuCopy,
 }
@@ -410,14 +410,14 @@ pub enum ScanoutPreference {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanoutFacts {
     pub preference: ScanoutPreference,
-    /// The single-plane modifiers the renderer can export an XRGB8888
+    /// The single-plane modifiers whatever draws can export an XRGB8888
     /// render target with. Empty when it cannot export dma-bufs (or there
-    /// is no renderer).
-    pub renderer_modifiers: Vec<u64>,
-    /// Whether the renderer's device is the device that owns the KMS card.
+    /// is nothing that draws).
+    pub export_modifiers: Vec<u64>,
+    /// Whether what draws runs on the device that owns the KMS card.
     /// A dma-buf from another device (or from a software rasterizer)
     /// generally cannot be scanned out.
-    pub renderer_is_kms_device: bool,
+    pub draws_on_kms_device: bool,
     /// The modifiers the primary plane takes for XRGB8888; `None` when the
     /// driver reports no modifiers.
     pub plane_modifiers: Option<Vec<u64>>,
@@ -438,11 +438,11 @@ pub enum ScanoutError {
 /// The modifiers a dma-buf scanout image may have, or the reason the
 /// dma-buf path cannot work.
 fn dmabuf_modifiers(facts: &ScanoutFacts) -> Result<Vec<u64>, String> {
-    if facts.renderer_modifiers.is_empty() {
-        return Err("the renderer cannot export render targets as dma-bufs".to_string());
+    if facts.export_modifiers.is_empty() {
+        return Err("what draws cannot export render targets as dma-bufs".to_string());
     }
-    if !facts.renderer_is_kms_device {
-        return Err("the renderer does not run on the device that drives the display".to_string());
+    if !facts.draws_on_kms_device {
+        return Err("what draws does not run on the device that drives the display".to_string());
     }
     // A driver without modifier support scans out what its own allocator
     // would produce without modifiers, which is linear memory.
@@ -451,15 +451,15 @@ fn dmabuf_modifiers(facts: &ScanoutFacts) -> Result<Vec<u64>, String> {
         None => vec![MODIFIER_LINEAR],
     };
     let common: Vec<u64> = facts
-        .renderer_modifiers
+        .export_modifiers
         .iter()
         .copied()
         .filter(|m| accepted.contains(m))
         .collect();
     if common.is_empty() {
         return Err(format!(
-            "the renderer and the plane share no format modifier (renderer {:x?}, plane {:x?})",
-            facts.renderer_modifiers, accepted
+            "what draws and the plane share no format modifier (export {:x?}, plane {:x?})",
+            facts.export_modifiers, accepted
         ));
     }
     Ok(common)
@@ -805,8 +805,8 @@ mod tests {
     fn facts() -> ScanoutFacts {
         ScanoutFacts {
             preference: ScanoutPreference::Auto,
-            renderer_modifiers: vec![0x0200_0000_0008_2305, MODIFIER_LINEAR],
-            renderer_is_kms_device: true,
+            export_modifiers: vec![0x0200_0000_0008_2305, MODIFIER_LINEAR],
+            draws_on_kms_device: true,
             plane_modifiers: Some(vec![MODIFIER_LINEAR, 0x0200_0000_0008_2305]),
             dumb_buffers: true,
         }
@@ -837,15 +837,15 @@ mod tests {
         // A software rasterizer exports dma-bufs, but not ones KMS can use.
         assert_eq!(
             choose_scanout_path(&ScanoutFacts {
-                renderer_is_kms_device: false,
+                draws_on_kms_device: false,
                 ..facts()
             }),
             Ok(ScanoutPath::CpuCopy)
         );
-        // No renderer, or one without dma-buf export.
+        // Nothing draws, or it cannot export dma-bufs.
         assert_eq!(
             choose_scanout_path(&ScanoutFacts {
-                renderer_modifiers: vec![],
+                export_modifiers: vec![],
                 ..facts()
             }),
             Ok(ScanoutPath::CpuCopy)
@@ -880,14 +880,14 @@ mod tests {
         assert!(matches!(
             choose_scanout_path(&ScanoutFacts {
                 preference: ScanoutPreference::Dmabuf,
-                renderer_is_kms_device: false,
+                draws_on_kms_device: false,
                 ..facts()
             }),
             Err(ScanoutError::DmabufImpossible(_))
         ));
         assert!(matches!(
             choose_scanout_path(&ScanoutFacts {
-                renderer_modifiers: vec![],
+                export_modifiers: vec![],
                 dumb_buffers: false,
                 ..facts()
             }),

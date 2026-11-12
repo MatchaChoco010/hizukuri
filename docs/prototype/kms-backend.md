@@ -60,7 +60,7 @@ prototype/compositor/src/
 
 | 経路 | 内容 | 選ばれる条件 |
 | --- | --- | --- |
-| `dmabuf` | レンダラーが Vulkan で確保した画像を、dma-buf として取り出し、そのまま framebuffer にする | レンダラーのデバイスが、KMS のデバイスと同じ GPU である（`VK_EXT_physical_device_drm` で突き合わせる）。かつ、レンダラーと plane に、共通の modifier がある |
+| `dmabuf` | 描くもの（スクリプトの描画、自己診断の `PatternRenderer`）が Vulkan で確保した画像を、dma-buf として取り出し、そのまま framebuffer にする | 描くもののデバイスが、KMS のデバイスと同じ GPU である（`VK_EXT_physical_device_drm` で突き合わせる）。かつ、描くものが書き出せる modifier と、plane が受け取る modifier に、共通のものがある |
 | `cpu-copy` | フレームを読み戻して、dumb buffer に書く | 上が成り立たないとき（lavapipe など） |
 
 - `--kms-scanout dmabuf|cpu` で、経路を固定できる。固定した経路が使えなければ、起動に失敗する。
@@ -119,17 +119,17 @@ proto-compositor kms-selftest --output Virtual-1 --seconds 10 --report DIR
 指定した秒数で自分で終わる。結果を、`--report` のディレクトリに書く。
 
 - テストパターンは、`PatternRenderer`（`proto_compositor::selftest::PatternRenderer`）が、`proto-gfx-core` の検査つきの GPU の API の上で、
-  直接描く。スクリプトも、Rust のレンダラーも使わない。
+  直接描く。スクリプトは使わない。
 - 診断の道具であって、コンポジターの描画ではない。パターンの符号の値を、色の変換をせずに、そのまま出力の画像に書く。
 - スクリプトの描画と同じく、Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
 - デバイスは、`--vulkan-device auto|gpu|cpu|<名前>` で選ぶ。選び方は、compositor のスクリプトの描画と同じである
   （`cpu` と `lavapipe` は llvmpipe。`auto` は、画面を出している GPU を、Vulkan がそれを持っていれば選ぶ）。
 - `--scanout` で、scanout の経路を選ぶ（`--kms-scanout` と同じ値）。
-- `--no-renderer` では、パターンを描かずに、黒いフレームを出し、時機だけを測る。
+- `--no-drawing` では、パターンを描かずに、黒いフレームを出し、時機だけを測る。
 
 | ファイル | 内容 |
 | --- | --- |
-| `report.json` | 項目ごとの結果、flip の間隔の統計、フレームの時間、使ったデバイスとレンダラー |
+| `report.json` | 項目ごとの結果、flip の間隔の統計、フレームの時間、パターンを描いた GPU のデバイス（`gpu`: デバイス名、種類、ドライバー、`drm_primary`、`on_kms_device`、`scanout_modifiers`） |
 | `summary.txt` | 人が読む要約 |
 | `device.json` | デバイスの記述（`--anonymize` と同じ処理をしたもの） |
 
@@ -170,7 +170,7 @@ tools/vm/vm test tools/vm-check.py --only lavapipe --skip-build     # ビルド�
 tools/vm/vm test tools/vm-check.py --out artifacts/vm-check/run1    # 記録を残す場所を決める
 ```
 
-`lavapipe` の部は、次の項目を検査する: 仮想コンソールからの起動、レンダラーと scanout の経路、モード、
+`lavapipe` の部は、次の項目を検査する: 仮想コンソールからの起動、描画のデバイス（`state` の `gpu`）と scanout の経路、モード、
 背景とウィンドウの画素（VNC から読む）、libinput 経由のポインター・クリック・キー、VT の切り替えと復帰、
 実際のアプリ（foot、weston-terminal）、フレームの時間、終了用のキー、自動終了、制御口からの終了、SIGHUP、
 dmabuf を送るクライアントと popup と selection、

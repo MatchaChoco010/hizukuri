@@ -16,7 +16,7 @@
 //! where the script says nothing (it defines no window management, a
 //! callback fails, or the script is out), they are.
 
-use proto_layout::{ConfigureHint, OutputId, Placement, Point, Rect, Size, WindowId};
+use crate::wm::{ConfigureHint, OutputId, Placement, Point, Rect, Size, WindowId};
 
 use super::placement::Cascade;
 use crate::wm::{WindowManager, WmRequest};
@@ -341,7 +341,6 @@ impl WindowManager for Windows {
 
 #[cfg(test)]
 mod tests {
-    use proto_layout::Layout;
 
     use super::*;
 
@@ -438,56 +437,66 @@ mod tests {
         assert_eq!(windows.revision(), revision, "no change, no revision");
     }
 
-    /// The same sequence of events on the fallback and on the floating
-    /// layout of `proto-layout`, whose rules the fallback follows.
+    /// One sequence of events with two outputs, checked step by step.
     #[test]
-    fn the_fallback_does_what_the_floating_layout_does() {
-        let mut fallback = Windows::new();
-        let mut layout = Layout::new();
-        let left = Rect::new(-1920, 0, 1920, 1080);
-        let right = Rect::new(0, 0, 1280, 720);
-        let both = |f: &mut Windows, l: &mut Layout, step: &dyn Fn(&mut dyn WindowManager)| {
-            step(f);
-            step(l);
-            assert_eq!(f.placements(), <Layout as WindowManager>::placements(l));
-            assert_eq!(f.focus(), <Layout as WindowManager>::focus(l));
-            for p in f.placements() {
-                assert_eq!(
-                    f.configure_hint(p.window),
-                    <Layout as WindowManager>::configure_hint(l, p.window)
-                );
-            }
-        };
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.set_output(OutputId(1), left);
-            wm.set_output(OutputId(2), right);
-        });
+    fn a_sequence_of_events_on_two_outputs() {
+        let mut windows = Windows::new();
+        windows.set_output(OutputId(1), Rect::new(-1920, 0, 1920, 1080));
+        windows.set_output(OutputId(2), Rect::new(0, 0, 1280, 720));
+        let place = |windows: &Windows, id: u64| windows.placement(WindowId(id)).unwrap();
+        let ids = |list: &[u64]| list.iter().map(|id| WindowId(*id)).collect::<Vec<_>>();
+
+        // Ten windows cascade on the first output; the last one is focused.
         for id in 1..=10 {
-            both(&mut fallback, &mut layout, &|wm| {
-                wm.add_window(WindowId(id));
-                wm.set_window_size(WindowId(id), Size::new(100 + id as i32, 80));
-            });
+            windows.add_window(WindowId(id));
+            windows.set_window_size(WindowId(id), Size::new(100 + id as i32, 80));
         }
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.focus_window(Some(WindowId(3)));
-        });
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.move_window(WindowId(4), Point::new(100, 100));
-        });
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.remove_window(WindowId(3));
-        });
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.remove_output(OutputId(1));
-        });
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.add_window(WindowId(11));
-        });
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.focus_window(None);
-        });
-        both(&mut fallback, &mut layout, &|wm| {
-            wm.remove_window(WindowId(11));
-        });
+        for id in 1..=10u64 {
+            let slot = (id as i32 - 1) % 8 + 1;
+            let p = place(&windows, id);
+            assert_eq!(p.output, Some(OutputId(1)), "window {id}");
+            assert_eq!(p.position, Point::new(-1920 + 32 * slot, 32 * slot));
+            assert_eq!(p.size, Some(Size::new(100 + id as i32, 80)));
+            assert_eq!(windows.configure_hint(WindowId(id)).size, None);
+        }
+        assert_eq!(windows.focus(), Some(WindowId(10)));
+        assert_eq!(order(&windows), ids(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+
+        // Focusing raises.
+        windows.focus_window(Some(WindowId(3)));
+        assert_eq!(windows.focus(), Some(WindowId(3)));
+        assert_eq!(order(&windows), ids(&[1, 2, 4, 5, 6, 7, 8, 9, 10, 3]));
+        assert!(windows.configure_hint(WindowId(3)).activated);
+        assert!(!windows.configure_hint(WindowId(10)).activated);
+
+        // A moved window belongs to the output under its corner.
+        windows.move_window(WindowId(4), Point::new(100, 100));
+        assert_eq!(place(&windows, 4).output, Some(OutputId(2)));
+        assert_eq!(place(&windows, 4).position, Point::new(100, 100));
+
+        // The focused window closes: the topmost one gets the focus.
+        windows.remove_window(WindowId(3));
+        assert_eq!(windows.focus(), Some(WindowId(10)));
+
+        // The first output goes away: its windows move to the other one,
+        // at the same place relative to the origin.
+        windows.remove_output(OutputId(1));
+        let p = place(&windows, 1);
+        assert_eq!(p.output, Some(OutputId(2)));
+        assert_eq!(p.position, Point::new(32, 32));
+        assert_eq!(place(&windows, 10).position, Point::new(64, 64));
+        assert_eq!(place(&windows, 4).position, Point::new(100, 100));
+
+        // The cascade goes on from where it was, on the remaining output.
+        let p = windows.add_window(WindowId(11));
+        assert_eq!(p.output, Some(OutputId(2)));
+        assert_eq!(p.position, Point::new(96, 96));
+        assert_eq!(windows.focus(), Some(WindowId(11)));
+
+        // No focus; closing an unfocused window gives none.
+        windows.focus_window(None);
+        windows.remove_window(WindowId(11));
+        assert_eq!(windows.focus(), None);
+        assert_eq!(windows.placements().len(), 9);
     }
 }

@@ -31,11 +31,11 @@ use std::collections::HashMap;
 use std::io;
 use std::time::Instant;
 
+use crate::wm::{Point, Rect, Size};
 use proto_backend::{AxisSource, Backend, BackendError, BackendEvent, InputEvent, OutputInfo};
 use proto_color::{
     AlphaMode, CompositeSpace, DecodeTransform, EncodeTransform, ImageDescription, Primaries,
 };
-use proto_layout::{Point, Rect, Size};
 
 use crate::fallback;
 use crate::wm::{Modifiers, WindowManager, WmRequest};
@@ -51,8 +51,8 @@ use crate::scene::{
 };
 use crate::timing::FrameTimes;
 
-type LayoutWindowId = proto_layout::WindowId;
-type LayoutOutputId = proto_layout::OutputId;
+type WmWindowId = crate::wm::WindowId;
+type WmOutputId = crate::wm::OutputId;
 type WlWindowId = proto_wl::WindowId;
 type WlOutputId = proto_wl::OutputId;
 type BackendOutputId = proto_backend::OutputId;
@@ -101,7 +101,7 @@ impl Default for CompositorOptions {
 struct OutputBinding {
     info: OutputInfo,
     wl: WlOutputId,
-    layout: LayoutOutputId,
+    layout: WmOutputId,
     /// Something changed since the last frame of this output.
     dirty: bool,
 }
@@ -134,7 +134,7 @@ pub struct Compositor<B: Backend> {
     /// position inside it.
     pointer_sent: Option<(SurfaceId, (f64, f64))>,
     /// What each window was last told by a configure.
-    configured: HashMap<LayoutWindowId, (Option<Size>, bool)>,
+    configured: HashMap<WmWindowId, (Option<Size>, bool)>,
     start: Instant,
     /// Surfaces whose buffers could not be read, to warn about each once.
     unreadable: std::collections::HashSet<SurfaceId>,
@@ -145,12 +145,12 @@ pub struct Compositor<B: Backend> {
     quit: bool,
 }
 
-fn to_wl(id: LayoutWindowId) -> WlWindowId {
+fn to_wl(id: WmWindowId) -> WlWindowId {
     proto_wl::WindowId(id.0)
 }
 
-fn to_layout(id: WlWindowId) -> LayoutWindowId {
-    proto_layout::WindowId(id.0)
+fn to_wm(id: WlWindowId) -> WmWindowId {
+    crate::wm::WindowId(id.0)
 }
 
 impl<B: Backend> Compositor<B> {
@@ -360,7 +360,7 @@ impl<B: Backend> Compositor<B> {
                 self.schedule_redraw();
             }
             BackendEvent::Reconfigure => {
-                // The backend needs the renderer to follow the displays.
+                // The backend needs what draws to follow the displays.
                 self.backend.reconfigure(self.scene.targets())?;
             }
             BackendEvent::QuitRequested => {
@@ -390,7 +390,7 @@ impl<B: Backend> Compositor<B> {
 
     fn add_output(&mut self, info: OutputInfo) {
         let wl = self.wl.add_output(&Self::output_config(&info));
-        let layout = proto_layout::OutputId(info.id.0);
+        let layout = crate::wm::OutputId(info.id.0);
         self.wm.set_output(layout, Self::output_rect(&info));
         tracing::info!(
             name = %info.name,
@@ -468,7 +468,7 @@ impl<B: Backend> Compositor<B> {
     fn handle_wl_event(&mut self, event: WlEvent) {
         match event {
             WlEvent::WindowCreated(id) => {
-                let placement = self.wm.add_window(to_layout(id));
+                let placement = self.wm.add_window(to_wm(id));
                 self.scene.window_added(
                     placement.window,
                     (placement.position.x, placement.position.y),
@@ -479,13 +479,13 @@ impl<B: Backend> Compositor<B> {
                 if let Some(info) = self.wl.window(id)
                     && let Some((w, h)) = info.size
                 {
-                    self.wm.set_window_size(to_layout(id), Size::new(w, h));
+                    self.wm.set_window_size(to_wm(id), Size::new(w, h));
                 }
                 self.schedule_redraw();
                 self.refresh_pointer_focus();
             }
             WlEvent::WindowDestroyed(id) => {
-                let id = to_layout(id);
+                let id = to_wm(id);
                 self.wm.remove_window(id);
                 self.scene.window_removed(id);
                 self.configured.remove(&id);
@@ -507,7 +507,7 @@ impl<B: Backend> Compositor<B> {
             // `WlServer::set_window_states` and its configure hints; the
             // protocol layer answers for it when it says nothing.
             WlEvent::WindowRequest { window, request } => {
-                self.wm.window_request(to_layout(window), request);
+                self.wm.window_request(to_wm(window), request);
             }
             // The popup has a place already (its positioner's, inside the
             // bounds given in `sync_placements`). A scene that draws windows
@@ -528,7 +528,7 @@ impl<B: Backend> Compositor<B> {
     /// keyboard focus, and the `activated` state of every window.
     fn apply_focus(&mut self) {
         self.wl.set_keyboard_focus(self.wm.focus().map(to_wl));
-        let windows: Vec<LayoutWindowId> = self.wm.placements().iter().map(|p| p.window).collect();
+        let windows: Vec<WmWindowId> = self.wm.placements().iter().map(|p| p.window).collect();
         for window in windows {
             let hint = self.wm.configure_hint(window);
             let wanted = (hint.size, hint.activated);
@@ -1062,7 +1062,7 @@ impl<B: Backend> Compositor<B> {
                 Ok(json!({}))
             }
             Request::MoveWindow { window, x, y } => {
-                let id = proto_layout::WindowId(*window);
+                let id = crate::wm::WindowId(*window);
                 if self.wm.placement(id).is_none() {
                     return Err(format!("unknown window {window}"));
                 }
@@ -1073,7 +1073,7 @@ impl<B: Backend> Compositor<B> {
                 Ok(json!({}))
             }
             Request::FocusWindow { window } => {
-                let id = window.map(proto_layout::WindowId);
+                let id = window.map(crate::wm::WindowId);
                 if let Some(id) = id
                     && self.wm.placement(id).is_none()
                 {
@@ -1086,7 +1086,7 @@ impl<B: Backend> Compositor<B> {
                 Ok(json!({}))
             }
             Request::CloseWindow { window } => {
-                let id = proto_layout::WindowId(*window);
+                let id = crate::wm::WindowId(*window);
                 if self.wm.placement(id).is_none() {
                     return Err(format!("unknown window {window}"));
                 }
@@ -1096,7 +1096,7 @@ impl<B: Backend> Compositor<B> {
             Request::SetWindowOpacity { window, opacity } => {
                 if !self
                     .scene
-                    .set_window_opacity(proto_layout::WindowId(*window), *opacity)
+                    .set_window_opacity(crate::wm::WindowId(*window), *opacity)
                 {
                     return Err(format!("unknown window {window}"));
                 }
@@ -1146,7 +1146,7 @@ impl<B: Backend> Compositor<B> {
         let result = self
             .scene
             .control(command, &args)
-            .ok_or("this session does not run a script (start with --renderer script)")?;
+            .ok_or("this session does not run a script (it was started with --no-drawing)")?;
         self.sync_world();
         self.run_window_manager();
         self.schedule_redraw();
@@ -1176,7 +1176,7 @@ impl<B: Backend> Compositor<B> {
         let target = self
             .backend
             .render_target(id)
-            .ok_or("the output has no render target (no renderer?)")?;
+            .ok_or("the output has no render target (started with --no-drawing?)")?;
         let capture = self.scene.capture(target).map_err(|e| e.to_string())?;
         let encoded = capture.encoded;
         encoded.write_png(path).map_err(|e| e.to_string())?;
@@ -1289,7 +1289,7 @@ impl<B: Backend> Compositor<B> {
             "backend_status": self.backend.describe(),
             "frame_time_ms": self.frame_times.describe(),
             "socket": self.wl.socket_name(),
-            "renderer": scene["renderer"],
+            "gpu": scene["gpu"],
             "scene": scene["kind"],
             // Whether a frame is still owed to an output.
             "redraw_pending": self.outputs.iter().any(|o| o.dirty),

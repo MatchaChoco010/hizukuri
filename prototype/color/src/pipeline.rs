@@ -6,9 +6,9 @@
 //!                           └─ blend ─▶ EncodeTransform ─▶ output (encoded)
 //! ```
 //!
-//! Both transforms are plain data so the renderer can pass them to a shader
-//! unchanged. The `apply` methods here are the CPU reference that renderer
-//! output is compared against.
+//! Both transforms are plain data so they can be passed to a shader
+//! unchanged. The `apply` methods here are the CPU reference that what the
+//! GPU draws is compared against.
 //!
 //! # Luminance mapping
 //!

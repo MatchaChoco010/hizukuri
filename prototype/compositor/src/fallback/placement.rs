@@ -3,7 +3,7 @@
 //! [`STEP`] logical pixels right of and below the previous one, and after
 //! [`SLOTS`] windows the cascade starts over.
 
-use proto_layout::{OutputId, Placement, Point, Rect, WindowId};
+use crate::wm::{OutputId, Placement, Point, Rect, WindowId};
 
 /// Distance between the origins of consecutively placed windows.
 pub const STEP: i32 = 32;
@@ -43,49 +43,62 @@ impl Cascade {
 
 #[cfg(test)]
 mod tests {
-    use proto_layout::Layout;
-
     use super::*;
 
-    /// Places the same windows with the cascade and with the floating layout
-    /// of `proto-layout`, which uses the same rule. Outputs are set before
-    /// the window with the same index is added; `None` adds no output.
-    fn compare(outputs: &[Option<(OutputId, Rect)>], windows: u64) {
+    /// The place of the window in cascade slot `slot` (1 to [`SLOTS`]) on an
+    /// output with this origin.
+    fn at(origin: (i32, i32), slot: i32) -> Point {
+        Point::new(origin.0 + STEP * slot, origin.1 + STEP * slot)
+    }
+
+    #[test]
+    fn the_cascade_steps_down_and_right_from_the_output_origin() {
+        let output = (OutputId(1), Rect::new(0, 0, 1280, 720));
         let mut cascade = Cascade::new();
-        let mut layout = Layout::new();
-        let mut first: Option<(OutputId, Rect)> = None;
-        for id in 1..=windows {
-            if let Some(Some((output, rect))) = outputs.get(id as usize - 1) {
-                layout.set_output(*output, *rect);
-                first.get_or_insert((*output, *rect));
-            }
-            let expected = layout.add_window(WindowId(id));
-            assert_eq!(cascade.place(WindowId(id), first), expected, "window {id}");
+        for id in 1..=20 {
+            let placement = cascade.place(WindowId(id), Some(output));
+            let slot = (id as i32 - 1) % SLOTS + 1;
+            assert_eq!(
+                placement,
+                Placement {
+                    window: WindowId(id),
+                    output: Some(OutputId(1)),
+                    position: at((0, 0), slot),
+                    size: None,
+                },
+                "window {id}"
+            );
         }
     }
 
     #[test]
-    fn the_cascade_matches_the_floating_layout() {
-        let output = (OutputId(1), Rect::new(0, 0, 1280, 720));
-        compare(&[Some(output)], 20);
-    }
-
-    #[test]
     fn the_cascade_starts_at_the_first_output() {
+        // The caller passes the first output; the cascade follows its
+        // origin, also a negative one.
         let left = (OutputId(1), Rect::new(-1920, 100, 1920, 1080));
-        let right = (OutputId(2), Rect::new(0, 0, 1280, 720));
-        compare(&[Some(left), Some(right)], 12);
+        let mut cascade = Cascade::new();
+        for id in 1..=12 {
+            let placement = cascade.place(WindowId(id), Some(left));
+            let slot = (id as i32 - 1) % SLOTS + 1;
+            assert_eq!(placement.output, Some(OutputId(1)));
+            assert_eq!(placement.position, at((-1920, 100), slot), "window {id}");
+        }
     }
 
     #[test]
     fn without_an_output_the_cascade_starts_at_the_origin() {
-        let output = (OutputId(7), Rect::new(200, 300, 800, 600));
-        // Three windows before any output exists, then one appears.
-        compare(&[None, None, None, Some(output)], 10);
         let mut cascade = Cascade::new();
-        let placement = cascade.place(WindowId(1), None);
-        assert_eq!(placement.output, None);
-        assert_eq!(placement.position, Point::new(STEP, STEP));
+        // Three windows before any output exists, then one appears: the
+        // count goes on, the origin is the output's.
+        for id in 1..=3 {
+            let placement = cascade.place(WindowId(id), None);
+            assert_eq!(placement.output, None);
+            assert_eq!(placement.position, at((0, 0), id as i32));
+        }
+        let output = (OutputId(7), Rect::new(200, 300, 800, 600));
+        let placement = cascade.place(WindowId(4), Some(output));
+        assert_eq!(placement.output, Some(OutputId(7)));
+        assert_eq!(placement.position, at((200, 300), 4));
     }
 
     #[test]

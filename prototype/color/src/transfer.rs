@@ -4,10 +4,11 @@
 //! normalized linear (optical) value, where 1.0 is the maximum luminance of
 //! the primary color volume. [`TransferFunction::encode`] is the inverse.
 //!
-//! The same formulas are implemented in the fragment shaders of
-//! `proto-render`. [`TransferFunction::shader_id`] and
-//! [`TransferFunction::shader_param`] are the bridge between the two; keep
-//! them in sync with `shaders/color.glsl`.
+//! The same formulas are implemented in the shaders of the script layer
+//! (`prototype/compositor/scripts/color.luau`). [`TransferFunction::shader_id`]
+//! and [`TransferFunction::shader_param`] are the bridge between the two,
+//! handed to scripts by `hz.decode_transform` and `hz.encode_transform`;
+//! keep them in sync with that module.
 
 /// A parametric transfer function.
 #[derive(Debug, Clone, Copy, PartialEq)]

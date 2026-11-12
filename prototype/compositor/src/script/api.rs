@@ -11,13 +11,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::wm::WindowId;
 use mlua::{Lua, Table, Value};
 use proto_backend::OutputInfo;
 use proto_color::{
     AlphaMode, CompositeSpace, DecodeTransform, EncodeTransform, ImageDescription, Primaries,
 };
 use proto_gfx_core::{ErrorCode, GfxError, Gpu, Handle};
-use proto_layout::WindowId;
 use proto_wl::SurfaceRole;
 
 use super::Shared;
@@ -127,9 +127,9 @@ pub fn output_table(lua: &Lua, info: &OutputInfo) -> mlua::Result<Table> {
     t.set(
         "format",
         match info.format {
-            proto_render::OutputFormat::Rgba8Unorm => "rgba8unorm",
-            proto_render::OutputFormat::Rgba16Unorm => "rgba16unorm",
-            proto_render::OutputFormat::Bgra8Unorm => "bgra8unorm",
+            proto_backend::OutputFormat::Rgba8Unorm => "rgba8unorm",
+            proto_backend::OutputFormat::Rgba16Unorm => "rgba16unorm",
+            proto_backend::OutputFormat::Bgra8Unorm => "bgra8unorm",
         },
     )?;
     t.set("color", color_table(lua, &info.image_description)?)?;

@@ -16,7 +16,7 @@
   - 浮動小数点から UNORM への変換は、`f × (2^b − 1)` に近い 2 つの符号値の、どちらを返してもよい（最も近いほうへの丸めは推奨で、
     積がちょうど整数のときだけ、その値に決まる）。0.5 は、8 bit で 127 にも 128 にもなる。8 bit の値を比べるときは、±1 を許す。
   - scanout の画像の format modifier は、ドライバーごとに違う（LINEAR を出さず、tiled のものだけを出すドライバーがある）。
-    テストは、レンダラーが出せると答えた modifier を使い、LINEAR を前提にしない。
+    テストは、描くもの（スクリプトの描画）が書き出せると答えた modifier を使い、LINEAR を前提にしない。
 - **回帰を防ぐ確認は、数値の検査にする。** 画像を見て確かめたものは、次に崩れたときに気づけない。
   見て確かめたものは、状態か画素の検査に直して、テストにする。
 - **テストの合否を、機械の速さに依存させない。** 検査は、依存を最適化しないビルドで、遅い機械の上でも走る。
@@ -45,7 +45,7 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | `HIZUKURI_TEST_REAL_CLIENTS` | `weston-terminal,wl-clipboard,foot,script-tiles` | 実際のアプリを使うテストで、使うもの。並べたものに要るプログラムが `PATH` に無ければ、失敗する。並べていないもののテストは、飛ばす |
 | `HIZUKURI_TEST_SKIP_UDMABUF` | なし | `1` にすると、`/dev/udmabuf` が要るテストを外す。設定しなければ、`/dev/udmabuf` を開けないときに、それらのテストは失敗する。外したことは、`tools/ci.sh` の出力に出る |
 | `HIZUKURI_TEST_VALIDATION` | なし | `1` にすると、validation layer を有効にして走らせ、エラーが 0 であることも確かめる |
-| `HIZUKURI_ICD_DIRS` | なし | Vulkan のドライバーの manifest を探すディレクトリ（`:` で区切る）。システムの場所より先に探す |
+| `HIZUKURI_ICD_DIRS` | なし | テストが Vulkan のドライバーの manifest を探すディレクトリ（`:` で区切る）。システムの場所より先に探す。探すのは、テストの共通の部品（`prototype/compositor/tests/common/icd.rs` の `find_icd_manifest`）である |
 | `CARGO_BUILD_JOBS` | `8` | 並列にビルドする数 |
 
 - Vulkan を使うテストは、`HIZUKURI_TEST_DEVICES` に並べたデバイスのそれぞれで走る。
@@ -66,20 +66,19 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | --- | --- | --- | --- |
 | 書式と lint | `tools/ci.sh lint` | `cargo fmt --check`、`cargo clippy` | 不要 |
 | 色の計算 | `proto-color` の単体テスト | 原色の行列と transfer function を、規格の値と比べる。往復で、元の値に戻ること | 不要 |
-| 配置 | `proto-layout` の単体テスト | 個別の場面と、proptest による不変条件 | 不要 |
-| fallback | `proto-compositor` の `fallback/` の単体テスト | ずらした配置と、ウィンドウの表（`fallback::Windows`）を、`proto-layout` の `Layout` と比べる。当たり判定 | 不要 |
+| fallback | `proto-compositor` の `fallback/` の単体テスト | ずらした配置の位置と、2 つの出力の上での、ウィンドウと出力の出来事の列に対する、ウィンドウの表（`fallback::Windows`）の振る舞いを、具体的な期待値で確かめる。当たり判定 | 不要 |
 | プロトコル | `prototype/compositor/tests/protocol.rs`、`tests/input_protocols.rs`、`proto-wl` の `tests/server.rs`、`tests/ime.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。何も描かない `NullScene` と、fallback のウィンドウ管理（`Compositor::new`）。configure、focus、キー、ポインター、バッファの解放、subsurface。相対的な動き、ポインターの制約、primary selection、data control。入力メソッド（検証用のクライアントが、入力欄のあるアプリと IME の両方を演じる）: activate と deactivate、grab、preedit と commit、仮想キーボード、IME が落ちたとき、候補ウィンドウの位置、grab の間のメニュー | 不要 |
 | バックエンドの取り決め | `prototype/compositor/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。`NullScene` と、fallback のウィンドウ管理。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
 | KMS のロジック | `proto-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
-| レンダラー | `prototype/render/tests/gpu.rs` | 表面と出力の image description の組み合わせを描き、CPU の参照計算と比べる | 要る |
-| KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイスと、Rust のレンダラー、スクリプトの描画のそれぞれをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する（tiled の modifier だけを出す場合は、スクリプトの描画を包んで作る）。模擬のデバイスの上の自己診断（`PatternRenderer`） | 要る |
-| headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。どの場面も、2 回走る。比較の相手として明示した Rust の実装（`--renderer rust --wm rust`）と、スクリプトの描画（描くだけのプロジェクトで、配置は fallback） | 要る |
-| スクリプトの層 | `prototype/compositor/tests/script.rs` | 2 つのレンダラーの画素の比較（Rust のレンダラーは、明示して選ぶ）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し、入力メソッドの候補ウィンドウ | 要る |
+| KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核と KMS のバックエンドを、模擬のデバイスの上で、スクリプトの描画とつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、スクリプトの描画が書き出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する（スクリプトの描画が tiled の modifier だけを出す場合は、`TiledOnly` で作る）。模擬のデバイスの上の自己診断（`PatternRenderer`）。テストが Vulkan のドライバーの manifest を探す順 | 要る |
+| headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。どの場面も、Vulkan のデバイス（`HIZUKURI_TEST_DEVICES`）ごとに 1 回走る。スクリプトが描く（描くだけのプロジェクトで、配置は fallback）。色は、`proto-color` の CPU の参照計算と比べる | 要る |
+| スクリプトの層 | `prototype/compositor/tests/script.rs` | 混ざった場面を 4 つの出力に描き、CPU の参照計算と比べる（下の「色の検証」）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し、入力メソッドの候補ウィンドウ | 要る |
 | スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み。`gfx-core` のテストの多くは、shader を、源の入口と、SPIR-V の入口（naga が書いた SPIR-V）の両方で作って、同じ結果になることを確かめる。SPIR-V の入口の、添字の切り詰めと、拒むべき module と、1 語ずつ書き換えた module（`spirv_input.rs`。全 bit を試す版は `--ignored`） | 要る |
 | 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。スクリプトの描画（`real_clients.rs` は、描くだけのプロジェクト）。popup と grab、selection、fractional-scale、dmabuf | 要る |
 
-実行バイナリを起動するテスト（`prototype/compositor/tests/common/mod.rs` の `Session`）は、`--wm` か `--script` を指定しない限り、
+実行バイナリを起動するテスト（`prototype/compositor/tests/common/mod.rs` の `Session`）は、`Session::start` では、テストが `--script` を指定しない限り、
 描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）を `--script` に渡して起動する。ウィンドウは、テストが置いた場所に残る。
+`Session::start_builtin` は、組み込みのプロジェクト（ウィンドウをタイルに並べる）で起動する。
 `session` を読んで、タイルに並べないはずのテスト用のプロジェクトは、`session` のモジュールとして、描くだけのプロジェクトの `session.luau` を持つ。
 
 検証用のクライアント（`tools/test-client`）は、内容の決まったバッファを出す。フォントやテーマで、結果が変わらない。
@@ -102,12 +101,14 @@ Vulkan の部分は、`PATH` の `vulkaninfo` が、その時の環境で見る�
 
 - `proto-color` は、純粋な計算である。原色から求めた行列と、transfer function を、規格の値と比べる。
   CPU の参照計算（デコード、合成、エンコード、量子化）も、ここにある。
-- レンダラーのテストは、表面の image description と、出力の image description の組み合わせを変えて、何通りも描く。
+- スクリプトの描画のテスト（`script.rs` の `a_mixed_scene_matches_the_cpu_reference`）は、1 つの場面を、4 つの出力に描く。
+  場面は、subsurface を持つ不透明なウィンドウ、その上に重なる、不透明度を付けた半透明の Display P3 のウィンドウ、カーソルである。
+  出力は、sRGB の gamma 2.2、Display P3 の 16 bit、BT.2100 PQ の 16 bit、scale 1.5 の 4 つである。
   読み戻すのは、合成用の浮動小数点のバッファ（linear light）と、出力の符号化後の画像の 2 つである。
   - 浮動小数点のバッファは、参照計算との差（絶対誤差と相対誤差）で判定する。
   - 符号化後の画像は、参照計算を量子化した値との差が、符号値で決まった範囲に入ることで判定する。
 - headless の全体のテストは、検証用のクライアントが単色のバッファを出し、表面の image description を、制御口の `set_surface_color` で指定する
-  （`wp_color_management_v1` は、未実装である）。指定した情報が、レンダラーまで届いていることを、出力の画素で確かめる。
+  （`wp_color_management_v1` は、未実装である）。指定した情報が、スクリプトの描画まで届いていることを、出力の画素で確かめる。
 
 ### KMS のロジックのテスト
 
@@ -158,7 +159,7 @@ VM の作りと、試験の部の一覧は、[検証用の VM](vm-environment.md
 | VRR | virtio-gpu にも vkms にも、無い |
 | ティアリング（async page flip） | virtio-gpu には、無い。async の commit を拒否する条件は、ドライバーごとに違う |
 | direct scanout | どの format と modifier のバッファを、どの plane に載せられるかは、ドライバーと GPU ごとに違う |
-| GPU のドライバーでの、Vulkan から KMS への経路 | VM の検査は、GPU を使わない。VM に Venus のデバイスを見せられるが、`VK_EXT_descriptor_heap` を持たないので、描画に使えない |
+| GPU のドライバーでの、Vulkan から KMS への経路 | VM の検査は、GPU を使わない。ゲストは、いつも CPU（lavapipe）で描く |
 | page flip の実際の時刻と、遅延 | VM の時刻は、外側の機械の都合で揺れる |
 | 複数の GPU | VM には、GPU が 1 つしか無い |
 | 画面に出た光（HDR の見え方、ティアリングの見え方、色） | 取り込む手段が無い |

@@ -11,10 +11,48 @@
 //! [`ScriptWm`](crate::script::ScriptWm) asks a script.
 //! [`fallback::Windows`](crate::fallback::Windows) is what the core does
 //! where nobody else decides; it runs without a script and without a GPU.
-//! [`proto_layout::Layout`], the floating layout written in Rust, is only
-//! used when asked for (`--wm rust`).
+//!
+//! This module also holds the vocabulary both use: window and output ids,
+//! [`Placement`] and [`ConfigureHint`], on the integer logical geometry of
+//! [`crate::geometry`].
 
-use proto_layout::{ConfigureHint, Layout, OutputId, Placement, Point, Rect, Size, WindowId};
+pub use crate::geometry::{Point, Rect, Size};
+
+/// Identifies a window. Allocated by the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WindowId(pub u64);
+
+/// Identifies an output. Allocated by the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OutputId(pub u64);
+
+/// Where a window is, logically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement {
+    pub window: WindowId,
+    /// The output the window was placed on, if any output exists.
+    pub output: Option<OutputId>,
+    /// Position of the window geometry in global logical coordinates.
+    pub position: Point,
+    /// Size of the window geometry. `None` until the window reports one.
+    pub size: Option<Size>,
+}
+
+impl Placement {
+    /// The rectangle the window occupies, once its size is known.
+    pub fn rect(&self) -> Option<Rect> {
+        self.size.map(|size| Rect::from_parts(self.position, size))
+    }
+}
+
+/// What a window is to be told when it is configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigureHint {
+    /// The size it is asked to have. `None` lets the client choose.
+    pub size: Option<Size>,
+    /// Whether the window has the focus.
+    pub activated: bool,
+}
 
 use crate::scene::Hit;
 
@@ -134,55 +172,5 @@ pub trait WindowManager {
     fn configure_hint(&self, id: WindowId) -> ConfigureHint;
     fn take_requests(&mut self) -> Vec<WmRequest> {
         Vec::new()
-    }
-}
-
-impl WindowManager for Layout {
-    fn name(&self) -> &'static str {
-        "rust-floating"
-    }
-
-    fn set_output(&mut self, id: OutputId, rect: Rect) {
-        Layout::set_output(self, id, rect)
-    }
-
-    fn remove_output(&mut self, id: OutputId) {
-        Layout::remove_output(self, id)
-    }
-
-    fn add_window(&mut self, id: WindowId) -> Placement {
-        Layout::add_window(self, id)
-    }
-
-    fn remove_window(&mut self, id: WindowId) {
-        Layout::remove_window(self, id)
-    }
-
-    fn set_window_size(&mut self, id: WindowId, size: Size) -> bool {
-        Layout::set_window_size(self, id, size)
-    }
-
-    fn move_window(&mut self, id: WindowId, position: Point) -> bool {
-        Layout::move_window(self, id, position)
-    }
-
-    fn focus_window(&mut self, id: Option<WindowId>) -> bool {
-        Layout::focus_window(self, id)
-    }
-
-    fn focus(&self) -> Option<WindowId> {
-        Layout::focus(self)
-    }
-
-    fn placement(&self, id: WindowId) -> Option<Placement> {
-        Layout::placement(self, id)
-    }
-
-    fn placements(&self) -> Vec<Placement> {
-        Layout::placements(self).to_vec()
-    }
-
-    fn configure_hint(&self, id: WindowId) -> ConfigureHint {
-        Layout::configure_hint(self, id)
     }
 }

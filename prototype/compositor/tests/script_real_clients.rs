@@ -14,9 +14,9 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{Device, Drawing, Gpu, Session, TIMEOUT, real_client_wanted as wanted};
+use common::{Device, Gpu, Session, TIMEOUT, real_client_wanted as wanted};
 use proto_compositor::control::Request;
-use proto_render::EncodedImage;
+use proto_compositor::image::EncodedImage;
 use serde_json::{Value, json};
 
 fn wait_state<T>(
@@ -46,7 +46,7 @@ fn vkcube_is_shown_through_imported_dmabufs() {
     if !wanted("vkcube", &["vkcube"]) {
         return;
     }
-    let device = Device::new(Gpu::Hardware, Drawing::Script);
+    let device = Device::new(Gpu::Hardware);
     assert!(
         device.enabled(),
         "vkcube needs the hardware device (gpu in HIZUKURI_TEST_DEVICES)"
@@ -110,7 +110,7 @@ fn vkcube_is_shown_through_imported_dmabufs() {
     assert_eq!(state["script"]["failures"], 0);
     println!("vkcube: frame time {}", state["frame_time_ms"]["total"]);
     session.assert_script_healthy();
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -188,8 +188,8 @@ const KEY_L: u32 = 38;
 const KEY_LEFTSHIFT: u32 = 42;
 const KEY_LEFTMETA: u32 = 125;
 
-/// Real terminals, placed by the tiling script and drawn by the script
-/// renderer: they are told their size and take it, the keys of the window
+/// Real terminals, placed by the tiling script and drawn by the script:
+/// they are told their size and take it, the keys of the window
 /// manager move the focus and swap them, typing reaches the focused one,
 /// and all of them live through a reload and through the fallback.
 ///
@@ -199,11 +199,11 @@ const KEY_LEFTMETA: u32 = 125;
 fn terminals_in_tiles(device: Device) {
     let hardware = device.gpu == Gpu::Hardware;
     let alacritty = hardware && wanted("alacritty", &["alacritty"]);
-    let mut args = vec!["--output-size", "1280x720", "--wm", "script"];
+    let mut args = vec!["--output-size", "1280x720"];
     if hardware {
         args.extend(["--dmabuf", "gpu"]);
     }
-    let mut session = Session::start("real-tiles", device, &args);
+    let mut session = Session::start_builtin("real-tiles", device, &args);
 
     // A stand-in for the shell: known text, then an echo of what is typed.
     let shell = session.output_dir.join("fake-shell.sh");
@@ -378,7 +378,7 @@ fn terminals_in_tiles(device: Device) {
         device.name(),
         state["frame_time_ms"]["total"]
     );
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
     drop(clients);
 }
@@ -386,7 +386,7 @@ fn terminals_in_tiles(device: Device) {
 #[test]
 fn terminals_are_tiled_on_the_hardware_device() {
     if wanted("script-tiles", &["weston-terminal"]) {
-        let device = Device::new(Gpu::Hardware, Drawing::Script);
+        let device = Device::new(Gpu::Hardware);
         if device.enabled() {
             terminals_in_tiles(device);
         } else {
@@ -398,7 +398,7 @@ fn terminals_are_tiled_on_the_hardware_device() {
 #[test]
 fn terminals_are_tiled_on_lavapipe() {
     if wanted("script-tiles", &["weston-terminal"]) {
-        let device = Device::new(Gpu::Lavapipe, Drawing::Script);
+        let device = Device::new(Gpu::Lavapipe);
         if device.enabled() {
             terminals_in_tiles(device);
         } else {

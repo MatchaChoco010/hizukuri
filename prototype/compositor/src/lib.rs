@@ -15,6 +15,9 @@
 //!   screen, inject input, dump state, quit.
 //! - [`fallback`]: the least drawing, placement and hit testing the core
 //!   does to keep a session usable while the script cannot.
+//! - [`targets`]: the output images on the GPU API of `proto-gfx-core`.
+//! - [`image`]: images read back from what draws, as PNG and OpenEXR.
+//! - [`geometry`]: integer logical geometry for window management.
 //!
 //! - [`safety`]: telling a virtual machine from real hardware, and a
 //!   watchdog for a hung main loop.
@@ -27,6 +30,8 @@
 pub mod compositor;
 pub mod control;
 pub mod fallback;
+pub mod geometry;
+pub mod image;
 pub mod safety;
 pub mod scene;
 pub mod script;

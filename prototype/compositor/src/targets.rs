@@ -12,10 +12,10 @@
 
 use std::collections::HashMap;
 
-use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, Handle, ImageDesc, ImageUsage};
-use proto_render::{
-    DRM_FORMAT_XRGB8888, DmabufPlane, OutputFormat, RenderError, TargetDesc, TargetId,
+use proto_backend::{
+    DRM_FORMAT_XRGB8888, DmabufPlane, OutputFormat, TargetDesc, TargetError, TargetId,
 };
+use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, Handle, ImageDesc, ImageUsage};
 
 /// The image format of an output format.
 pub fn output_format(format: OutputFormat) -> Format {
@@ -26,8 +26,8 @@ pub fn output_format(format: OutputFormat) -> Format {
     }
 }
 
-fn provider_error(context: &str, error: GfxError) -> RenderError {
-    RenderError::Provider(format!("{context}: {error}"))
+fn provider_error(context: &str, error: GfxError) -> TargetError {
+    TargetError::Provider(format!("{context}: {error}"))
 }
 
 /// The image(s) of one output target.
@@ -60,9 +60,9 @@ impl OutputImage {
     }
 
     /// The image of the last frame drawn.
-    pub fn shown(&self) -> Result<Handle, RenderError> {
+    pub fn shown(&self) -> Result<Handle, TargetError> {
         if !self.rendered {
-            return Err(RenderError::TargetNotRendered);
+            return Err(TargetError::TargetNotRendered);
         }
         Ok(self.images[self.front])
     }
@@ -113,8 +113,8 @@ impl OutputImages {
 
     /// An offscreen target ([`TargetProvider::create_target`]).
     ///
-    /// [`TargetProvider::create_target`]: proto_render::TargetProvider::create_target
-    pub fn create(&mut self, gpu: &mut Gpu, desc: &TargetDesc) -> Result<TargetId, RenderError> {
+    /// [`TargetProvider::create_target`]: proto_backend::TargetProvider::create_target
+    pub fn create(&mut self, gpu: &mut Gpu, desc: &TargetDesc) -> Result<TargetId, TargetError> {
         let mut images = Vec::new();
         for _ in 0..2 {
             let image = gpu
@@ -144,22 +144,22 @@ impl OutputImages {
     /// A target exported for scanout
     /// ([`TargetProvider::create_scanout_target`]).
     ///
-    /// [`TargetProvider::create_scanout_target`]: proto_render::TargetProvider::create_scanout_target
+    /// [`TargetProvider::create_scanout_target`]: proto_backend::TargetProvider::create_scanout_target
     pub fn create_scanout(
         &mut self,
         gpu: &mut Gpu,
         desc: &TargetDesc,
         allowed_modifiers: &[u64],
-    ) -> Result<(TargetId, DmabufPlane), RenderError> {
+    ) -> Result<(TargetId, DmabufPlane), TargetError> {
         if desc.format != OutputFormat::Bgra8Unorm {
-            return Err(RenderError::UnsupportedFormat(
+            return Err(TargetError::UnsupportedFormat(
                 "scanout targets must be bgra8 (DRM XRGB8888)",
             ));
         }
         let (image, plane) = gpu
             .create_scanout_image(desc.width, desc.height, allowed_modifiers)
             .map_err(|e| match e.code {
-                ErrorCode::Unsupported => RenderError::ScanoutUnsupported,
+                ErrorCode::Unsupported => TargetError::ScanoutUnsupported,
                 _ => provider_error("creating a scanout image", e),
             })?;
         gpu.protect(image);
@@ -187,22 +187,22 @@ impl OutputImages {
     }
 
     /// The image of the last frame drawn into a target.
-    pub fn shown(&self, id: TargetId) -> Result<Handle, RenderError> {
-        self.get(id).ok_or(RenderError::UnknownTarget)?.shown()
+    pub fn shown(&self, id: TargetId) -> Result<Handle, TargetError> {
+        self.get(id).ok_or(TargetError::UnknownTarget)?.shown()
     }
 
     /// Copies the last frame drawn into a target to `destination`
     /// ([`TargetProvider::read_encoded_into`]). The GPU frame that drew it
     /// must have ended.
     ///
-    /// [`TargetProvider::read_encoded_into`]: proto_render::TargetProvider::read_encoded_into
+    /// [`TargetProvider::read_encoded_into`]: proto_backend::TargetProvider::read_encoded_into
     pub fn read_into(
         &self,
         gpu: &mut Gpu,
         id: TargetId,
         destination: &mut [u8],
         stride: usize,
-    ) -> Result<(), RenderError> {
+    ) -> Result<(), TargetError> {
         let image = self.shown(id)?;
         gpu.read_image_into(image, destination, stride)
             .map_err(|e| provider_error("reading an output image", e))

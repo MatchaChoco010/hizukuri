@@ -9,7 +9,7 @@
 //! # The seam
 //!
 //! [`Scene`] is the boundary between the compositor core and whatever
-//! draws. The core never touches a renderer directly; it goes through three
+//! draws. The core never draws itself; it goes through three
 //! ports:
 //!
 //! 1. **Contents in**: [`Scene::surface_contents`] hands over the pixels a
@@ -22,25 +22,20 @@
 //!    scene knows where things were drawn.
 //!
 //! `script::ScriptScene` is the implementation that draws: drawing
-//! assembled by a script, behind these three ports. [`NullScene`] draws
-//! nothing and needs no GPU (protocol tests, `--no-renderer`).
-//! [`FlatScene`] draws windows as flat rectangles with the Rust renderer in
-//! `proto-render`; it is only used when asked for (`--renderer rust`), to
-//! compare the script's drawing against.
+//! assembled by a script, behind these three ports, with the core's
+//! fallback taking over while the script cannot. [`NullScene`] draws
+//! nothing and needs no GPU (protocol tests, `--no-drawing`).
 
 use std::collections::HashMap;
 
-use proto_backend::OutputInfo;
+use proto_backend::{OutputInfo, TargetError, TargetId, Targets};
 use proto_color::{AlphaMode, ImageDescription};
-use proto_layout::WindowId;
-use proto_render::{
-    Background, CompositeImage, Element, EncodedImage, Frame, PixelFormat, RenderError, Renderer,
-    TargetId, Targets, TextureDesc, TextureId,
-};
-use proto_wl::{BufferContents, BufferTransform, BufferUpdate, DamageRect, ShmFormat, SurfaceId};
+use proto_wl::{BufferContents, BufferTransform, BufferUpdate, DamageRect, SurfaceId};
 use serde_json::{Value, json};
 
 use crate::fallback;
+use crate::image::{CompositeImage, EncodedImage};
+use crate::wm::WindowId;
 
 /// How a window is drawn.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -169,9 +164,9 @@ pub enum SceneRequest {
 #[derive(Debug, thiserror::Error)]
 pub enum SceneError {
     #[error(transparent)]
-    Render(#[from] RenderError),
-    #[error("the scene has no renderer")]
-    NoRenderer,
+    Target(#[from] TargetError),
+    #[error("the scene does not draw")]
+    NotDrawing,
     /// A client's buffer could not be read. The surface shows nothing; the
     /// session goes on.
     #[error("unreadable buffer: {0}")]
@@ -304,7 +299,7 @@ pub trait Scene {
     /// Reads back the last frame drawn into a target.
     fn capture(&mut self, target: TargetId) -> Result<Capture, SceneError>;
 
-    /// Describes the scene for state dumps (renderer, device).
+    /// Describes the scene for state dumps (kind, GPU device, script).
     fn describe(&self) -> Value;
 
     /// Handles a control request that only this kind of scene understands.
@@ -319,7 +314,7 @@ pub trait Scene {
 /// It keeps the visual state (windows at their logical position, their
 /// opacity) and answers hit tests with the fallback's
 /// ([`fallback::hit_test`]), so everything but drawing works: protocol
-/// tests, and the compositor started with `--no-renderer`. Contents are
+/// tests, and the compositor started with `--no-drawing`. Contents are
 /// not kept.
 #[derive(Debug, Default)]
 pub struct NullScene {
@@ -428,359 +423,14 @@ impl Scene for NullScene {
     }
 
     fn capture(&mut self, _target: TargetId) -> Result<Capture, SceneError> {
-        Err(SceneError::NoRenderer)
+        Err(SceneError::NotDrawing)
     }
 
     fn describe(&self) -> Value {
         json!({
             "kind": "none",
-            "renderer": Value::Null,
+            "gpu": Value::Null,
             "frames_rendered": 0,
-        })
-    }
-}
-
-struct SurfaceTexture {
-    id: TextureId,
-    desc: TextureDesc,
-}
-
-/// The verification scene: windows as flat rectangles at their logical
-/// position, drawn with `proto-render`.
-///
-/// It can run without a renderer. It then keeps the visual state and
-/// answers hit tests, but draws nothing; that is enough for protocol tests.
-pub struct FlatScene {
-    renderer: Option<Renderer>,
-    windows: HashMap<WindowId, VisualWindow>,
-    textures: HashMap<SurfaceId, SurfaceTexture>,
-    /// The built-in arrow, created when it is first drawn.
-    arrow: Option<TextureId>,
-    frames: u64,
-}
-
-impl FlatScene {
-    pub fn new(renderer: Option<Renderer>) -> Self {
-        Self {
-            renderer,
-            windows: HashMap::new(),
-            textures: HashMap::new(),
-            arrow: None,
-            frames: 0,
-        }
-    }
-
-    /// The texture of the built-in arrow cursor.
-    fn arrow_texture(&mut self) -> Result<Option<TextureId>, SceneError> {
-        let Some(renderer) = &mut self.renderer else {
-            return Ok(None);
-        };
-        if self.arrow.is_none() {
-            let (width, height, pixels) = arrow_image();
-            let id = renderer.create_texture(&TextureDesc {
-                width,
-                height,
-                format: PixelFormat::Bgra8,
-                image_description: proto_wl::DEFAULT_SURFACE_IMAGE_DESCRIPTION,
-                alpha_mode: AlphaMode::PremultipliedElectrical,
-            })?;
-            renderer.upload_texture(id, &pixels, width * 4)?;
-            self.arrow = Some(id);
-        }
-        Ok(self.arrow)
-    }
-
-    fn drop_texture(&mut self, surface: SurfaceId) {
-        if let Some(texture) = self.textures.remove(&surface)
-            && let Some(renderer) = &mut self.renderer
-        {
-            renderer.destroy_texture(texture.id);
-        }
-    }
-}
-
-impl Scene for FlatScene {
-    fn window_added(&mut self, window: WindowId, position: (i32, i32)) {
-        self.windows.insert(
-            window,
-            VisualWindow {
-                position: (position.0 as f64, position.1 as f64),
-                opacity: 1.0,
-            },
-        );
-    }
-
-    fn window_moved(&mut self, window: WindowId, position: (i32, i32)) {
-        // Without animations the visual position follows at once.
-        if let Some(visual) = self.windows.get_mut(&window) {
-            visual.position = (position.0 as f64, position.1 as f64);
-        }
-    }
-
-    fn window_removed(&mut self, window: WindowId) {
-        self.windows.remove(&window);
-    }
-
-    fn set_window_opacity(&mut self, window: WindowId, opacity: f32) -> bool {
-        match self.windows.get_mut(&window) {
-            Some(visual) => {
-                visual.opacity = opacity.clamp(0.0, 1.0);
-                true
-            }
-            None => false,
-        }
-    }
-
-    fn visual(&self, window: WindowId) -> Option<VisualWindow> {
-        self.windows.get(&window).copied()
-    }
-
-    fn surface_contents(
-        &mut self,
-        surface: SurfaceId,
-        contents: &BufferContents,
-        _damage: &[DamageRect],
-        image_description: ImageDescription,
-        alpha_mode: AlphaMode,
-    ) -> Result<(), SceneError> {
-        if self.renderer.is_none() {
-            return Ok(());
-        }
-        let desc = TextureDesc {
-            width: contents.width,
-            height: contents.height,
-            format: match contents.format {
-                ShmFormat::Argb8888 => PixelFormat::Bgra8,
-                ShmFormat::Xrgb8888 => PixelFormat::Bgrx8,
-                ShmFormat::Abgr8888 => PixelFormat::Rgba8,
-                ShmFormat::Xbgr8888 => PixelFormat::Rgbx8,
-            },
-            image_description,
-            alpha_mode,
-        };
-        let reusable = self.textures.get(&surface).is_some_and(|t| {
-            (t.desc.width, t.desc.height, t.desc.format) == (desc.width, desc.height, desc.format)
-        });
-        if !reusable {
-            self.drop_texture(surface);
-        }
-        let renderer = self.renderer.as_mut().expect("checked above");
-        let texture = match self.textures.get_mut(&surface) {
-            Some(texture) => {
-                if (texture.desc.image_description, texture.desc.alpha_mode)
-                    != (image_description, alpha_mode)
-                {
-                    renderer.set_texture_color(texture.id, image_description, alpha_mode)?;
-                    texture.desc = desc;
-                }
-                texture
-            }
-            None => {
-                let id = renderer.create_texture(&desc)?;
-                self.textures
-                    .entry(surface)
-                    .or_insert(SurfaceTexture { id, desc })
-            }
-        };
-        renderer.upload_texture(texture.id, &contents.data, contents.stride)?;
-        Ok(())
-    }
-
-    fn surface_removed(&mut self, surface: SurfaceId) {
-        self.drop_texture(surface);
-    }
-
-    fn has_contents(&self, surface: SurfaceId) -> bool {
-        self.textures.contains_key(&surface)
-    }
-
-    fn draw(
-        &mut self,
-        output: &OutputInfo,
-        target: Option<TargetId>,
-        background: [f32; 3],
-        windows: &[WindowView],
-        cursor: Option<&CursorView>,
-    ) -> Result<DrawStatus, SceneError> {
-        let arrow = match cursor {
-            Some(CursorView {
-                image: CursorImage::Default,
-                ..
-            }) => self.arrow_texture()?,
-            _ => None,
-        };
-        let (Some(renderer), Some(target)) = (&mut self.renderer, target) else {
-            return Ok(DrawStatus::Drawn);
-        };
-        let scale = output.scale as f32;
-        let origin = output.position;
-
-        let mut elements = Vec::new();
-        for window in windows {
-            let Some(visual) = self.windows.get(&window.window) else {
-                continue;
-            };
-            for surface in &window.surfaces {
-                let (Some(texture), Some(source)) =
-                    (self.textures.get_mut(&surface.surface), surface.source)
-                else {
-                    continue;
-                };
-                // The meaning of the pixels can change without new pixels.
-                if (texture.desc.image_description, texture.desc.alpha_mode)
-                    != (surface.image_description, surface.alpha_mode)
-                {
-                    renderer.set_texture_color(
-                        texture.id,
-                        surface.image_description,
-                        surface.alpha_mode,
-                    )?;
-                    texture.desc.image_description = surface.image_description;
-                    texture.desc.alpha_mode = surface.alpha_mode;
-                }
-                elements.push(Element {
-                    texture: texture.id,
-                    dst: proto_render::Rect::new(
-                        (visual.position.0 as f32 + surface.offset.0 as f32 - origin.0 as f32)
-                            * scale,
-                        (visual.position.1 as f32 + surface.offset.1 as f32 - origin.1 as f32)
-                            * scale,
-                        surface.size.0 as f32 * scale,
-                        surface.size.1 as f32 * scale,
-                    ),
-                    src: Some(proto_render::Rect::new(
-                        source.0 as f32,
-                        source.1 as f32,
-                        source.2 as f32,
-                        source.3 as f32,
-                    )),
-                    opacity: visual.opacity,
-                });
-            }
-        }
-
-        // The cursor goes on top, at the pointer position. It is drawn at
-        // its logical size times the output scale, like any surface.
-        if let Some(cursor) = cursor {
-            let place = |offset: (f64, f64), size: (f64, f64)| {
-                proto_render::Rect::new(
-                    ((cursor.position.0 + offset.0 - origin.0 as f64) as f32 * scale).round(),
-                    ((cursor.position.1 + offset.1 - origin.1 as f64) as f32 * scale).round(),
-                    size.0 as f32 * scale,
-                    size.1 as f32 * scale,
-                )
-            };
-            match &cursor.image {
-                CursorImage::Default => {
-                    if let Some(texture) = arrow {
-                        elements.push(Element {
-                            texture,
-                            // The tip of the arrow is its top left pixel.
-                            dst: place((0.0, 0.0), (ARROW_WIDTH as f64, ARROW_HEIGHT as f64)),
-                            src: None,
-                            opacity: 1.0,
-                        });
-                    }
-                }
-                CursorImage::Surfaces(surfaces) => {
-                    for surface in surfaces {
-                        let (Some(texture), Some(source)) =
-                            (self.textures.get(&surface.surface), surface.source)
-                        else {
-                            continue;
-                        };
-                        elements.push(Element {
-                            texture: texture.id,
-                            dst: place(
-                                (surface.offset.0 as f64, surface.offset.1 as f64),
-                                (surface.size.0 as f64, surface.size.1 as f64),
-                            ),
-                            src: Some(proto_render::Rect::new(
-                                source.0 as f32,
-                                source.1 as f32,
-                                source.2 as f32,
-                                source.3 as f32,
-                            )),
-                            opacity: 1.0,
-                        });
-                    }
-                }
-            }
-        }
-
-        let [r, g, b] = background;
-        renderer.render(
-            target,
-            &Frame {
-                background: Background {
-                    color: [r, g, b, 1.0],
-                    // The background is given like content without color
-                    // information.
-                    image_description: proto_wl::DEFAULT_SURFACE_IMAGE_DESCRIPTION,
-                },
-                elements: &elements,
-            },
-        )?;
-        self.frames += 1;
-        Ok(DrawStatus::Drawn)
-    }
-
-    fn targets(&mut self) -> Targets<'_> {
-        proto_render::targets_of(self.renderer.as_mut())
-    }
-
-    fn hit_test(
-        &self,
-        point: (f64, f64),
-        windows: &[WindowView],
-        accepts_input: &dyn Fn(SurfaceId, f64, f64) -> bool,
-    ) -> Option<Hit> {
-        fallback::hit_test(
-            |window| self.windows.get(&window).map(|v| v.position),
-            point,
-            windows,
-            accepts_input,
-        )
-    }
-
-    fn locate(
-        &self,
-        point: (f64, f64),
-        surface: SurfaceId,
-        windows: &[WindowView],
-    ) -> Option<(f64, f64)> {
-        fallback::locate(
-            |window| self.windows.get(&window).map(|v| v.position),
-            point,
-            surface,
-            windows,
-        )
-    }
-
-    fn capture(&mut self, target: TargetId) -> Result<Capture, SceneError> {
-        let renderer = self.renderer.as_mut().ok_or(SceneError::NoRenderer)?;
-        Ok(Capture {
-            encoded: renderer.read_encoded(target)?,
-            composite: Some(renderer.read_composite(target)?),
-        })
-    }
-
-    fn describe(&self) -> Value {
-        let renderer = self.renderer.as_ref().map(|r| {
-            let info = r.device_info();
-            json!({
-                "device": info.name,
-                "kind": info.kind.as_str(),
-                "driver": info.driver_name,
-                "driver_info": info.driver_info,
-                "validation_errors": r.validation_errors(),
-                "validation_warnings": r.validation_warnings(),
-            })
-        });
-        json!({
-            "kind": "flat",
-            "renderer": renderer,
-            "frames_rendered": self.frames,
         })
     }
 }
@@ -930,9 +580,9 @@ mod tests {
         assert!(scene.targets().is_none());
         assert!(matches!(
             scene.capture(TargetId::from_raw(1)),
-            Err(SceneError::NoRenderer)
+            Err(SceneError::NotDrawing)
         ));
-        assert_eq!(scene.describe()["renderer"], Value::Null);
+        assert_eq!(scene.describe()["gpu"], Value::Null);
         assert_eq!(scene.describe()["frames_rendered"], 0);
         assert!(!scene.has_contents(SurfaceId(1)));
     }

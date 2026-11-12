@@ -12,11 +12,11 @@ use std::time::Duration;
 use proto_backend::{
     Backend, BackendError, BackendEvent, OutputId, OutputInfo, Presentation, monotonic_now,
 };
+use proto_backend::{OutputFormat, TargetId, Targets};
 use proto_color::ImageDescription;
 use proto_compositor::compositor::{Compositor, CompositorOptions};
 use proto_compositor::control::Request;
 use proto_compositor::scene::NullScene;
-use proto_render::{OutputFormat, TargetId, Targets};
 use proto_test_client::{ClientEvent, ClientOptions, TestClient};
 use serde_json::Value;
 
@@ -79,7 +79,7 @@ impl Backend for ScriptedBackend {
         }
     }
 
-    fn present(&mut self, _renderer: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
+    fn present(&mut self, _targets: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
         if self.paused {
             return Err(BackendError::SessionInactive);
         }

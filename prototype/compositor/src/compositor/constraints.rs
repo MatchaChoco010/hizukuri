@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use proto_backend::Backend;
 use proto_wl::{PointerConstraint, PointerConstraintKind, SurfaceId};
 
-use super::{Compositor, LayoutWindowId, to_layout};
+use super::{Compositor, WmWindowId, to_wm};
 use crate::wm::ConstraintView;
 
 /// What the core remembers about constraints between events.
@@ -39,7 +39,7 @@ pub(super) struct ConstraintPolicy {
     /// Per constrained surface: the keyboard focus when the window manager
     /// last decided about it. It is asked again once that differs, or once
     /// the entry is gone (the pointer left the surface or the region).
-    decided: HashMap<SurfaceId, Option<LayoutWindowId>>,
+    decided: HashMap<SurfaceId, Option<WmWindowId>>,
     /// The constraint the window manager was last told is in effect.
     announced: Option<ConstraintView>,
 }
@@ -47,7 +47,7 @@ pub(super) struct ConstraintPolicy {
 impl<B: Backend> Compositor<B> {
     fn view(&self, constraint: &PointerConstraint) -> ConstraintView {
         ConstraintView {
-            window: constraint.window.map(to_layout),
+            window: constraint.window.map(to_wm),
             surface: constraint.surface,
             kind: constraint.kind,
             active: constraint.active,

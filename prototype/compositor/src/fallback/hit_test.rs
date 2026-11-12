@@ -1,7 +1,7 @@
 //! Hit testing in the fallback: windows drawn flat at a position, without
 //! transforms. Going from the screen to a surface is a translation.
 
-use proto_layout::WindowId;
+use crate::wm::WindowId;
 use proto_wl::SurfaceId;
 
 use crate::scene::{Hit, WindowView};

@@ -21,9 +21,13 @@ use std::time::{Duration, Instant};
 
 use proto_color::ImageDescription;
 use proto_compositor::control::{ControlClient, Request};
-use proto_render::{CompositeImage, EncodedImage, find_icd_manifest};
+use proto_compositor::image::{CompositeImage, EncodedImage};
 use proto_test_client::{ClientOptions, TestClient};
 use serde_json::Value;
+
+pub mod icd;
+
+pub use icd::find_icd_manifest;
 
 /// How long to wait for the compositor or a client to reach a state.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
@@ -37,33 +41,15 @@ pub enum Gpu {
     Lavapipe,
 }
 
-/// What draws in a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Drawing {
-    /// The renderer written in Rust (`proto-render`).
-    Rust,
-    /// The built-in script project, through the checked GPU API.
-    Script,
-}
-
-/// What a scenario runs on: a Vulkan device and what draws with it.
+/// What a scenario runs on: the Vulkan device the script draws with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Device {
     pub gpu: Gpu,
-    pub drawing: Drawing,
-}
-
-#[allow(non_upper_case_globals)]
-impl Device {
-    /// The hardware device with the Rust renderer.
-    pub const Gpu: Device = Device::new(Gpu::Hardware, Drawing::Rust);
-    /// Lavapipe with the Rust renderer.
-    pub const Lavapipe: Device = Device::new(Gpu::Lavapipe, Drawing::Rust);
 }
 
 impl Device {
-    pub const fn new(gpu: Gpu, drawing: Drawing) -> Self {
-        Device { gpu, drawing }
+    pub const fn new(gpu: Gpu) -> Self {
+        Device { gpu }
     }
 
     /// The name of the Vulkan device, as listed in `HIZUKURI_TEST_DEVICES`.
@@ -76,19 +62,7 @@ impl Device {
 
     /// A name for directories and messages.
     pub fn name(self) -> String {
-        match self.drawing {
-            Drawing::Rust => self.gpu_name().to_string(),
-            Drawing::Script => format!("{}-script", self.gpu_name()),
-        }
-    }
-
-    /// The same Vulkan device with the other thing drawing.
-    pub fn with(self, drawing: Drawing) -> Self {
-        Device { drawing, ..self }
-    }
-
-    pub fn is_script(self) -> bool {
-        self.drawing == Drawing::Script
+        self.gpu_name().to_string()
     }
 
     /// Whether the device is listed in `HIZUKURI_TEST_DEVICES` (comma
@@ -104,15 +78,12 @@ impl Device {
 /// Defines one `#[test]` per scenario in a module, for one [`Device`].
 #[macro_export]
 macro_rules! device_module {
-    ($module:ident, $gpu:ident, $drawing:ident, [$($scenario:ident),*]) => {
+    ($module:ident, $gpu:ident, [$($scenario:ident),*]) => {
         mod $module {
             $(
                 #[test]
                 fn $scenario() {
-                    let device = $crate::common::Device::new(
-                        $crate::common::Gpu::$gpu,
-                        $crate::common::Drawing::$drawing,
-                    );
+                    let device = $crate::common::Device::new($crate::common::Gpu::$gpu);
                     if device.enabled() {
                         super::$scenario(device);
                     } else {
@@ -127,25 +98,13 @@ macro_rules! device_module {
     };
 }
 
-/// Defines a `#[test]` per Vulkan device and per renderer (the Rust one and
-/// the script one) for a scenario function taking a [`Device`].
+/// Defines a `#[test]` per Vulkan device for a scenario function taking a
+/// [`Device`].
 #[macro_export]
 macro_rules! device_tests {
     ($($scenario:ident),* $(,)?) => {
-        $crate::device_module!(gpu, Hardware, Rust, [$($scenario),*]);
-        $crate::device_module!(lavapipe, Lavapipe, Rust, [$($scenario),*]);
-        $crate::device_module!(script_gpu, Hardware, Script, [$($scenario),*]);
-        $crate::device_module!(script_lavapipe, Lavapipe, Script, [$($scenario),*]);
-    };
-}
-
-/// Like [`device_tests`], for scenarios that only make sense with the script
-/// layer drawing.
-#[macro_export]
-macro_rules! script_tests {
-    ($($scenario:ident),* $(,)?) => {
-        $crate::device_module!(script_gpu, Hardware, Script, [$($scenario),*]);
-        $crate::device_module!(script_lavapipe, Lavapipe, Script, [$($scenario),*]);
+        $crate::device_module!(gpu, Hardware, [$($scenario),*]);
+        $crate::device_module!(lavapipe, Lavapipe, [$($scenario),*]);
     };
 }
 
@@ -287,10 +246,36 @@ pub struct Session {
     pub device: Device,
 }
 
+/// Which project a session runs when the test gives no `--script`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefaultProject {
+    /// [`draw_only_project`]: the script draws, the fallback places windows.
+    DrawOnly,
+    /// The built-in project, which also tiles the windows.
+    Builtin,
+}
+
 impl Session {
     /// Starts a compositor for the test `name` with extra command line
-    /// arguments.
+    /// arguments. Unless the arguments name a project (`--script`), it runs
+    /// [`draw_only_project`]: the script draws and the fallback places the
+    /// windows.
     pub fn start(name: &str, device: Device, extra_args: &[&str]) -> Session {
+        Self::start_with(name, device, extra_args, DefaultProject::DrawOnly)
+    }
+
+    /// Like [`Self::start`], with the built-in project, which also manages
+    /// the windows (tiles them), unless the arguments name a project.
+    pub fn start_builtin(name: &str, device: Device, extra_args: &[&str]) -> Session {
+        Self::start_with(name, device, extra_args, DefaultProject::Builtin)
+    }
+
+    fn start_with(
+        name: &str,
+        device: Device,
+        extra_args: &[&str],
+        project: DefaultProject,
+    ) -> Session {
         let unique = format!(
             "hzk-t-{}-{}",
             std::process::id(),
@@ -310,7 +295,7 @@ impl Session {
             std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))
                 .expect("restricting the runtime directory");
         }
-        Self::start_in(name, device, extra_args, runtime_dir)
+        Self::launch(name, device, extra_args, runtime_dir, project)
     }
 
     /// Like [`Self::start`], in a runtime directory that already exists
@@ -320,6 +305,22 @@ impl Session {
         device: Device,
         extra_args: &[&str],
         runtime_dir: PathBuf,
+    ) -> Session {
+        Self::launch(
+            name,
+            device,
+            extra_args,
+            runtime_dir,
+            DefaultProject::DrawOnly,
+        )
+    }
+
+    fn launch(
+        name: &str,
+        device: Device,
+        extra_args: &[&str],
+        runtime_dir: PathBuf,
+        project: DefaultProject,
     ) -> Session {
         // target/tmp is CARGO_TARGET_TMPDIR; results go next to it.
         let output_dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -345,22 +346,14 @@ impl Session {
                 std::fs::File::create(output_dir.join("proto-compositor.log")).expect("log file"),
             );
         isolate(&mut command, &runtime_dir);
-        if device.is_script() {
-            command.args(["--renderer", "script"]);
-            // Unless a test is about the script's window management, the
-            // script only draws and the fallback places the windows.
-            if !extra_args.contains(&"--wm") && !extra_args.contains(&"--script") {
-                command.arg("--script").arg(draw_only_project());
-            }
-            // The tests are not about how fast the machine is: a call into
-            // the script only times out when it is stuck. A scenario about
-            // the budget itself passes its own.
-            if !extra_args.contains(&"--script-budget-ms") {
-                command.args(["--script-budget-ms", "120000"]);
-            }
-        } else {
-            // What the script's drawing is compared against.
-            command.args(["--renderer", "rust", "--wm", "rust"]);
+        if project == DefaultProject::DrawOnly && !extra_args.contains(&"--script") {
+            command.arg("--script").arg(draw_only_project());
+        }
+        // The tests are not about how fast the machine is: a call into the
+        // script only times out when it is stuck. A scenario about the
+        // budget itself passes its own.
+        if !extra_args.contains(&"--script-budget-ms") {
+            command.args(["--script-budget-ms", "120000"]);
         }
         match device.gpu {
             Gpu::Hardware => {
@@ -410,18 +403,14 @@ impl Session {
             device,
         };
         let state = session.state();
-        let kind = state["renderer"]["kind"]
-            .as_str()
-            .unwrap_or("none")
-            .to_string();
+        let kind = state["gpu"]["kind"].as_str().unwrap_or("none").to_string();
         match device.gpu {
             Gpu::Hardware => assert_ne!(kind, "cpu", "expected a hardware device: {state:#}"),
             Gpu::Lavapipe => assert_eq!(kind, "cpu", "expected lavapipe: {state:#}"),
         }
-        assert_eq!(
+        assert!(
             state["script"].is_object(),
-            device.is_script(),
-            "the wrong thing draws: {state:#}"
+            "the script does not draw: {state:#}"
         );
         session
     }
@@ -515,7 +504,7 @@ impl Session {
     /// Asserts that the script is in charge and never failed. For every
     /// scenario that does not make it fail on purpose: a failure does not
     /// stop the session (the built-in fallback takes over), so it has to be
-    /// looked for. Nothing to check when the Rust renderer draws.
+    /// looked for.
     #[track_caller]
     pub fn assert_script_healthy(&mut self) {
         self.assert_script_running(0);
@@ -526,9 +515,6 @@ impl Session {
     /// call through the control interface counts as a failure too).
     #[track_caller]
     pub fn assert_script_running(&mut self, failures: u64) {
-        if !self.device.is_script() {
-            return;
-        }
         let script = self.script_state();
         assert_eq!(script["mode"], "running", "{script:#}");
         assert_eq!(script["failures"], failures, "{script:#}");
@@ -658,12 +644,12 @@ impl Session {
         (encoded, composite)
     }
 
-    /// Asserts that the renderer reported no Vulkan validation errors (when
-    /// validation is enabled) and that it rendered at all.
-    pub fn assert_renderer_clean(&mut self) {
+    /// Asserts that the drawing reported no Vulkan validation errors (when
+    /// validation is enabled) and that it drew at all.
+    pub fn assert_drawing_clean(&mut self) {
         let state = self.state();
         assert!(state["frames_rendered"].as_u64().unwrap() > 0);
-        let errors = &state["renderer"]["validation_errors"];
+        let errors = &state["gpu"]["validation_errors"];
         assert!(
             errors.is_null() || errors == 0,
             "Vulkan validation errors: {errors} (see {})",
@@ -783,9 +769,10 @@ pub fn options(title: &str, width: u32, height: u32, color: [u8; 4]) -> ClientOp
     }
 }
 
-/// The project in `projects/draw-only`: the built-in renderer, and no
-/// window management, so the core's fallback places the windows. Script
-/// sessions start with it unless a test gives `--wm` or `--script`.
+/// The project in `projects/draw-only`: the built-in drawing, and no
+/// window management, so the core's fallback places the windows. Sessions
+/// start with it unless a test gives `--script` or asks for the built-in
+/// project ([`Session::start_builtin`]).
 pub fn draw_only_project() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/draw-only")
 }

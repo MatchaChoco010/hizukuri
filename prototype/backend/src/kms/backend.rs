@@ -25,10 +25,10 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use proto_color::{CompositeSpace, ImageDescription};
-use proto_render::{
+use crate::target::{
     DRM_FORMAT_XRGB8888, OutputFormat, TargetDesc, TargetId, TargetProvider, Targets,
 };
+use proto_color::{CompositeSpace, ImageDescription};
 
 use super::blob::{edid_identity, from_hex};
 use super::clock::Clock;
@@ -156,8 +156,8 @@ struct Inner<D: KmsDevice, C: Clock> {
     failed_commits: u64,
     /// The displays may have changed; `reconfigure` needs to look.
     rescan: bool,
-    /// Whether the renderer runs on the GPU that owns this device.
-    renderer_is_kms_device: bool,
+    /// Whether what draws runs on the GPU that owns this device.
+    draws_on_kms_device: bool,
     hotkeys: VecDeque<Hotkey>,
 }
 
@@ -177,19 +177,19 @@ impl<D: KmsDevice, C: Clock> Clone for KmsBackend<D, C> {
 
 impl<D: KmsDevice, C: Clock> KmsBackend<D, C> {
     /// Creates the backend and sets up the output if a display is
-    /// connected. With a renderer the output gets render targets; without
+    /// connected. With a target provider the output gets render targets; without
     /// one it shows black frames, which is still enough to exercise modes,
     /// flips and timing.
     ///
-    /// `renderer_is_kms_device` tells whether the renderer runs on the GPU
+    /// `draws_on_kms_device` tells whether what draws runs on the GPU
     /// that owns this KMS device; only then can its images be scanned out
     /// directly.
     pub fn new(
         mut device: D,
         clock: C,
         config: KmsConfig,
-        renderer: Targets<'_>,
-        renderer_is_kms_device: bool,
+        targets: Targets<'_>,
+        draws_on_kms_device: bool,
     ) -> Result<Self, BackendError> {
         let driver = device
             .snapshot()
@@ -208,10 +208,10 @@ impl<D: KmsDevice, C: Clock> KmsBackend<D, C> {
             next_output_id: 1,
             failed_commits: 0,
             rescan: false,
-            renderer_is_kms_device,
+            draws_on_kms_device,
             hotkeys: VecDeque::new(),
         };
-        inner.setup_output(renderer, true)?;
+        inner.setup_output(targets, true)?;
         Ok(Self {
             inner: Rc::new(RefCell::new(inner)),
         })
@@ -345,8 +345,8 @@ impl<D: KmsDevice, C: Clock> KmsBackend<D, C> {
     }
 
     /// Turns the output off and frees its buffers. For a clean exit.
-    pub fn shutdown(&self, renderer: Targets<'_>) {
-        self.inner.borrow_mut().teardown_output(renderer, true);
+    pub fn shutdown(&self, targets: Targets<'_>) {
+        self.inner.borrow_mut().teardown_output(targets, true);
     }
 
     /// Runs `f` with the device. For tests and for the session glue.
@@ -361,7 +361,7 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
     /// setup at startup, where a configuration that can never work is.
     fn setup_output(
         &mut self,
-        mut renderer: Targets<'_>,
+        mut targets: Targets<'_>,
         initial: bool,
     ) -> Result<(), BackendError> {
         let snapshot = self
@@ -384,14 +384,14 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
         };
         let (width, height) = pipeline.mode.size();
 
-        let renderer_modifiers = renderer
+        let export_modifiers = targets
             .as_deref()
             .map(|r| r.scanout_modifiers())
             .unwrap_or_default();
         let facts = ScanoutFacts {
             preference: self.config.scanout,
-            renderer_modifiers,
-            renderer_is_kms_device: self.renderer_is_kms_device,
+            export_modifiers,
+            draws_on_kms_device: self.draws_on_kms_device,
             plane_modifiers: pipeline.plane_modifiers.clone(),
             dumb_buffers: snapshot.caps.dumb_buffer,
         };
@@ -410,10 +410,10 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
         // user insisted.
         let mut created: Option<(ActiveScanout, Vec<Buffer>, Option<TargetId>)> = None;
         if let ScanoutPath::Dmabuf { modifiers } = &path {
-            let renderer = renderer
+            let targets = targets
                 .as_deref_mut()
-                .expect("the dma-buf path is only chosen with a renderer");
-            match self.create_dmabuf_buffers(renderer, &desc, modifiers) {
+                .expect("the dma-buf path is only chosen with a target provider");
+            match self.create_dmabuf_buffers(targets, &desc, modifiers) {
                 Ok(buffers) => created = Some((ActiveScanout::Dmabuf, buffers, None)),
                 Err(error) if self.config.scanout == ScanoutPreference::Auto => {
                     tracing::warn!("the dma-buf scanout path failed ({error}); copying on the CPU");
@@ -430,8 +430,8 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
                     ));
                 }
                 let buffers = self.create_dumb_buffers(width, height)?;
-                let offscreen = match renderer {
-                    Some(renderer) => Some(renderer.create_target(&desc)?),
+                let offscreen = match targets {
+                    Some(targets) => Some(targets.create_target(&desc)?),
                     None => None,
                 };
                 (ActiveScanout::CpuCopy, buffers, offscreen)
@@ -511,14 +511,14 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
 
     fn create_dmabuf_buffers(
         &mut self,
-        renderer: &mut (dyn TargetProvider + 'static),
+        targets: &mut (dyn TargetProvider + 'static),
         desc: &TargetDesc,
         modifiers: &[u64],
     ) -> Result<Vec<Buffer>, BackendError> {
         let mut buffers: Vec<Buffer> = Vec::new();
         for _ in 0..BUFFER_COUNT {
             let result = (|| -> Result<Buffer, BackendError> {
-                let (target, plane) = renderer.create_scanout_target(desc, modifiers)?;
+                let (target, plane) = targets.create_scanout_target(desc, modifiers)?;
                 debug_assert_eq!(plane.fourcc, DRM_FORMAT_XRGB8888);
                 use std::os::fd::AsFd;
                 let framebuffer = self
@@ -533,7 +533,7 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
                         offset: plane.offset,
                     })
                     .map_err(|e| {
-                        renderer.destroy_target(target);
+                        targets.destroy_target(target);
                         BackendError::Device(format!("importing the scanout image: {e}"))
                     })?;
                 // The framebuffer holds its own reference to the memory;
@@ -550,7 +550,7 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
                     for buffer in buffers {
                         let _ = self.device.remove_framebuffer(buffer.framebuffer);
                         if let Some(target) = buffer.target {
-                            renderer.destroy_target(target);
+                            targets.destroy_target(target);
                         }
                     }
                     return Err(error);
@@ -607,7 +607,7 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
 
     /// Frees the output's resources. With `disable` the output is turned
     /// off first (when the session allows it).
-    fn teardown_output(&mut self, mut renderer: Targets<'_>, disable: bool) {
+    fn teardown_output(&mut self, mut targets: Targets<'_>, disable: bool) {
         let Some(output) = self.output.take() else {
             return;
         };
@@ -628,12 +628,12 @@ impl<D: KmsDevice, C: Clock> Inner<D, C> {
             if let Some(dumb) = buffer.dumb {
                 let _ = self.device.destroy_dumb_buffer(&dumb);
             }
-            if let (Some(target), Some(renderer)) = (buffer.target, renderer.as_deref_mut()) {
-                renderer.destroy_target(target);
+            if let (Some(target), Some(targets)) = (buffer.target, targets.as_deref_mut()) {
+                targets.destroy_target(target);
             }
         }
-        if let (Some(target), Some(renderer)) = (output.offscreen, renderer) {
-            renderer.destroy_target(target);
+        if let (Some(target), Some(targets)) = (output.offscreen, targets) {
+            targets.destroy_target(target);
         }
         let _ = self.device.destroy_blob(output.mode_blob);
         self.events
@@ -729,7 +729,7 @@ impl<D: KmsDevice, C: Clock> Backend for KmsBackend<D, C> {
         }
     }
 
-    fn present(&mut self, renderer: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
+    fn present(&mut self, targets: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
         let mut inner = self.inner.borrow_mut();
         let inner = &mut *inner;
         if !inner.session_active {
@@ -749,15 +749,15 @@ impl<D: KmsDevice, C: Clock> Backend for KmsBackend<D, C> {
         }
 
         let buffer = &state.buffers[state.back];
-        if let (ActiveScanout::CpuCopy, Some(target), Some(dumb), Some(renderer)) =
-            (state.scanout, state.offscreen, buffer.dumb, renderer)
+        if let (ActiveScanout::CpuCopy, Some(target), Some(dumb), Some(targets)) =
+            (state.scanout, state.offscreen, buffer.dumb, targets)
         {
             let stride = dumb.stride as usize;
             let mut render_error = None;
             inner
                 .device
                 .write_dumb_buffer(&dumb, &mut |memory| {
-                    if let Err(error) = renderer.read_encoded_into(target, memory, stride) {
+                    if let Err(error) = targets.read_encoded_into(target, memory, stride) {
                         render_error = Some(error);
                     }
                     Ok(())
@@ -765,7 +765,7 @@ impl<D: KmsDevice, C: Clock> Backend for KmsBackend<D, C> {
                 .map_err(|e| BackendError::Device(format!("writing the dumb buffer: {e}")))?;
             match render_error {
                 // Nothing was rendered yet: show the buffer as it is.
-                Some(proto_render::RenderError::TargetNotRendered) | None => {}
+                Some(crate::target::TargetError::TargetNotRendered) | None => {}
                 Some(error) => return Err(error.into()),
             }
         }
@@ -831,7 +831,7 @@ impl<D: KmsDevice, C: Clock> Backend for KmsBackend<D, C> {
         }
     }
 
-    fn reconfigure(&mut self, mut renderer: Targets<'_>) -> Result<(), BackendError> {
+    fn reconfigure(&mut self, mut targets: Targets<'_>) -> Result<(), BackendError> {
         let mut inner = self.inner.borrow_mut();
         if !std::mem::take(&mut inner.rescan) || !inner.session_active {
             // Looked at when the session comes back.
@@ -858,18 +858,18 @@ impl<D: KmsDevice, C: Clock> Backend for KmsBackend<D, C> {
                     .is_some_and(|c| c.connected);
                 if !connected {
                     tracing::info!(connector = %output.pipeline.connector_name, "display unplugged");
-                    inner.teardown_output(renderer.as_deref_mut(), true);
+                    inner.teardown_output(targets.as_deref_mut(), true);
                     // Another display may be there to take over.
-                    inner.setup_output(renderer, false)?;
+                    inner.setup_output(targets, false)?;
                 }
             }
-            None => inner.setup_output(renderer, false)?,
+            None => inner.setup_output(targets, false)?,
         }
         Ok(())
     }
 
-    fn shutdown(&mut self, renderer: Targets<'_>) {
-        KmsBackend::shutdown(self, renderer);
+    fn shutdown(&mut self, targets: Targets<'_>) {
+        KmsBackend::shutdown(self, targets);
     }
 
     fn describe(&self) -> serde_json::Value {

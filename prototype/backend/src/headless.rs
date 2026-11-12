@@ -13,10 +13,10 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use crate::target::{OutputFormat, TargetDesc, TargetId, Targets};
 use calloop::LoopHandle;
 use calloop::timer::{TimeoutAction, Timer};
 use proto_color::{CompositeSpace, ImageDescription};
-use proto_render::{OutputFormat, TargetDesc, TargetId, Targets};
 
 use crate::{
     Backend, BackendError, BackendEvent, BackendHost, OutputId, OutputInfo, Presentation,
@@ -107,12 +107,12 @@ pub struct HeadlessBackend {
 }
 
 impl HeadlessBackend {
-    /// Creates the backend and, when a renderer is given, one render target
-    /// per output. Without a renderer the backend still provides outputs
+    /// Creates the backend and, when a target provider is given, one render target
+    /// per output. Without one the backend still provides outputs
     /// and frame timing, which is enough for protocol tests.
     ///
     /// The outputs are announced with [`BackendEvent::OutputAdded`].
-    pub fn new(config: &HeadlessConfig, mut renderer: Targets<'_>) -> Result<Self, BackendError> {
+    pub fn new(config: &HeadlessConfig, mut targets: Targets<'_>) -> Result<Self, BackendError> {
         if config.outputs.is_empty() {
             return Err(BackendError::InvalidConfig(
                 "at least one output is required".to_string(),
@@ -140,8 +140,8 @@ impl HeadlessBackend {
                     output.name
                 )));
             }
-            let target = match renderer.as_deref_mut() {
-                Some(renderer) => Some(renderer.create_target(&TargetDesc {
+            let target = match targets.as_deref_mut() {
+                Some(targets) => Some(targets.create_target(&TargetDesc {
                     width: output.width,
                     height: output.height,
                     format: output.format,
@@ -260,7 +260,7 @@ impl Backend for HeadlessBackend {
         }
     }
 
-    fn present(&mut self, _renderer: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
+    fn present(&mut self, _targets: Targets<'_>, output: OutputId) -> Result<(), BackendError> {
         let mut shared = self.shared.borrow_mut();
         let o = shared
             .outputs
@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(b.image_description, ImageDescription::BT2020_PQ);
         assert_eq!(b.format, OutputFormat::Rgba16Unorm);
         assert_eq!(backend.outputs(), vec![a.clone(), b.clone()]);
-        // Without a renderer there is nothing to render into.
+        // Without a target provider there is nothing to draw into.
         assert_eq!(backend.render_target(a.id), None);
         assert!(backend.is_active());
     }

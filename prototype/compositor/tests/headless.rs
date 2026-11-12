@@ -16,7 +16,7 @@ use proto_color::{
     quantize_unorm,
 };
 use proto_compositor::control::Request;
-use proto_render::{CompositeImage, EncodedImage};
+use proto_compositor::image::{CompositeImage, EncodedImage};
 use proto_test_client::{
     BufferKind, ClientEvent, ClientOptions, Pattern, PixelLayout, TestClient, Transform, Viewport,
 };
@@ -208,7 +208,7 @@ fn unmanaged_fill_comes_back_unchanged_on_a_gamma22_output(device: Device) {
         device.name()
     );
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -283,7 +283,7 @@ fn display_p3_output_matches_the_cpu_reference(device: Device) {
         "background",
     );
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -395,7 +395,7 @@ fn translucent_windows_blend_in_linear_light(device: Device) {
     assert_eq!(above_state["visual"]["opacity"], 0.25);
     assert_eq!(above_state["position"], serde_json::json!([70, 50]));
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -450,7 +450,7 @@ fn surface_image_description_is_honored(device: Device) {
         "Display P3 surface",
     );
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -514,7 +514,7 @@ fn pq_output_puts_sdr_white_at_the_reference_white(device: Device) {
         );
     }
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -564,7 +564,7 @@ fn hidpi_output_scales_surfaces(device: Device) {
         .unwrap();
     assert_eq!(entered, Some(ClientEvent::PointerEnter { x: 5.0, y: 10.0 }));
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -615,7 +615,7 @@ fn subsurfaces_and_opaque_formats_are_drawn(device: Device) {
     assert_pixel(&encoded, 160, 40, [0x20; 3], 0, "background right of it");
     assert_pixel(&encoded, 130, 60, [0x20; 3], 0, "background below it");
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -737,7 +737,7 @@ fn input_injected_through_the_control_socket_reaches_the_client(device: Device) 
         state["pointer"]["position"],
         serde_json::json!([200.0, 150.0])
     );
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -780,7 +780,7 @@ fn proto_ctl_drives_a_session(device: Device) {
     assert_eq!(image.pixel(20, 20), [255, 255, 255, 255]);
     assert_eq!(image.pixel(5, 5), [0x20, 0x20, 0x20, 0xff]);
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -825,7 +825,7 @@ fn a_killed_compositor_does_not_block_the_next_one(device: Device) {
     let mut second = std::process::Command::new(env!("CARGO_BIN_EXE_proto-compositor"));
     second
         .args(["--backend", "headless", "--socket", "hizukuri-test"])
-        .args(["--no-renderer", "--exit-after", "5"]);
+        .args(["--no-drawing", "--exit-after", "5"]);
     common::isolate(&mut second, &runtime_dir);
     let output = second.output().unwrap();
     assert!(!output.status.success(), "a second compositor started");
@@ -972,7 +972,7 @@ fn buffer_transforms_are_undone(device: Device) {
             "last pixel",
         );
     }
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1073,7 +1073,7 @@ fn viewports_crop_and_scale(device: Device) {
     });
     check(&mut session, "top-right-of-half-turn", [BLUE; 4]);
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1158,7 +1158,7 @@ fn fractional_scale_is_announced_and_a_matching_buffer_is_shown_exactly(device: 
     for (x, y) in [(59, 30), (360, 179), (60, 29), (359, 180)] {
         assert_pixel(&encoded, x, y, [0x20; 3], 0, "background");
     }
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1334,7 +1334,7 @@ fn dmabuf_buffers_are_read_and_shown(device: Device) {
             );
         }
     }
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }
 
@@ -1503,6 +1503,6 @@ fn two_outputs_each_show_what_is_on_them(device: Device) {
         .unwrap();
     assert_eq!(entered, Some(ClientEvent::PointerEnter { x: 5.0, y: 5.0 }));
 
-    session.assert_renderer_clean();
+    session.assert_drawing_clean();
     session.quit();
 }

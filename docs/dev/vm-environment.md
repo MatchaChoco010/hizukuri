@@ -34,7 +34,7 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | ファイルシステム | root は、tmpfs（メモリの上）。`/nix/store` は、VM を動かす機械の store を、9p で、読み取り専用に共有する |
 | CPU、メモリ | 4 vCPU（`-cpu host`、KVM）、6 GiB |
 | 表示のデバイス | `virtio-vga`。ゲストには、virtio-gpu の KMS のデバイスが見える。出力は 2 つで、2 つ目は、未接続で始まる |
-| ゲストの描画 | lavapipe（CPU）。`HIZUKURI_VM_GPU=venus` で起動すると、Venus のデバイスも見える（[Venus](#venus)） |
+| ゲストの描画 | lavapipe（CPU）だけで描く |
 | 表示 | 画面なし: `-display none` と、Unix socket の VNC。`start --gtk` で、GTK のウィンドウ |
 | 入力 | `virtio-keyboard-pci`、`virtio-tablet-pci`（絶対座標）、`virtio-mouse-pci`（相対移動） |
 | ネットワーク | user-mode。`127.0.0.1` の空いているポート（22044 から探す）を、ゲストの SSH へ転送する |
@@ -50,7 +50,7 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 
 | もの | 内容 |
 | --- | --- |
-| Mesa | lavapipe と、virtio-gpu のドライバー（Venus、virgl）。Vulkan の loader は、lavapipe と Venus の 2 つだけを見る（`VK_DRIVER_FILES`） |
+| Mesa | lavapipe。Vulkan の loader は、lavapipe だけを見る（`VK_DRIVER_FILES`） |
 | アプリ | `foot`、weston（`weston-terminal`）、`alacritty`、`vulkan-tools`（`vkcube`、`vulkaninfo`）、`wl-clipboard` |
 | 入力メソッド | fcitx5 と、日本語の変換エンジンの Anthy（`fcitx5-anthy`）だけ。Qt と GTK の IM module、設定の道具は入れない。session bus のための `dbus`（`dbus-run-session`）。日本語のフォント（IPAex） |
 | 機器と入力を調べる道具 | `drm_info`、`libinput`、`evtest`、`wayland-utils`、`wev` |
@@ -67,13 +67,10 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | 環境変数 | 既定 | 内容 |
 | --- | --- | --- |
 | `HIZUKURI_VM_DIR` | `$XDG_STATE_HOME/hizukuri-vm`（`XDG_STATE_HOME` が無ければ、`~/.local/state/hizukuri-vm`） | 鍵、ログ、socket を置く場所。ほかのコマンドも、これを読む |
-| `HIZUKURI_VM_GPU` | `none` | `none` は、ゲストが CPU で描く。`venus` は、ゲストに Venus のデバイスを見せる |
 | `HIZUKURI_VM_OUTPUTS` | `2` | virtio-gpu の出力の数 |
 | `HIZUKURI_VM_CPU` | `host` | CPU の model。`host,-hypervisor` で、ゲストを、仮想化されていない機械に見せる |
 | `HIZUKURI_VM_CPUS`、`HIZUKURI_VM_MEMORY` | `4`、`6G` | CPU の数、メモリ |
 | `HIZUKURI_VM_XRES`、`HIZUKURI_VM_YRES` | `1280`、`800` | 出力の最大の大きさ |
-| `HIZUKURI_VM_HOSTMEM` | `4G` | `venus` のときの、virtio-gpu の `hostmem` |
-| `HIZUKURI_VM_RENDERNODE` | QEMU が選ぶ | `venus` のときの、表示に使う render node（`/dev/dri/renderD*`） |
 | `HIZUKURI_VM_QEMU` | `guest.nix` の QEMU | 別の `qemu-system-x86_64` を使う |
 
 ### 作られるもの
@@ -82,7 +79,7 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | --- | --- |
 | `system`、`host-tools` | Nix の store へのリンク。ゲストの構成と、QEMU などの道具。store の掃除で消えないようにする |
 | `id_ed25519`、`id_ed25519.pub`、`known_hosts` | VM 専用の SSH の鍵と、known hosts。`~/.ssh/` は、読みも書きもしない |
-| `run/` | QEMU の pid、QMP と VNC の socket、SSH のポート番号、表示と GPU の構成 |
+| `run/` | QEMU の pid、QMP と VNC の socket、SSH のポート番号、表示の構成 |
 | `log/` | シリアルコンソールのログ（`serial.log`）、QEMU のログ |
 | `shots/` | 取り込んだ画面 |
 
@@ -108,12 +105,12 @@ tools/vm/vm build
 tools/vm/vm start           # ウィンドウを出さない
 tools/vm/vm start --gtk     # GTK のウィンドウに出す
 tools/vm/vm wait-ssh        # SSH が通るまで待つ
-tools/vm/vm status          # 動いているか、SSH のポート、表示と GPU の構成
+tools/vm/vm status          # 動いているか、SSH のポート、表示の構成
 tools/vm/vm stop            # ゲストを poweroff する。だめなら QMP の quit、最後に kill
 tools/vm/vm stop --force    # すぐ止める
 ```
 
-- `start` は、動いていれば、何もしない。構成（表示、GPU、出力の数、CPU の model）を変えるには、止めてから、起動し直す。
+- `start` は、動いていれば、何もしない。構成（表示、出力の数、CPU の model）を変えるには、止めてから、起動し直す。
 - ゲストを最初の状態に戻すには、止めて、起動し直す。
 
 ### ウィンドウに出して触る
@@ -247,7 +244,7 @@ VT の上の session から実行する。コンソールにログインして�
 
 ### スクリプトの層を触る（`hzk script`）
 
-`hzk script` は、検証用の compositor を、`--script ~/hzk-scripts` で起動する（描画とウィンドウ管理は、既定でスクリプトに任せる）。
+`hzk script` は、検証用の compositor を、`--script ~/hzk-scripts` で起動する（描画とウィンドウ管理は、スクリプトが行う）。
 画面を描くのも、ウィンドウを並べるのも、`~/hzk-scripts/` のプロジェクトのスクリプトである（Luau。検証用の、仮の言語である）。
 端末が 3 つ（`foot`、`weston-terminal`、`alacritty`）、タイルに並ぶ。
 
@@ -318,34 +315,6 @@ VM の中で compositor を動かすときに、前提になることである�
 - VT を離れるとき、session の一時停止の通知より先に、page flip が `EACCES` で失敗する。
 - ゲストの session には、`VK_DRIVER_FILES` が設定されている。実行ファイルに file capabilities が付いていると、
   Vulkan の loader は、この変数を無視する。
-
-### Venus
-
-```sh
-HIZUKURI_VM_GPU=venus tools/vm/vm start
-```
-
-VM を動かす機械に GPU があれば、ゲストに、その GPU で描く Vulkan のデバイス（Venus）を見せられる。
-表示のデバイスは `virtio-vga-gl`（`blob=true,venus=true`）になり、QEMU は、`egl-headless`（`--gtk` なら `gtk,gl=on`）で表示する。
-
-- `guest.nix` の QEMU は、同じ nixpkgs の Mesa で、GPU を使う。Mesa にドライバーがある GPU が要る。
-  それ以外の GPU では、`HIZUKURI_VM_QEMU` で、その機械の QEMU を指定する。
-- **ゲストに、Vulkan のデバイスが、複数見える。** Venus のデバイスと、lavapipe である。
-  先頭のデバイスを選ぶ作りにしない。
-- **スクリプトの描画と、`kms-selftest` のパターンの描画は、Venus では動かない。** どちらも、`VK_EXT_descriptor_heap` が要る。
-  `tools/vm-check.py` の試験は、Venus を使わない。
-
-| | Venus | lavapipe |
-| --- | --- | --- |
-| `VK_EXT_descriptor_heap` | 無い。virglrenderer が、この拡張をゲストへ通す必要があり、1.3.0 は通さない | ある |
-| 描けるもの | Rust のレンダラー（`proto-render`。`--renderer rust`） | Rust のレンダラーと、`proto-gfx-core` の上の描画（スクリプトの描画、`kms-selftest`） |
-| scanout | Rust のレンダラーが Vulkan で確保した `DRM_FORMAT_MOD_LINEAR` の画像を、dma-buf として取り出して、flip する | dumb buffer へ、CPU で写す |
-
-- scanout する画像は、`DRM_FORMAT_MOD_LINEAR` で確保し、`drmModeAddFB2` に、modifier を付けない。
-  ドライバーに modifier を選ばせると、virtio-gpu の KMS が扱えない modifier が選ばれうる。
-- GBM で確保したバッファを、Venus に取り込む経路は、使えない。ゲストの Venus のドライバーが、abort する。
-- virtio-gpu の plane は、`IN_FENCE_FD` を持つ。描画の fence から sync file を取り出して、渡せる。
-- Venus で描くクライアントの dma-buf は、compositor の側で、mmap では読めない。
 
 ## 複数の出力と hotplug
 
@@ -432,7 +401,7 @@ tools/vm/vm test [--keep] SCRIPT [ARGS...]
 3. 自分で起動した VM なら、止める（`--keep` で、動かしたままにできる）。
 4. SCRIPT の終了コードを返す。
 
-VM が動いていれば、そのまま使う。その VM の構成（GPU、CPU の model）は、変わらない。
+VM が動いていれば、そのまま使う。その VM の構成（CPU の model など）は、変わらない。
 
 ### compositor の試験（`tools/vm-check.py`）
 
@@ -452,14 +421,14 @@ GPU は、要らない。数分で終わる。
 | 部 | 内容 | VM の構成 |
 | --- | --- | --- |
 | `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
-| `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーの割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、明示して選んだ Rust のレンダラー（`--renderer rust --wm rust`）との画素とフレームの時間の比較、`hzk script` | 既定 |
+| `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーの割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、1920x1080 で 4 つのアプリを動かしたときのフレームの時間（`apps-1080p`。描くだけのプロジェクトで配置は fallback のものと、組み込みのプロジェクトでタイルに並べたものの 2 つ）、`hzk script` | 既定 |
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
 | `outputs` | 2 つの出力。使う出力の指定、ほかの出力に触れないこと、hotplug | 既定 |
 | `ime` | 実際の IME（fcitx5 と Anthy）で、foot に日本語を入れる。スクリプトの層（組み込みのプロジェクト）で動かす。下の「IME の部」 | 既定 |
 | `real-hardware` | VM の外で起動するときの安全策 | `HIZUKURI_VM_CPU=host,-hypervisor` |
 
-- compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目（組み込みのプロジェクトで、`--wm script`）のほかは、
+- compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目は、組み込みのプロジェクトで動かす。そのほかは、
   描くだけのプロジェクトで動かし、ウィンドウを、項目が置いた場所に保つ。`vm-check.py` は、バイナリと一緒に、
   描くだけのプロジェクトを、ゲストの `/home/hizukuri/hzk-draw-only` へ送る。
 - 自己診断の項目（`selftest`、`selftest-1080p`、`vkms/selftest-1080p`）は、`kms-selftest` を動かす。パターンは、`proto-gfx-core` で描く。
@@ -500,7 +469,7 @@ vm-check: <数> passed, <数> failed, <数> skipped. Evidence: <出力のディ�
 | `<部>/state-<段階>.json` | compositor の状態（制御口の `state`） |
 | `<部>/screen-<段階>.png` | 取り込んだ画面 |
 | `<部>/selftest*/` | `kms-selftest` の報告 |
-| `script/frame-time-apps-1080p.json` | Rust のレンダラーと、スクリプトのレンダラーの、フレームの時間 |
+| `script/frame-time-apps-1080p.json` | `apps-1080p` の、フレームの時間。描くだけのプロジェクト（配置は fallback）と、組み込みのプロジェクト（タイル）の 2 つ |
 | `ime/screen-candidates.png`、`ime/state-candidates.json` | fcitx5 の候補ウィンドウが出ている画面と、そのときの状態 |
 | `ime/fcitx5.log`、`ime/fcitx5-requests.txt` | fcitx5 のログ（`WAYLAND_DEBUG=1`）と、fcitx5 が送った要求の一覧（初めて使った順） |
 
@@ -572,6 +541,6 @@ CI の全体は、[テストと CI](testing-and-ci.md)にある。
 - VRR と、ティアリング（async page flip）。
 - 実ドライバーの modifier（tiled のバッファの scanout）、plane の format と scaling の制約。
 - GPU のドライバーでの、descriptor heap を使う描画から、KMS までの経路と、その性能。
-- 描画の dma-buf の画像を、KMS に載せる経路（ゲストの Vulkan のデバイスのうち、スクリプトの描画に使えるのは lavapipe だけで、その画像は KMS のデバイスのものではない）。
+- 描画の dma-buf の画像を、KMS に載せる経路（ゲストは lavapipe で描き、その画像は KMS のデバイスのものではない）。
 - 表示の実際のタイミング（vblank、presentation の時刻）。
 - モニターごとに違う EDID、複数の GPU。

@@ -11,7 +11,7 @@
 //!
 //! The test itself ([`SelfTest`]) is generic over the backend. On hardware
 //! it is driven by the session's event loop; in the test suite it is driven
-//! by the mock device, with or without a renderer.
+//! by the mock device, with or without drawing the pattern.
 //!
 //! The pattern is drawn by [`PatternRenderer`], straight on the checked GPU
 //! API of `proto-gfx-core`, without a script. It is a diagnostic tool, not
@@ -22,16 +22,15 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use proto_backend::{Backend, BackendEvent, OutputInfo};
+use proto_backend::{DmabufPlane, TargetDesc, TargetError, TargetId, TargetProvider, Targets};
 use proto_gfx_core::{
     ColorAttachment, ColorTarget, CullMode, DeviceDescription, Format, GfxError, Gpu, GpuConfig,
     Handle, LoadOp, RenderPipelineDesc, ShaderLanguage, ShaderSource, ShaderStage, Topology,
 };
-use proto_render::{
-    DmabufPlane, EncodedImage, RenderError, TargetDesc, TargetId, TargetProvider, Targets,
-};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::image::EncodedImage;
 use crate::targets::OutputImages;
 use crate::timing::FrameTimes;
 
@@ -43,7 +42,7 @@ pub enum Status {
     Fail,
     /// It worked, but something is off and a person should look.
     Warn,
-    /// Not checked in this run (for example: no renderer).
+    /// Not checked in this run (for example: `--no-drawing`).
     Skipped,
     /// hizukuri does not do this yet.
     NotImplemented,
@@ -191,7 +190,7 @@ impl PatternRenderer {
             let target = self
                 .targets
                 .get(target)
-                .ok_or_else(|| RenderError::UnknownTarget.to_string())?;
+                .ok_or_else(|| TargetError::UnknownTarget.to_string())?;
             (target.back(), target.desc)
         };
         let drawn = self.record(image, &desc, frame);
@@ -249,7 +248,7 @@ impl PatternRenderer {
         let desc = self
             .targets
             .get(target)
-            .ok_or_else(|| RenderError::UnknownTarget.to_string())?
+            .ok_or_else(|| TargetError::UnknownTarget.to_string())?
             .desc;
         let image = self.targets.shown(target).map_err(|e| e.to_string())?;
         let data = self
@@ -267,7 +266,7 @@ impl PatternRenderer {
 }
 
 impl TargetProvider for PatternRenderer {
-    fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, RenderError> {
+    fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, TargetError> {
         self.targets.create(&mut self.gpu, desc)
     }
 
@@ -279,7 +278,7 @@ impl TargetProvider for PatternRenderer {
         &mut self,
         desc: &TargetDesc,
         allowed_modifiers: &[u64],
-    ) -> Result<(TargetId, DmabufPlane), RenderError> {
+    ) -> Result<(TargetId, DmabufPlane), TargetError> {
         self.targets
             .create_scanout(&mut self.gpu, desc, allowed_modifiers)
     }
@@ -293,7 +292,7 @@ impl TargetProvider for PatternRenderer {
         target: TargetId,
         destination: &mut [u8],
         stride: usize,
-    ) -> Result<(), RenderError> {
+    ) -> Result<(), TargetError> {
         self.targets
             .read_into(&mut self.gpu, target, destination, stride)
     }
@@ -451,7 +450,7 @@ impl SelfTest {
         }
     }
 
-    /// Builds the report. `context` is added as it is (device, renderer,
+    /// Builds the report. `context` is added as it is (device, GPU,
     /// command line).
     pub fn report<B: Backend>(&self, backend: &B, context: Value) -> Value {
         let status = backend.describe();
@@ -531,7 +530,7 @@ impl SelfTest {
                 detail: match &self.contents {
                     Some(Ok(())) => "the rendered frame matches the test pattern".to_string(),
                     Some(Err(error)) => error.clone(),
-                    None => "no renderer, nothing was drawn".to_string(),
+                    None => "the pattern was not drawn (--no-drawing)".to_string(),
                 },
             },
             Check {

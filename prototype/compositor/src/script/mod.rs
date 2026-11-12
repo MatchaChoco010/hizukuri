@@ -1,7 +1,6 @@
 //! Drawing, hit testing and window management written in a script.
 //!
-//! This is the other implementation of the [`Scene`] seam: instead of the
-//! Rust renderer drawing flat rectangles, a script
+//! This is the implementation of the [`Scene`] seam that draws: a script
 //! receives the windows and their textures and builds the frame itself with
 //! the checked GPU API of `proto-gfx-core`.
 //!
@@ -29,21 +28,19 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::wm::WindowId;
 use proto_backend::OutputInfo;
+use proto_backend::{DmabufPlane, TargetDesc, TargetError, TargetId, TargetProvider, Targets};
 use proto_color::{AlphaMode, CompositeSpace, ImageDescription, Primaries};
 use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, GpuConfig, Handle, ImageDesc, ImageUsage};
 use proto_gfx_lua::{HostOptions, ScriptError, ScriptHost};
-use proto_layout::WindowId;
-use proto_render::{
-    CompositeImage, DmabufPlane, EncodedImage, RenderError, TargetDesc, TargetId, TargetProvider,
-    Targets,
-};
 use proto_wl::{
     BufferContents, BufferSource, BufferTransform, BufferUpdate, DamageRect, ShmFormat, SurfaceId,
 };
 use serde_json::{Value, json};
 
 use crate::fallback;
+use crate::image::{CompositeImage, EncodedImage};
 use crate::scene::{
     Capture, CursorView, DrawStatus, Hit, Scene, SceneError, SceneRequest, SurfaceView,
     VisualWindow, WindowView, WorldSnapshot, arrow_image,
@@ -698,14 +695,12 @@ impl ScriptRuntime {
         let shared = self.shared.borrow();
         json!({
             "kind": "script",
-            "renderer": {
+            "gpu": {
                 "device": device.name,
                 "kind": if device.is_cpu { "cpu" } else { "gpu" },
                 "driver": device.driver,
-                "driver_info": Value::Null,
                 "validation_errors":
                     self.options.gpu.validation.then(proto_gfx_core::validation_error_count),
-                "validation_warnings": Value::Null,
                 "dmabuf_export": device.dmabuf_export,
             },
             "frames_rendered": shared.frames + shared.fallback_frames,
@@ -831,7 +826,7 @@ pub struct ScriptTargets {
 }
 
 impl TargetProvider for ScriptTargets {
-    fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, RenderError> {
+    fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, TargetError> {
         let mut gpu = self.runtime.gpu();
         self.runtime
             .shared
@@ -848,7 +843,7 @@ impl TargetProvider for ScriptTargets {
         &mut self,
         desc: &TargetDesc,
         allowed_modifiers: &[u64],
-    ) -> Result<(TargetId, DmabufPlane), RenderError> {
+    ) -> Result<(TargetId, DmabufPlane), TargetError> {
         let mut gpu = self.runtime.gpu();
         self.runtime
             .shared
@@ -871,7 +866,7 @@ impl TargetProvider for ScriptTargets {
         target: TargetId,
         destination: &mut [u8],
         stride: usize,
-    ) -> Result<(), RenderError> {
+    ) -> Result<(), TargetError> {
         // Fail before ending the frame, like a read of nothing would.
         self.runtime.shared.borrow().targets.shown(target)?;
         self.runtime.finish_frame(false);
@@ -1225,7 +1220,7 @@ impl Scene for ScriptScene {
         let (image, scanout) = {
             let shared = runtime.shared.borrow();
             let Some(target) = shared.targets.get(target) else {
-                return Err(SceneError::Render(RenderError::UnknownTarget));
+                return Err(SceneError::Target(TargetError::UnknownTarget));
             };
             // Draw into the image that is not shown.
             (target.back(), target.is_scanout())
@@ -1395,9 +1390,9 @@ impl Scene for ScriptScene {
             let target = shared
                 .targets
                 .get(target)
-                .ok_or(RenderError::UnknownTarget)?;
+                .ok_or(TargetError::UnknownTarget)?;
             if !target.rendered {
-                return Err(RenderError::TargetNotRendered.into());
+                return Err(TargetError::TargetNotRendered.into());
             }
             (
                 target.desc,

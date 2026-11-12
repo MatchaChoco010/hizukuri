@@ -17,9 +17,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::wm::{ConfigureHint, OutputId, Placement, Point, Rect, Size, WindowId};
 use mlua::{Lua, Table};
 use proto_gfx_core::{ErrorCode, GfxError};
-use proto_layout::{ConfigureHint, OutputId, Placement, Point, Rect, Size, WindowId};
 
 use super::{Mode, ScriptRuntime, Shared};
 use crate::fallback;
@@ -41,7 +41,8 @@ enum Event {
 /// What the script side keeps besides the table.
 #[derive(Default)]
 pub(crate) struct WmState {
-    /// Whether the script manages windows at all (`--wm script`).
+    /// Whether the script manages windows at all
+    /// ([`ScriptOptions::manage_windows`](super::ScriptOptions::manage_windows)).
     active: bool,
     events: Vec<Event>,
     /// The revision of the table the core last applied.
