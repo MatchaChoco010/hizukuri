@@ -413,3 +413,106 @@ fn assert_local(actual: (f64, f64), expected: (f64, f64), what: &str) {
         "{what}: at {actual:?}, expected {expected:?}"
     );
 }
+
+/// What the animations cost the script per frame, by the number of windows:
+/// the work of `animate.frame` alone (`animation_bench`, no drawing), and
+/// the whole `frame` callback (which also records the drawing). Not a test:
+/// run by hand, optimized, on a quiet machine:
+///
+/// ```sh
+/// cargo test --release -p proto-compositor --test animation -- --ignored --nocapture
+/// ```
+///
+/// The table is written to `target/test-output/animation-measure.md`.
+#[test]
+#[ignore = "a measurement, run by hand (see the documentation)"]
+fn animation_cost() {
+    use std::fmt::Write as _;
+    use std::time::Instant;
+
+    let device = Device::new(common::Gpu::Lavapipe, common::Drawing::Script);
+    let mut table = String::from(
+        "| windows | `animate.frame` alone (µs) | per window (µs) | whole `frame` (µs) |\n| ---: | ---: | ---: | ---: |\n",
+    );
+    for count in [1usize, 4, 16, 32, 64] {
+        let project = project();
+        let mut session = Session::start(
+            &format!("animation-measure-{count}"),
+            device,
+            &[
+                "--output-size",
+                "1920x1080",
+                "--wm",
+                "script",
+                "--clock",
+                "manual",
+                "--script",
+                project.to_str().unwrap(),
+            ],
+        );
+        let mut clients: Vec<TestClient> = Vec::new();
+        for index in 0..count {
+            let title = format!("w{index}");
+            let mut client = session.client(options(&title, 100, 100, RED));
+            session.wait(&mut [&mut client], "mapped", |s| {
+                window(s, &title).is_some_and(|w| w["surfaces"][0]["buffer_size"].is_array())
+            });
+            clients.push(client);
+        }
+        // The clock stands still: every window is still opening, so every
+        // frame computes every window, and asks for the next frame.
+        let moving = session.script("animation_state", json!([]));
+        assert!(
+            moving
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|w| w["moving"] == true)
+        );
+
+        let call = |session: &mut Session, rounds: u32| {
+            let started = Instant::now();
+            session.script("animation_bench", json!([rounds]));
+            started.elapsed().as_secs_f64() * 1e6
+        };
+        let rounds = 2000;
+        let empty = (0..5)
+            .map(|_| call(&mut session, 0))
+            .fold(f64::MAX, f64::min);
+        let full = (0..5)
+            .map(|_| call(&mut session, rounds))
+            .fold(f64::MAX, f64::min);
+        let alone = (full - empty) / rounds as f64;
+
+        let timing = |session: &mut Session| {
+            let t = session.script_state()["timing"]["frame"].take();
+            let calls = t["calls"].as_f64().unwrap();
+            (calls, t["mean_us"].as_f64().unwrap() * calls)
+        };
+        let (calls0, total0) = timing(&mut session);
+        for _ in 0..50 {
+            for client in clients.iter_mut() {
+                client.pump(Some(Duration::from_millis(0))).unwrap();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (calls1, total1) = timing(&mut session);
+        let whole = (total1 - total0) / (calls1 - calls0).max(1.0);
+        writeln!(
+            table,
+            "| {count} | {alone:.1} | {:.2} | {whole:.1} |",
+            alone / count as f64
+        )
+        .unwrap();
+        drop(clients);
+        session.quit();
+    }
+    println!("{table}");
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .unwrap()
+        .join("test-output")
+        .join("animation-measure.md");
+    std::fs::write(&path, &table).unwrap();
+    println!("written to {}", path.display());
+}
