@@ -76,8 +76,12 @@ if ! "$vm" ssh '~/bin/proto-compositor --version' >/dev/null 2>&1; then
 fi
 # The projects' shaders, as SPIR-V in each project's .build/: the guest has
 # no Slang compiler, and the compositor reads only SPIR-V.
-for project in "$root/prototype/compositor/scripts" "$root/prototype/compositor/projects/draw-only"; do
-    "$target/proto-compositor" build-shaders "$project"
+shader_projects=("$root/prototype/compositor/scripts" "$root/prototype/compositor/projects/draw-only")
+if [[ -n "$project" ]]; then
+    shader_projects+=("$project")
+fi
+for dir in "${shader_projects[@]}"; do
+    "$target/proto-compositor" build-shaders "$dir"
 done
 # The built-in scripts as files, for `hzk script`. This copy is replaced
 # every time; the one that is edited in the guest (~/hzk-scripts) is made from

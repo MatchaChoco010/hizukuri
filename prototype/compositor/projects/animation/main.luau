@@ -11,8 +11,9 @@
 -- frame's time where each window is drawn and how opaque, and the built-in
 -- renderer (`render`) draws that. See `animate.luau` for how.
 --
--- `render`, `tile`, `affine` and `color` are not in this directory: a
--- project uses the modules of the built-in project it does not have itself.
+-- `render`, `tile` and `affine` are not in this directory: a project uses
+-- the modules of the built-in project it does not have itself, and so the
+-- shaders `render` names come from the built-in project as well.
 
 local render = hz.include("render")
 local tile = hz.include("tile")
@@ -85,6 +86,12 @@ function window_request(id, request)
     tile.window_request(id, request)
     animate.retarget()
 end
+
+-- Touchpad gestures: a three finger swipe moves the focus between the
+-- tiles. Nothing moves, so there is nothing to animate.
+gesture_begin = tile.gesture_begin
+gesture_update = tile.gesture_update
+gesture_end = tile.gesture_end
 
 function outputs_changed()
     tile.outputs_changed()

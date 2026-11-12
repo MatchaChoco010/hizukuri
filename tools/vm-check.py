@@ -2945,7 +2945,8 @@ def main():
     # The projects' shaders, as SPIR-V in each project's .build/ (sent along
     # with the project): the guest has no Slang compiler, and the compositor
     # reads only SPIR-V.
-    for project in ("scripts", os.path.join("projects", "draw-only")):
+    for project in ("scripts", os.path.join("projects", "draw-only"),
+                    os.path.join("projects", "animation")):
         subprocess.run([binaries[0], "build-shaders",
                         os.path.join(ROOT, "prototype", "compositor", project)],
                        cwd=ROOT, check=True)
