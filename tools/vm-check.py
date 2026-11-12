@@ -1068,7 +1068,7 @@ class Run:
 
         def fallback():
             script = self.state()["script"]
-            return script if script["mode"] == "safe" else None
+            return script if script["mode"] == "fallback" else None
 
         script = wait_for("the built-in fallback to take over", fallback, seconds=5)
         # The fallback marks its frames with a bar along the top edge, and
@@ -1100,7 +1100,7 @@ class Run:
                  lambda: near(pixels([marker])[0], BACKGROUND), seconds=5)
         vm("key", "ctrl-alt-shift-f")
         wait_for("the fallback by its key",
-                 lambda: self.state()["script"]["mode"] == "safe", seconds=5)
+                 lambda: self.state()["script"]["mode"] == "fallback", seconds=5)
         self.ctl("script-mode", "running")
         wait_for("the tiles at the end", tiled, seconds=10)
         notes.append("Ctrl+Alt+Shift+R reloaded the script, Ctrl+Alt+Shift+F left it")
@@ -1702,7 +1702,7 @@ def check_script(out, uid, results):
 
         def in_fallback(fault, kind):
             script = wait_for(f"the fallback after {fault}", lambda: (lambda sc: sc if
-                              sc["mode"] == "safe" else None)(script_state()), seconds=8)
+                              sc["mode"] == "fallback" else None)(script_state()), seconds=8)
             last = script["last_failures"][-1]
             if last["kind"] != kind:
                 raise Failed(f"{fault}: recorded as {last['kind']!r}, expected {kind!r}")

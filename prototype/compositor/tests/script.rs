@@ -1928,7 +1928,7 @@ fn a_script_that_fails_to_draw_leaves_a_usable_session(device: Device) {
             );
         }
         let script = session.script_state();
-        assert_eq!(script["mode"], "safe", "{kind}");
+        assert_eq!(script["mode"], "fallback", "{kind}");
         failures += 1;
         assert_eq!(script["failures"], failures, "{kind}: {script}");
         let last = script["last_failures"]
@@ -2121,7 +2121,7 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
         pointer_to(&mut session, (70.0 + step as f64, 70.0));
     }
     let script = session.script_state();
-    assert_eq!(script["mode"], "safe", "{script}");
+    assert_eq!(script["mode"], "fallback", "{script}");
     let encoded = session.screenshot_png("out-of-charge");
     assert_fallback_marker(&encoded, true, "after repeated failures");
     assert_rgb(&encoded, 100, 100, GREEN, 0, "b in the fallback");
@@ -2148,7 +2148,7 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
     key(&mut session, 30, true);
     key(&mut session, 30, false);
     let first = started.elapsed();
-    assert_eq!(session.script_state()["mode"], "safe");
+    assert_eq!(session.script_state()["mode"], "fallback");
     assert!(first >= std::time::Duration::from_secs(2), "{first:?}");
     assert_eq!(key_calls(&mut session), calls_before + 1);
     for _ in 0..10 {
@@ -2223,7 +2223,7 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
 /// again, with the windows open. What the old script hands over (here the
 /// order of the tiles, a window's transform, the working space) is there in
 /// the new one. A script that does not compile is not taken; one that
-/// fails while starting leaves the built-in behaviour, until the next
+/// fails while starting leaves the built-in fallback, until the next
 /// reload.
 fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
     let project = script_project("reload", device, &[("main", "hz.include(\"session\")\n")]);
@@ -2333,7 +2333,7 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
     );
 
     // A script that compiles but fails when it starts: the old one is
-    // gone by then. The built-in behaviour takes over; the windows stay
+    // gone by then. The built-in fallback takes over; the windows stay
     // where they are and stay usable.
     write(
         "hz.include(\"session\")\nlocal usual = init\nfunction init(saved)\n    usual(saved)\n    error(\"cannot start\")\nend\n",
@@ -2342,7 +2342,7 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
         .try_send(Request::ScriptReload { path: None })
         .unwrap_err();
     assert!(error.contains("cannot start"), "{error}");
-    assert_eq!(session.script_state()["mode"], "safe");
+    assert_eq!(session.script_state()["mode"], "fallback");
     let encoded = session.screenshot_png("failed-start");
     assert_fallback_marker(&encoded, true, "after a failed start");
     assert_rgb(&encoded, 100, 200, RED, 0, "a, drawn by the fallback");
@@ -2381,7 +2381,7 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
         }
     };
     chord(&mut session, KEY_F);
-    assert_eq!(session.script_state()["mode"], "safe");
+    assert_eq!(session.script_state()["mode"], "fallback");
     let reloads = session.script_state()["reloads"].as_u64().unwrap();
     chord(&mut session, KEY_R);
     let script = session.script_state();
@@ -2412,7 +2412,7 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
 /// The modules are the `NAME.luau` files of the project directory, the
 /// ones `main` includes and the others. A module that compiles but fails
 /// while the script loads is found only by loading it, after the running
-/// script is gone: the built-in behaviour takes over, until the next
+/// script is gone: the built-in fallback takes over, until the next
 /// reload.
 fn a_module_that_does_not_compile_is_not_taken(device: Device) {
     let main = "local gaps = hz.include(\"gaps\")\n\
@@ -2502,7 +2502,7 @@ fn a_module_that_does_not_compile_is_not_taken(device: Device) {
         .unwrap_err();
     assert!(error.contains("failed to load"), "{error}");
     assert!(error.contains("no gaps today"), "{error}");
-    assert_eq!(session.script_state()["mode"], "safe");
+    assert_eq!(session.script_state()["mode"], "fallback");
     let encoded = session.screenshot_png("module-failed");
     assert_fallback_marker(&encoded, true, "after a module failed to load");
     assert_client_alive(&mut session, &mut a, "a", WHITE);

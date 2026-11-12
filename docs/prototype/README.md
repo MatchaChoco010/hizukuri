@@ -21,7 +21,7 @@
 | `prototype/backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む） | `proto-render`、`calloop`、`drm`、Smithay（session、udev、libinput） |
 | `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込み | `vulkan-rs`、`naga` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
-| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて |
+| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、スクリプトが使えないときの最小の描画と配置（`fallback/`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて |
 | `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
 | `tools/ci.sh` | 検査をまとめて走らせる | |
 | `tools/real-app-check.sh` | 実際のアプリ（weston-terminal）を headless の中で動かして、画面を取り込む | |
@@ -149,7 +149,7 @@ rm -rf "$RT"
 | `--renderer` | `rust` | 描くもの。`rust`: `proto-render`。`script`: スクリプトの層 |
 | `--wm` | `rust` | ウィンドウを管理するもの。`rust`: `proto-layout`。`script`: スクリプト。`--renderer script` が要る |
 | `--script` | 組み込み | スクリプトのプロジェクトのディレクトリ（`main.luau`）。無いモジュールは、組み込みのものを使う |
-| `--script-on-error` | `safe` | 描画のスクリプトが失敗したとき。`safe`: 組み込みの fallback が描く。`hold`: 直前のフレームを出し続けて、後で試し直す |
+| `--script-on-error` | `fallback` | 描画のスクリプトが失敗したとき。`fallback`: 組み込みの fallback が描く。`hold`: 直前のフレームを出し続けて、後で試し直す |
 | `--script-budget-ms` | `250` | スクリプトの 1 回の呼び出しに許す時間 |
 | `--script-memory-mb` | `256` | スクリプトが使えるメモリ |
 | `--script-retry-ms` | `1000` | `--script-on-error hold` のとき、試し直すまでの時間 |
@@ -212,7 +212,7 @@ target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LA
 | `set_surface_color` | `surface`、`image_description`、`alpha_mode`（省略可） | 表面の値の意味を指定する |
 | `script_call` | `function`、`args`（JSON の配列） | スクリプトの大域の関数を呼び、戻り値を `result` で返す |
 | `script_reload` | `path`（省略可） | スクリプトを読み直す。`path` があれば、そのプロジェクトに替える。コンパイルできないモジュールがあれば、読み直さずに、失敗を返す（[スクリプトの層](script-layer.md#読み直し)） |
-| `script_mode` | `mode` | `running`: スクリプトに任せる。`safe`: 組み込みの fallback に任せる |
+| `script_mode` | `mode` | `running`: スクリプトに任せる。`fallback`: 組み込みの fallback に任せる |
 | `quit` | | 終了する |
 
 `proto-ctl` は、これをコマンドにしたものである。失敗の応答のときは、終了コードが 0 以外になる。

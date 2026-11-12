@@ -119,7 +119,7 @@ enum Command {
         path: Option<PathBuf>,
     },
     /// Put the script in charge (`running`) or the built-in fallback
-    /// (`safe`).
+    /// (`fallback`).
     ScriptMode { mode: String },
     /// Stop the compositor.
     Quit,

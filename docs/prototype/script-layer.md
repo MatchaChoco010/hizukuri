@@ -25,10 +25,10 @@ Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`�
     src/script/         │ script/api.rs    hz の表                                     │
                         │ script/wm.rs     ScriptWm（WindowManager の実装）            │
                         │ script/dmabuf.rs クライアントの dmabuf をテクスチャにする     │
-                        │ script/fallback.rs 組み込みの fallback（Rust で書いた描画）   │
                         ├────────────────────────────────────────────────────────────┤
   prototype/compositor  │ Compositor: Scene と WindowManager の 2 つの継ぎ目の上で動く  │
                         │ （入力、focus の適用、描く時機、frame callback、制御口）       │
+                        │ fallback/: スクリプトが使えないときの、最小の描画と配置       │
                         └───────┬───────────────────────────────┬────────────────────┘
                      proto-wl（プロトコル）              proto-backend（headless、KMS）
 ```
@@ -56,7 +56,7 @@ proto-ctl --socket "$RT/hz.control" script-call set_transform 3 '[0.94, -0.34, 0
 proto-ctl --socket "$RT/hz.control" script-call set_working_space '"display-p3"'
 # 読み直し、fallback
 proto-ctl --socket "$RT/hz.control" script-reload
-proto-ctl --socket "$RT/hz.control" script-mode safe
+proto-ctl --socket "$RT/hz.control" script-mode fallback
 ```
 
 組み込みのプロジェクト:
@@ -80,9 +80,9 @@ proto-ctl --socket "$RT/hz.control" script-mode safe
 | `init(saved)` | 読み込んだ直後。`saved` は、前のスクリプトの `unload` の戻り値 | なし | 失敗すると、fallback に切り替わる |
 | `unload()` | 読み直しの直前 | 引き継ぎたい値 | 引き継ぎなし |
 | `frame(output, target)` | コアが、その出力のフレームを描くと決めたとき | なし | fallback が描く、または直前のフレームを保つ |
-| `hit_test(x, y, accepts)` | ポインターの位置が変わるたび。フレームを描いた後にも | 表面の id と、その中の座標 | コアが、変形なしの位置で判定する |
+| `hit_test(x, y, accepts)` | ポインターの位置が変わるたび。フレームを描いた後にも | 表面の id と、その中の座標 | fallback が、変形なしの位置で判定する |
 | `locate(surface, x, y)` | ボタンを押している間の、ポインターの位置が変わるたび | その表面の中の座標 | 同上 |
-| `window_opened(id)` | ウィンドウができた | なし | コアが、ずらして置き、focus を与える |
+| `window_opened(id)` | ウィンドウができた | なし | fallback の配置で、ずらして置き、focus を与える |
 | `window_changed(id)` | ウィンドウの大きさが変わった | なし | 何もしない |
 | `window_closed(id)` | ウィンドウが無くなった | なし | コアが、いちばん上のウィンドウに focus を移す |
 | `focus_changed(id)` | スクリプト以外の理由で、focus が動いた | なし | 何もしない |
@@ -177,6 +177,7 @@ proto-ctl --socket "$RT/hz.control" script-mode safe
 | フレームの完了を、クライアントへ知らせること（frame callback、presentation feedback） | スクリプトが描けない間も、クライアントは、次のフレームを描いてよい時機を知らされる必要がある |
 | configure を送ること、focus を適用すること | 何を求めるかは、スクリプトが決める。送る手順は、コアが受け持つ |
 | ウィンドウの表（位置、大きさ、focus、重なりの順）と、その既定の値 | スクリプトが何も言わないとき、失敗したとき、fallback の間にも、新しいウィンドウに居場所と focus があるように |
+| fallback（`prototype/compositor/src/fallback/`）: スクリプトが使えないときの、最小の描画、新しいウィンドウの配置、当たり判定 | スクリプトが壊れても、画面を出し、入力を届け続けるため。色の変換も、変形も、装飾もしない。コンポジターの機能ではない（下の「故障したときの動き」） |
 | 入力の配り方と、緊急用のキー | ボタンを押している間の行き先、スクリプトが使ったキーの「離す」を渡さないこと。緊急用のキーは、スクリプトの `key` より先に、コアが見る |
 | 色の変換の数値（`proto-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
@@ -242,8 +243,8 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 | `frame` が、render pass を閉じずに戻る | コアが、戻った後に見つける | 同上 |
 | `frame` が、メモリを使い続ける | VM のメモリの上限 | 同上 |
 | `frame` が、戻ってこない | 時間の上限で、中断する | その 1 回だけ、上限の時間だけ止まる。以後は同上 |
-| `window_opened` などの出来事の関数が、例外を投げる | エラーの値 | そのウィンドウは、コアの既定の場所に出て、focus を得る。スクリプトは続く |
-| `hit_test` が例外を投げる | エラーの値 | その 1 回は、コアの判定（変形なし）を使う |
+| `window_opened` などの出来事の関数が、例外を投げる | エラーの値 | そのウィンドウは、fallback の配置の場所に出て、focus を得る。スクリプトは続く |
+| `hit_test` が例外を投げる | エラーの値 | その 1 回は、fallback の当たり判定（変形なし）を使う |
 | `key` などが、戻ってこない | 時間の上限 | そのキーは、上限の時間の後で、クライアントに届く。スクリプトを、すぐに外す |
 | 読み直したスクリプトが、コンパイルできない | 読み直しの前に検査する | 動いているスクリプトを、そのまま使い続ける |
 | 読み直したスクリプトが、読み込みの途中（モジュールの実行、`init`）で失敗する | エラーの値 | fallback に切り替わる。直して読み直せば、戻る |
@@ -251,7 +252,7 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 - **出来事に答える関数（当たり判定、キー、ウィンドウの出来事）には、回数の決まりがある。** 時間切れは 1 回で、
   ほかの失敗は 8 回続いたら、スクリプトを外す。ポインターの動きやキーのたびに呼ばれる関数が、毎回失敗する、
   または毎回、時間の上限まで走ると、セッションが使えなくなるためである。
-- **スクリプトを外す**と、描画は fallback に、当たり判定とウィンドウ管理はコアの既定になる。ウィンドウは、その場所に残る。
+- **スクリプトを外す**と、描画、当たり判定、新しいウィンドウの配置は、fallback になる。ウィンドウは、その場所に残る。
   新しいウィンドウは、ずらして置かれて focus を得る。クリックで focus を移せて、閉じられる。
 
 ### 描画が失敗したとき
@@ -260,14 +261,14 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 
 | 値 | 動き |
 | --- | --- |
-| `safe`（既定） | 組み込みの fallback（Rust で書いた小さな描画。スクリプトと同じデバイスの上で動く）に切り替える。ウィンドウは見えて、操作できる。変形と色の変換は無くなり、上の縁に、fallback が描いていることを示す帯が出る。戻すには、読み直すか、`script_mode running` |
+| `fallback`（既定） | 組み込みの fallback（Rust で書いた小さな描画。スクリプトと同じデバイスの上で動く）に切り替える。ウィンドウは見えて、操作できる。変形と色の変換は無くなり、上の縁に、fallback が描いていることを示す帯が出る。戻すには、読み直すか、`script_mode running` |
 | `hold` | 直前のフレームを出し続けて、`--script-retry-ms` ごとに試し直す。直れば、何もしなくても戻る。壊れたままだと、画面は止まったままになる |
 
 - どちらでも、失敗したフレームは、画面に出ない。出力の画像を 2 枚持ち、スクリプトには、表示していないほうを渡す。
   成功したときだけ、入れ替える。
 - 緊急用のキー: Ctrl+Alt+Shift+R で読み直し、Ctrl+Alt+Shift+F で fallback に切り替える。スクリプトより先に、コアが見る。
 - Rust のレンダラー（`proto-render`）への、実行中の切り替えは、無い（別の Vulkan のデバイスを持つため）。
-- 制御口の `state` の `script` に、モード（`running`、`hold`、`safe`）、失敗の回数と直近の内容、読み直しの回数、
+- 制御口の `state` の `script` に、モード（`running`、`hold`、`fallback`）、失敗の回数と直近の内容、読み直しの回数、
   呼び出しごとの時間、dmabuf の取り込みの統計が出る。
 
 ## 未実装のもの

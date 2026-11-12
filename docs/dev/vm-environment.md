@@ -264,8 +264,8 @@ VT の上の session から実行する。コンソールにログインして�
   ゲストには、`vim` と `nano` がある。
 - 読み直したスクリプトに、文法の誤りがあると、読み直しは行われず、動いていたスクリプトが、そのまま使われる。
   読み込みの途中や、実行の途中で失敗すると、画面は fallback に切り替わる。ウィンドウは見えたままで、クリックと文字入力ができる。
-  何が失敗したかは、制御口の `state` の、`script` の `mode`（`running` か `safe`）と、`last_failures` にある。
-- 制御口からも操作できる。`script-reload`（読み直し）、`script-mode safe`（fallback にする）、`script-call`（スクリプトの関数を呼ぶ）。
+  何が失敗したかは、制御口の `state` の、`script` の `mode`（`running` か `fallback`）と、`last_failures` にある。
+- 制御口からも操作できる。`script-reload`（読み直し）、`script-mode fallback`（fallback にする）、`script-call`（スクリプトの関数を呼ぶ）。
 
 プロジェクトの置き場所（ゲスト）:
 

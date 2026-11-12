@@ -75,7 +75,7 @@ enum ScriptErrorPolicy {
     /// Keep showing the last good frame and retry the script.
     Hold,
     /// Draw with the built-in fallback until the script is reloaded.
-    Safe,
+    Fallback,
 }
 
 /// The verification compositor of hizukuri, a foundation for building
@@ -197,7 +197,7 @@ struct RunArgs {
     script: Option<PathBuf>,
 
     /// What happens when the drawing part of the script fails.
-    #[arg(long, value_enum, default_value = "safe")]
+    #[arg(long, value_enum, default_value = "fallback")]
     script_on_error: ScriptErrorPolicy,
 
     /// Time one call into the script may take, in milliseconds.
@@ -548,7 +548,7 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         },
         on_error: match args.script_on_error {
             ScriptErrorPolicy::Hold => OnError::Hold,
-            ScriptErrorPolicy::Safe => OnError::Safe,
+            ScriptErrorPolicy::Fallback => OnError::Fallback,
         },
         call_budget: std::time::Duration::from_millis(args.script_budget_ms.max(1)),
         manage_windows: args.wm == WmKind::Script,

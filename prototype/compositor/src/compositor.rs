@@ -632,7 +632,7 @@ impl<B: Backend> Compositor<B> {
         }
         let (command, args) = match keycode {
             KEY_R => ("script_reload", json!({})),
-            KEY_F => ("script_mode", json!({ "mode": "safe" })),
+            KEY_F => ("script_mode", json!({ "mode": "fallback" })),
             _ => return false,
         };
         match self.scene.control(command, &args) {

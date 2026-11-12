@@ -12,6 +12,8 @@
 //!   the logical state that protocols and the layout deal with.
 //! - [`control`]: the control interface used for verification: capture the
 //!   screen, inject input, dump state, quit.
+//! - [`fallback`]: the least drawing, placement and hit testing the core
+//!   does to keep a session usable while the script cannot.
 //!
 //! - [`safety`]: telling a virtual machine from real hardware, and a
 //!   watchdog for a hung main loop.
@@ -23,6 +25,7 @@
 
 pub mod compositor;
 pub mod control;
+pub mod fallback;
 pub mod safety;
 pub mod scene;
 pub mod script;
