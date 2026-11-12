@@ -1,0 +1,509 @@
+# Looks at what a cloud GPU instance offers the compositor: the kernel
+# driver, the Vulkan driver and its extensions, the KMS devices, and whether
+# the tests pass on the hardware driver. It judges nothing: what it finds
+# goes to the summary of the job and to an artifact, and a finding never
+# fails the run. See docs/dev/testing-and-ci.md.
+#
+# Unlike the other workflows, this one needs runners that the owner of the
+# repository provides: RunsOn (https://runs-on.com) starts an AWS instance
+# with a GPU for each job and removes it afterwards. In a fork there are no
+# such runners, and the jobs stay queued.
+#
+# It is started by hand only, takes no secret, and uses no cache, so that
+# the times of the steps are those of a machine that starts from nothing.
+#
+# Every action is pinned to a commit; the comment after it names the release.
+name: GPU probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      gpu:
+        description: Which GPU instance to look at
+        type: choice
+        options: [amd, nvidia, both]
+        default: amd
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-probe
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Both instance types have 4 vCPUs.
+  CARGO_BUILD_JOBS: "4"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Where everything that is found is written.
+  OUT: artifacts/gpu-probe
+
+jobs:
+  # AMD Radeon Pro V520, with the kernel's amdgpu and the RADV of the dev
+  # shell.
+  amd:
+    if: inputs.gpu == 'amd' || inputs.gpu == 'both'
+    # Spot is the default; RunsOn falls back to on-demand without capacity.
+    runs-on: runs-on=${{ github.run_id }}/family=g4ad.xlarge/image=ubuntu24-full-x64
+    # Nothing is cached: the dependencies are built from scratch.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Describe the machine
+        id: machine
+        continue-on-error: true
+        run: |
+          mkdir -p "$OUT"
+          command -v lspci > /dev/null || sudo apt-get install -y --no-install-recommends pciutils
+          {
+            uname -srvm
+            echo
+            lspci -nn
+            echo
+            df -h / /nix 2> /dev/null || df -h /
+          } | tee "$OUT/machine.txt"
+
+      # The image carries neither the module nor its firmware.
+      - name: Load amdgpu
+        id: amdgpu
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" linux-firmware
+          status=0
+          sudo modprobe amdgpu || status=$?
+          sudo udevadm settle
+          # `virtual_display` appears here when the driver runs on a virtual
+          # function and creates its virtual display.
+          sudo dmesg | grep -iE 'amdgpu|drm|firmware|virtual_display' | tee "$OUT/dmesg-amdgpu.txt" || true
+          exit "$status"
+
+      # The virtual KMS driver, with every plane type and the writeback
+      # connector. enable_plane_pipeline exists on newer kernels only.
+      - name: Load vkms
+        id: vkms
+        continue-on-error: true
+        run: |
+          sudo modprobe vkms enable_cursor=1 enable_writeback=1 enable_overlay=1 enable_plane_pipeline=1 \
+            2> /dev/null \
+            || sudo modprobe vkms enable_cursor=1 enable_writeback=1 enable_overlay=1
+          sudo udevadm settle
+
+      # The instance exists for this job only. The cards are named here for
+      # the steps below.
+      - name: Make the DRM nodes usable
+        id: nodes
+        continue-on-error: true
+        run: |
+          for node in /dev/dri/card* /dev/dri/renderD*; do
+            if [ -e "$node" ]; then
+              sudo chmod a+rw "$node"
+            fi
+          done
+          ls -l /dev/dri/ > "$OUT/dri-nodes.txt" 2>&1 || true
+          cat "$OUT/dri-nodes.txt"
+          for card in /sys/class/drm/card*; do
+            case "$card" in *-*) continue ;; esac # connectors, not cards
+            name="${card##*/}"
+            path="$(readlink -f "$card/device")"
+            driver=""
+            if [ -e "$card/device/driver" ]; then
+              driver="$(basename "$(readlink -f "$card/device/driver")")"
+            fi
+            echo "$name: driver ${driver:-none}, device $path" | tee -a "$OUT/dri-nodes.txt"
+            if [ "$driver" = amdgpu ]; then
+              echo "AMD_CARD=/dev/dri/$name" >> "$GITHUB_ENV"
+            elif [ "$driver" = vkms ] || [[ "$path" == *vkms* ]] \
+              || sudo grep -qs '^vkms' "/sys/kernel/debug/dri/${name#card}/name"; then
+              echo "VKMS_CARD=/dev/dri/$name" >> "$GITHUB_ENV"
+            fi
+          done
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Fetch the dev shell
+        run: nix develop .#ci --command true
+
+      # The dev shell shows the loader lavapipe only. The steps below point
+      # it at the RADV of the same Mesa instead.
+      - name: Describe the Vulkan driver
+        id: vulkan
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          export VK_DRIVER_FILES="$HIZUKURI_ICD_DIRS/radeon_icd.x86_64.json"
+          tools/gpu-report.sh "$OUT/radv"
+          cat "$OUT/radv/hardware.txt" "$OUT/radv/vulkan-summary.md"
+
+      # With the profile of the tests, so that the tests below reuse what is
+      # built here.
+      - name: Build the compositor
+        id: build
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: cargo build --profile test -p hizukuri
+
+      - name: Describe the KMS devices
+        id: kms-info
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          hizukuri="$CARGO_TARGET_DIR/debug/hizukuri"
+          "$hizukuri" kms-info --summary | tee "$OUT/kms-info-summary.txt"
+          "$hizukuri" kms-info --anonymize --output "$OUT/kms-info.json"
+
+      # From the nixpkgs that flake.lock pins.
+      - name: Describe the KMS devices with drm_info
+        id: drm-info
+        continue-on-error: true
+        run: |
+          nix run --inputs-from . nixpkgs#drm_info -- > "$OUT/drm_info.txt"
+          nix run --inputs-from . nixpkgs#drm_info -- -j > "$OUT/drm_info.json"
+
+      # The display of the GPU itself. On a virtual function the driver
+      # offers no atomic modesetting, which the KMS backend requires.
+      - name: Self test on the GPU's own display
+        id: selftest-gpu
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          hizukuri="$CARGO_TARGET_DIR/debug/hizukuri"
+          export VK_DRIVER_FILES="$HIZUKURI_ICD_DIRS/radeon_icd.x86_64.json"
+          export LIBSEAT_BACKEND=noop
+          XDG_RUNTIME_DIR="$(mktemp -d /tmp/hzk-XXXXXX)"
+          export XDG_RUNTIME_DIR
+          trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
+          connector="$("$hizukuri" kms-info --device "${AMD_CARD:?no amdgpu card was found}" \
+            | jq -r '[.connectors[] | select(.connected) | .name][0] // empty')"
+          echo "card $AMD_CARD, connector ${connector:-none}"
+          "$hizukuri" kms-selftest --device "$AMD_CARD" --output "${connector:?no connected connector}" \
+            --seconds 5 --report "$OUT/selftest-gpu" --vulkan-device gpu 2>&1 \
+            | tee "$OUT/selftest-gpu.log"
+
+      # Drawn on the GPU, shown on vkms: frames are read back and copied
+      # into dumb buffers.
+      - name: Self test on vkms, CPU copy
+        id: selftest-vkms-cpu
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          hizukuri="$CARGO_TARGET_DIR/debug/hizukuri"
+          export VK_DRIVER_FILES="$HIZUKURI_ICD_DIRS/radeon_icd.x86_64.json"
+          export LIBSEAT_BACKEND=noop
+          XDG_RUNTIME_DIR="$(mktemp -d /tmp/hzk-XXXXXX)"
+          export XDG_RUNTIME_DIR
+          trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
+          connector="$("$hizukuri" kms-info --device "${VKMS_CARD:?no vkms card was found}" \
+            | jq -r '[.connectors[] | select(.connected) | .name][0] // empty')"
+          echo "card $VKMS_CARD, connector ${connector:-none}"
+          "$hizukuri" kms-selftest --device "$VKMS_CARD" --output "${connector:?no connected connector}" \
+            --seconds 5 --report "$OUT/selftest-vkms-cpu" --mode 1920x1080 \
+            --vulkan-device gpu --scanout cpu 2>&1 \
+            | tee "$OUT/selftest-vkms-cpu.log"
+
+      # The same, with the GPU's images handed to vkms as dma-bufs.
+      - name: Self test on vkms, dma-buf
+        id: selftest-vkms-dmabuf
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          hizukuri="$CARGO_TARGET_DIR/debug/hizukuri"
+          export VK_DRIVER_FILES="$HIZUKURI_ICD_DIRS/radeon_icd.x86_64.json"
+          export LIBSEAT_BACKEND=noop
+          XDG_RUNTIME_DIR="$(mktemp -d /tmp/hzk-XXXXXX)"
+          export XDG_RUNTIME_DIR
+          trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
+          connector="$("$hizukuri" kms-info --device "${VKMS_CARD:?no vkms card was found}" \
+            | jq -r '[.connectors[] | select(.connected) | .name][0] // empty')"
+          echo "card $VKMS_CARD, connector ${connector:-none}"
+          "$hizukuri" kms-selftest --device "$VKMS_CARD" --output "${connector:?no connected connector}" \
+            --seconds 5 --report "$OUT/selftest-vkms-dmabuf" --mode 1920x1080 \
+            --vulkan-device gpu --scanout dmabuf 2>&1 \
+            | tee "$OUT/selftest-vkms-dmabuf.log"
+
+      # As in the CI workflow: the tests that always run on lavapipe export
+      # dma-bufs through /dev/udmabuf.
+      - name: Make /dev/udmabuf usable, or leave its tests out
+        run: |
+          if [ -e /dev/udmabuf ]; then
+            sudo chmod a+rw /dev/udmabuf || true
+          fi
+          if [ -r /dev/udmabuf ] && [ -w /dev/udmabuf ]; then
+            echo "/dev/udmabuf is usable; the dma-buf tests run"
+            exit 0
+          fi
+          echo "HIZUKURI_TEST_SKIP_UDMABUF=1" >> "$GITHUB_ENV"
+          echo "::warning title=dma-buf tests left out::This runner has no usable /dev/udmabuf, so the tests that need it were left out."
+
+      - name: Run the tests on the GPU
+        id: tests
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        env:
+          HIZUKURI_TEST_DEVICES: gpu
+        run: |
+          export VK_DRIVER_FILES="$HIZUKURI_ICD_DIRS/radeon_icd.x86_64.json"
+          tools/ci.sh test 2>&1 | tee "$OUT/tests.log"
+
+      - name: Summary
+        if: always()
+        env:
+          MACHINE: ${{ steps.machine.outcome }}
+          AMDGPU: ${{ steps.amdgpu.outcome }}
+          VKMS: ${{ steps.vkms.outcome }}
+          NODES: ${{ steps.nodes.outcome }}
+          VULKAN: ${{ steps.vulkan.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          KMS_INFO: ${{ steps.kms-info.outcome }}
+          DRM_INFO: ${{ steps.drm-info.outcome }}
+          SELFTEST_GPU: ${{ steps.selftest-gpu.outcome }}
+          SELFTEST_VKMS_CPU: ${{ steps.selftest-vkms-cpu.outcome }}
+          SELFTEST_VKMS_DMABUF: ${{ steps.selftest-vkms-dmabuf.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
+        run: |
+          block() { # title, file, lines to keep
+            [ -s "$2" ] || return 0
+            echo
+            echo "#### $1"
+            echo
+            echo '```'
+            tail -n "$3" "$2"
+            echo '```'
+          }
+          {
+            echo "### GPU probe: AMD (g4ad.xlarge)"
+            echo
+            echo "| step | outcome |"
+            echo "| --- | --- |"
+            echo "| Describe the machine | $MACHINE |"
+            echo "| Load amdgpu | $AMDGPU |"
+            echo "| Load vkms | $VKMS |"
+            echo "| Make the DRM nodes usable | $NODES |"
+            echo "| Describe the Vulkan driver | $VULKAN |"
+            echo "| Build the compositor | $BUILD |"
+            echo "| Describe the KMS devices | $KMS_INFO |"
+            echo "| Describe the KMS devices with drm_info | $DRM_INFO |"
+            echo "| Self test on the GPU's own display | $SELFTEST_GPU |"
+            echo "| Self test on vkms, CPU copy | $SELFTEST_VKMS_CPU |"
+            echo "| Self test on vkms, dma-buf | $SELFTEST_VKMS_DMABUF |"
+            echo "| Run the tests on the GPU | $TESTS |"
+            if [ -s "$OUT/machine.txt" ]; then
+              echo
+              echo "#### PCI display devices"
+              echo
+              echo '```'
+              grep -iE 'vga|3d|display' "$OUT/machine.txt" || echo "none"
+              echo '```'
+            fi
+            if [ -e "$OUT/dmesg-amdgpu.txt" ]; then
+              echo
+              echo "#### virtual_display in the kernel log"
+              echo
+              echo '```'
+              grep -i 'virtual_display' "$OUT/dmesg-amdgpu.txt" || echo "no such line"
+              echo '```'
+            fi
+            block "DRM nodes" "$OUT/dri-nodes.txt" 20
+            if [ -s "$OUT/radv/vulkan-summary.md" ]; then
+              echo
+              cat "$OUT/radv/vulkan-summary.md"
+            fi
+            block "kms-info --summary" "$OUT/kms-info-summary.txt" 30
+            for name in selftest-gpu selftest-vkms-cpu selftest-vkms-dmabuf; do
+              block "$name: summary.txt" "$OUT/$name/summary.txt" 40
+              [ -s "$OUT/$name/summary.txt" ] || block "$name: the end of the log" "$OUT/$name.log" 15
+            done
+            block "The end of the tests' output" "$OUT/tests.log" 40
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Everything that was written, and the screenshots and logs of the
+      # tests.
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gpu-probe-amd
+          path: |
+            artifacts/gpu-probe/
+            target/*/test-output/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # NVIDIA T4, with the driver that the image carries. Facts only: nothing
+  # is built and no test runs.
+  nvidia:
+    if: inputs.gpu == 'nvidia' || inputs.gpu == 'both'
+    runs-on: runs-on=${{ github.run_id }}/family=g4dn.xlarge/image=ubuntu24-gpu-x64
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Describe the machine
+        id: machine
+        continue-on-error: true
+        run: |
+          mkdir -p "$OUT"
+          command -v lspci > /dev/null || sudo apt-get install -y --no-install-recommends pciutils
+          {
+            uname -srvm
+            echo
+            lspci -nn
+            echo
+            df -h / /nix 2> /dev/null || df -h /
+          } | tee "$OUT/machine.txt"
+
+      - name: Describe the NVIDIA driver
+        id: driver
+        continue-on-error: true
+        run: |
+          mkdir -p "$OUT"
+          {
+            cat /proc/driver/nvidia/version
+            echo
+            nvidia-smi
+          } 2>&1 | tee "$OUT/nvidia-driver.txt"
+
+      # The instance exists for this job only.
+      - name: Make the DRM nodes usable
+        id: nodes
+        continue-on-error: true
+        run: |
+          mkdir -p "$OUT"
+          for node in /dev/dri/card* /dev/dri/renderD*; do
+            if [ -e "$node" ]; then
+              sudo chmod a+rw "$node"
+            fi
+          done
+          ls -l /dev/dri/ > "$OUT/dri-nodes.txt" 2>&1 || true
+          cat "$OUT/dri-nodes.txt"
+
+      # With the loader and the vulkaninfo of the image. Without a manifest
+      # of the NVIDIA driver, the report covers whatever the loader finds.
+      - name: Describe the Vulkan driver, outside the dev shell
+        id: vulkan-system
+        continue-on-error: true
+        run: |
+          command -v vulkaninfo > /dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends vulkan-tools
+          }
+          manifest=""
+          for candidate in /usr/share/vulkan/icd.d/nvidia_icd*.json /etc/vulkan/icd.d/nvidia_icd*.json; do
+            if [ -f "$candidate" ]; then
+              manifest="$candidate"
+              break
+            fi
+          done
+          echo "the manifest of the NVIDIA driver: ${manifest:-not found}"
+          if [ -n "$manifest" ]; then
+            echo "NVIDIA_ICD=$manifest" >> "$GITHUB_ENV"
+            export VK_DRIVER_FILES="$manifest"
+          fi
+          tools/gpu-report.sh "$OUT/system"
+          cat "$OUT/system/hardware.txt" "$OUT/system/vulkan-summary.md"
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      # From the nixpkgs that flake.lock pins.
+      - name: Describe the KMS devices with drm_info
+        id: drm-info
+        continue-on-error: true
+        run: |
+          nix run --inputs-from . nixpkgs#drm_info -- > "$OUT/drm_info.txt"
+          nix run --inputs-from . nixpkgs#drm_info -- -j > "$OUT/drm_info.json"
+
+      - name: Fetch the dev shell
+        run: nix develop .#ci --command true
+
+      # The dev shell has no NVIDIA driver, and the driver has to match the
+      # kernel module of the image. Its libraries, and nothing else of the
+      # system, are put where the dynamic linker of the shell finds them.
+      - name: Describe the Vulkan driver, inside the dev shell
+        id: vulkan-devshell
+        continue-on-error: true
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          libraries="$RUNNER_TEMP/nvidia-libraries"
+          mkdir -p "$libraries"
+          for library in /usr/lib/x86_64-linux-gnu/libnvidia*.so* \
+            /usr/lib/x86_64-linux-gnu/libGLX_nvidia.so* \
+            /usr/lib/x86_64-linux-gnu/libEGL_nvidia.so*; do
+            if [ -e "$library" ]; then
+              ln -sf "$library" "$libraries/"
+            fi
+          done
+          ls "$libraries" > "$OUT/nvidia-libraries.txt"
+          cat "$OUT/nvidia-libraries.txt"
+          export LD_LIBRARY_PATH="$libraries"
+          export VK_DRIVER_FILES="${NVIDIA_ICD:?the manifest of the NVIDIA driver was not found}"
+          # The loader then says why a driver could not be loaded.
+          export VK_LOADER_DEBUG=error,warn
+          tools/gpu-report.sh "$OUT/devshell"
+          cat "$OUT/devshell/vulkan-summary.md"
+          # The report is written even when no device was found.
+          grep -q '^GPU[0-9]*:$' "$OUT/devshell/vulkaninfo.txt"
+
+      - name: Summary
+        if: always()
+        env:
+          MACHINE: ${{ steps.machine.outcome }}
+          DRIVER: ${{ steps.driver.outcome }}
+          NODES: ${{ steps.nodes.outcome }}
+          VULKAN_SYSTEM: ${{ steps.vulkan-system.outcome }}
+          DRM_INFO: ${{ steps.drm-info.outcome }}
+          VULKAN_DEVSHELL: ${{ steps.vulkan-devshell.outcome }}
+        run: |
+          block() { # title, file, lines to keep
+            [ -s "$2" ] || return 0
+            echo
+            echo "#### $1"
+            echo
+            echo '```'
+            tail -n "$3" "$2"
+            echo '```'
+          }
+          {
+            echo "### GPU probe: NVIDIA (g4dn.xlarge)"
+            echo
+            echo "| step | outcome |"
+            echo "| --- | --- |"
+            echo "| Describe the machine | $MACHINE |"
+            echo "| Describe the NVIDIA driver | $DRIVER |"
+            echo "| Make the DRM nodes usable | $NODES |"
+            echo "| Describe the Vulkan driver, outside the dev shell | $VULKAN_SYSTEM |"
+            echo "| Describe the KMS devices with drm_info | $DRM_INFO |"
+            echo "| Describe the Vulkan driver, inside the dev shell | $VULKAN_DEVSHELL |"
+            if [ -s "$OUT/machine.txt" ]; then
+              echo
+              echo "#### PCI display devices"
+              echo
+              echo '```'
+              grep -iE 'vga|3d|display' "$OUT/machine.txt" || echo "none"
+              echo '```'
+            fi
+            block "NVIDIA driver" "$OUT/nvidia-driver.txt" 30
+            block "DRM nodes" "$OUT/dri-nodes.txt" 20
+            for name in system devshell; do
+              if [ -s "$OUT/$name/vulkan-summary.md" ]; then
+                echo
+                echo "#### Vulkan: $name"
+                echo
+                cat "$OUT/$name/vulkan-summary.md"
+              fi
+              block "Vulkan: $name, what vulkaninfo wrote to standard error" "$OUT/$name/vulkaninfo.stderr" 15
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gpu-probe-nvidia
+          path: artifacts/gpu-probe/
+          if-no-files-found: ignore
+          retention-days: 14
