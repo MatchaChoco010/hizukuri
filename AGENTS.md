@@ -101,7 +101,8 @@ hizukuri で作る Wayland compositor を、**コンポジター**と呼ぶ。�
   PR は、CI が通ったら、人の承認を待たずに merge してよい。開発を、承認待ちで止めない。
 - 作業の単位ごとに、Issue か PR を作る。何を、なぜ変えるのかを、その作業の背景を知らない人が読んで分かるように、description に書く。
   リリースの報告は、Issue と PR から作る。
-- `release` と `main` に、直接 commit しない。`release` には `develop` を取り込み、`main` には `release` からの PR を、人が merge する。
+- `release` と `main` に、直接 commit しない。`release` には `develop` を取り込む。`main` には、`release` からの PR を、人が承認してから merge する。
+  承認するのは人で、merge の操作は、承認を受けたエージェントが行う。承認の無い PR を、`main` に merge しない。
 - 人の確認で問題が見つかったら、直しを `develop` に積む（`release` を直接直さない）。直しを含む `develop` を、もう一度 `release` に取り込む。
   問題のある変更を取り除くより、直しを積むほうを選ぶ。
 - リリースの手順は、skill `release` にある。報告のスライドの作り方は、skill `release-slides` にある。
