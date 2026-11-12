@@ -46,6 +46,9 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | `HIZUKURI_TEST_SKIP_UDMABUF` | なし | `1` にすると、`/dev/udmabuf` が要るテストを外す。設定しなければ、`/dev/udmabuf` を開けないときに、それらのテストは失敗する。外したことは、`tools/ci.sh` の出力に出る |
 | `HIZUKURI_TEST_VALIDATION` | なし | `1` にすると、validation layer を有効にして走らせ、エラーが 0 であることも確かめる |
 | `HIZUKURI_ICD_DIRS` | なし | テストが Vulkan のドライバーの manifest を探すディレクトリ（`:` で区切る）。システムの場所より先に探す。探すのは、テストの共通の部品（`prototype/compositor/tests/common/icd.rs` の `find_icd_manifest`）である |
+| `HIZUKURI_TEST_STALL_SECONDS` | `300` | テストの出力が、この秒数のあいだ進まなければ、止まったとみなす（下）。`0` で、見張らない |
+| `HIZUKURI_TEST_CORE_DIR` | なし | kernel が core を書くディレクトリ。設定すると、テストを core dump を許して走らせ、落ちたプロセスの backtrace を、core から出す（下） |
+| `HIZUKURI_TEST_INSPECT_AS_ROOT` | なし | `1` にすると、止まったテストのスレッドの、kernel の側のスタック（`/proc/<pid>/task/<tid>/stack`）を、`sudo -n` で読む。設定しなければ、`sudo` を使わない |
 | `CARGO_BUILD_JOBS` | `8` | 並列にビルドする数 |
 
 - Vulkan を使うテストは、`HIZUKURI_TEST_DEVICES` に並べたデバイスのそれぞれで走る。
@@ -59,6 +62,30 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 - **`tools/ci.sh` は、最後に、テストが起動したプロセスが残っていないことを確かめる。**
   実行ごとに違う値の環境変数（`HIZUKURI_TEST_RUN`）を付けてテストを走らせ、その値を引き継いだプロセスを探す。
   プロセスを名前では探さず、何も止めない。残っていれば、PID を表示して失敗する。
+
+### 止まったテストと、落ちたプロセス
+
+`tools/ci.sh test` は、テストを先にビルドし（`cargo test --no-run`）、それから、`tools/ci-watch.sh` を通して走らせる。
+`tools/ci-watch.sh` は、コマンドを前面で走らせ、出力をそのまま流しながら、出力の量を見張る。ふつうに通るときの動きと時間は、変わらない。
+
+**止まったとき。** 出力が `HIZUKURI_TEST_STALL_SECONDS` 秒のあいだ進まなければ、止まったとみなし、次のことを行う。
+
+1. `cargo test` と、その子孫のプロセス（テストの binary、それが起動した compositor やクライアント）を、`/proc` の親の PID をたどって集める。名前では探さない。
+2. プロセスごとに、コマンド行と、スレッドごとの状態を出す。状態は、`/proc/<pid>/task/<tid>/` の `stat`（状態と CPU 時間）、`wchan`（kernel のどこで待っているか）、
+   `syscall`（どの system call の中か。`ioctl` や `read` なら、対象の fd が指すもの）、読めるなら `stack`（kernel の側のスタック）である。
+   ドライバーの `ioctl` の中で止まっているのか、`futex` で待っているのかが、ここで分かる。
+3. プロセスごとに、`gdb -batch` で、すべてのスレッドの backtrace を出す。
+4. 集めたプロセスを、PID で止める（`SIGTERM`、5 秒待って、残れば `SIGKILL`）。終了の状態を `124` にして、検査を失敗で終える。ジョブの時間切れまで待たない。
+
+gdb は、`ci` と `default` の devShell に入っている。gdb がプロセスにつながるには、kernel が、子でないプロセスの trace を許している必要がある
+（`kernel.yama.ptrace_scope` が `0` か、root で走らせている）。許されていない機械では、backtrace を出さず、その理由を出力に書く。スレッドの状態は、出す。
+
+**落ちたとき。** `HIZUKURI_TEST_CORE_DIR` を設定し、kernel の `core_pattern` を `<そのディレクトリ>/core.%p.%E` にしておくと、
+コマンドの実行中に、そこに書かれた core から、すべてのスレッドの backtrace を出し、core を消す。終了の状態は、変えない（テストの失敗は、cargo が報告する）。
+`HIZUKURI_TEST_CORE_DIR` を設定しなければ、core dump の設定には触れず、落ちたプロセスの backtrace は出ない。
+
+`tools/ci-watch.sh --self-test` は、何も出力しないコマンド（と、`HIZUKURI_TEST_CORE_DIR` があれば、落ちるコマンド）を通して、
+報告に backtrace が出ることを確かめる。その機械で、上の 2 つが働くかが分かる。
 
 ## テストの構成
 
@@ -270,6 +297,9 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
   **開けるようにできなかったときは、`HIZUKURI_TEST_SKIP_UDMABUF=1` を設定して、`/dev/udmabuf` が要るテストを外す。**
   外したことは、ジョブの要約と、警告に出る。
 - 同じ PR の古い実行は、新しい push で取り消す。ブランチへの push では、push した commit ごとに実行を持ち、後の push が、前の実行を取り消すことは無い。
+- `check (test)` は、検査の前に、`sudo sysctl` で、`kernel.yama.ptrace_scope` を `0` に、`kernel.core_pattern` を `$RUNNER_TEMP/cores/core.%p.%E` にし、
+  `HIZUKURI_TEST_CORE_DIR` と `HIZUKURI_TEST_INSPECT_AS_ROOT=1` を設定する（runner は、このジョブのためだけにある）。
+  変える前の値は、ログに出す。続けて、`tools/ci-watch.sh --self-test` を走らせ、止まったテストと落ちたプロセスの報告が、この runner で働くことを確かめる。失敗すれば、ジョブは失敗する。
 - 失敗したときは、`target/*/test-output/`（取り込んだ画像と、`proto-compositor` のログ）を、artifact として 14 日残す。
 
 ### `vm.yml`
@@ -332,6 +362,8 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 | Write how the dev shell reaches the driver | nixpkgs のライブラリを取ってきて、`settings.sh` を書く |
 | Check what the Vulkan driver offers | devShell の中で、`tools/gpu-report.sh`。デバイスが見えないか、`VK_EXT_descriptor_heap` か `VK_EXT_external_memory_dma_buf` が無ければ、失敗する。ドライバーの準備の不備を、テストの前に、それとわかる形で出す |
 | Make /dev/udmabuf usable, or leave its tests out | `ci.yml` と同じ。`/dev/udmabuf` を開けるようにし、できなければ、それが要るテストを外す |
+| Let the checks inspect stuck and crashed tests | `ci.yml` と同じ。`kernel.yama.ptrace_scope` と `kernel.core_pattern` を変え、`HIZUKURI_TEST_CORE_DIR` と `HIZUKURI_TEST_INSPECT_AS_ROOT=1` を設定する |
+| Check that stuck and crashed tests are reported | `tools/ci-watch.sh --self-test`。失敗しても、後の step は走る（`continue-on-error`） |
 | Build the compositor | テストのプロファイルで、`proto-compositor` をビルドする。後のテストは、これを使い回す |
 | Self test on vkms | GPU で描いて、vkms に出す `proto-compositor kms-selftest`（`--vulkan-device gpu --scanout cpu`）。テストパターンは、`proto-gfx-core` で、GPU の上で描く。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `proto-compositor kms-selftest: PASSED` でなければ、失敗する |
 | Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる。自己診断だけが失敗したときも、走る |

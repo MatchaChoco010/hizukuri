@@ -125,6 +125,9 @@
             # .slang files to SPIR-V with it (HIZUKURI_SLANGC below).
             shader-slang
             vulkan-tools # vulkaninfo, vkcube
+            # tools/ci-watch.sh takes the backtraces of tests that got stuck,
+            # and of processes that crashed, with it.
+            gdb
             # The applications the tests can start
             # (HIZUKURI_TEST_REAL_CLIENTS).
             weston # weston-terminal

@@ -8,7 +8,9 @@
 #
 #   lint  cargo fmt --check and cargo clippy
 #   test  cargo test (every test binary, also after a failure), then a
-#         check that the tests left no process running
+#         check that the tests left no process running. The tests run
+#         through tools/ci-watch.sh: tests that get stuck are reported, with
+#         the backtrace of every thread, and stopped.
 #   all   both, in that order (the default)
 #
 # Environment:
@@ -29,6 +31,14 @@
 #                             validation layer (it must be installed).
 #   HIZUKURI_ICD_DIRS         colon separated directories searched for Vulkan
 #                             driver manifests before the system's.
+#   HIZUKURI_TEST_STALL_SECONDS  seconds without output after which the
+#                             tests are taken to be stuck. Default: 300.
+#                             0 turns the watch off.
+#   HIZUKURI_TEST_CORE_DIR    the directory the kernel writes cores into;
+#                             the backtraces of processes that crashed are
+#                             printed from them (see tools/ci-watch.sh).
+#   HIZUKURI_TEST_INSPECT_AS_ROOT  set to 1 to read the kernel stacks of
+#                             stuck tests with `sudo -n`.
 #   CARGO_BUILD_JOBS          parallel build jobs. Default here: 8.
 #   CARGO_TARGET_DIR          where cargo builds. Default: target.
 set -euo pipefail
@@ -90,6 +100,24 @@ lavapipe_manifest() {
     done
 }
 
+# cargo test with the arguments given, every test binary also after one of
+# them failed: a run that fails shows everything that fails, not only the
+# first.
+#
+# The tests are built first, and then run through tools/ci-watch.sh, which
+# takes a run that writes nothing for some minutes to be stuck. A build may
+# well be silent that long; tests are not.
+run_tests() {
+    cargo test "$@" --no-run || return 1
+    # cargo colors its output for a terminal, and would stop doing so when
+    # its output is passed on by the watch.
+    if [ -t 1 ] && [ -z "${CARGO_TERM_COLOR:-}" ]; then
+        CARGO_TERM_COLOR=always tools/ci-watch.sh cargo test "$@" --no-fail-fast
+    else
+        tools/ci-watch.sh cargo test "$@" --no-fail-fast
+    fi
+}
+
 test_all() {
     # The gfx crates read this instead of the HIZUKURI_ variable.
     if [ "${HIZUKURI_TEST_VALIDATION:-}" = "1" ]; then
@@ -100,12 +128,10 @@ test_all() {
         echo "== note: HIZUKURI_TEST_SKIP_UDMABUF is set; the tests that need /dev/udmabuf are left out"
     fi
 
-    # Every test binary runs, also after one of them failed: a run that
-    # fails shows everything that fails, not only the first.
     local failed=0
 
     echo "== cargo test"
-    cargo test --workspace --no-fail-fast || failed=1
+    run_tests --workspace || failed=1
 
     # The tests of the script GPU API (proto-gfx-core, proto-gfx-lua) run
     # in-process, on one device per run: on lavapipe, unless gpu is listed.
@@ -120,8 +146,7 @@ test_all() {
             exit 1
         fi
         echo "== cargo test (proto-gfx-core, proto-gfx-lua on lavapipe: $lavapipe)"
-        VK_DRIVER_FILES="$lavapipe" cargo test -p proto-gfx-core -p proto-gfx-lua --no-fail-fast \
-            || failed=1
+        VK_DRIVER_FILES="$lavapipe" run_tests -p proto-gfx-core -p proto-gfx-lua || failed=1
     fi
 
     # Nothing is stopped here. A process that is still running is a defect
