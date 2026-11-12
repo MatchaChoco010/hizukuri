@@ -71,11 +71,13 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 **止まったとき。** 出力が `HIZUKURI_TEST_STALL_SECONDS` 秒のあいだ進まなければ、止まったとみなし、次のことを行う。
 
 1. `cargo test` と、その子孫のプロセス（テストの binary、それが起動した compositor やクライアント）を、`/proc` の親の PID をたどって集める。名前では探さない。
-2. プロセスごとに、コマンド行と、スレッドごとの状態を出す。状態は、`/proc/<pid>/task/<tid>/` の `stat`（状態と CPU 時間）、`wchan`（kernel のどこで待っているか）、
+2. 機械の全体の状態を出す。`/proc/meminfo` の `MemTotal`、`MemAvailable`、`SwapTotal`、`SwapFree`、`Committed_AS`、`/proc/loadavg`、読めれば `/proc/pressure/` の `cpu`、`memory`、`io`。
+   メモリを使い切った機械では、どのプロセスも進まなくなるので、それと見分けるためである。
+3. プロセスごとに、コマンド行と、メモリ（`/proc/<pid>/status` の `VmSize`、`VmRSS`、`VmSwap`）とスレッドの数、スレッドごとの状態を出す。状態は、`/proc/<pid>/task/<tid>/` の `stat`（状態と CPU 時間）、`wchan`（kernel のどこで待っているか）、
    `syscall`（どの system call の中か。`ioctl` や `read` なら、対象の fd が指すもの）、読めるなら `stack`（kernel の側のスタック）である。
    ドライバーの `ioctl` の中で止まっているのか、`futex` で待っているのかが、ここで分かる。
-3. プロセスごとに、`gdb -batch` で、すべてのスレッドの backtrace を出す。
-4. 集めたプロセスを、PID で止める（`SIGTERM`、5 秒待って、残れば `SIGKILL`）。終了の状態を `124` にして、検査を失敗で終える。ジョブの時間切れまで待たない。
+4. プロセスごとに、`gdb -batch` で、すべてのスレッドの backtrace を出す。
+5. 集めたプロセスを、PID で止める（`SIGTERM`、5 秒待って、残れば `SIGKILL`）。終了の状態を `124` にして、検査を失敗で終える。ジョブの時間切れまで待たない。
 
 gdb は、`ci` と `default` の devShell に入っている。gdb がプロセスにつながるには、kernel が、子でないプロセスの trace を許している必要がある
 （`kernel.yama.ptrace_scope` が `0` か、root で走らせている）。許されていない機械では、backtrace を出さず、その理由を出力に書く。スレッドの状態は、出す。

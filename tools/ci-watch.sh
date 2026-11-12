@@ -14,6 +14,9 @@
 # for the command and every process below it (found by following the parent
 # of each process, never by name), this script prints
 #
+#   - the memory, load and pressure of the machine (/proc/meminfo,
+#     /proc/loadavg, /proc/pressure),
+#   - the memory and the number of threads of each process,
 #   - the state of each thread, and where it waits in the kernel
 #     (/proc/<pid>/task/<tid>/stat, wchan, syscall, and stack where it can be
 #     read),
@@ -166,6 +169,11 @@ describe_process() {
     fi
     note "-- process $pid (parent ${FIELDS[1]}, state ${FIELDS[0]}), executable $(timeout 5 readlink "/proc/$pid/exe" 2> /dev/null || echo "?")"
     note "   command line: $(timeout 5 tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null || echo "?")"
+    while IFS= read -r line; do
+        case "$line" in
+            VmSize:* | VmRSS:* | VmSwap:* | Threads:*) note "   ${line//$'\t'/ }" ;;
+        esac
+    done <<< "$(timeout 5 cat "/proc/$pid/status" 2> /dev/null)"
     for task in "/proc/$pid/task"/[0-9]*; do
         tid="${task##*/}"
         read_stat "$task/stat" || continue
@@ -193,6 +201,27 @@ describe_process() {
         elif [[ -r "$task/stack" ]]; then
             timeout 5 cat "$task/stack" 2> /dev/null | sed 's/^/      /' >&2
         fi
+    done
+}
+
+# Prints what the whole machine was doing: memory, load, and pressure. A
+# machine that ran out of memory stalls every process, not only one.
+describe_machine() {
+    local line file
+    note "== the machine"
+    while IFS= read -r line; do
+        case "$line" in
+            MemTotal:* | MemAvailable:* | SwapTotal:* | SwapFree:* | Committed_AS:*)
+                note "   $line"
+                ;;
+        esac
+    done < /proc/meminfo
+    { IFS= read -r line < /proc/loadavg; } 2> /dev/null && note "   load average: $line"
+    for file in /proc/pressure/cpu /proc/pressure/memory /proc/pressure/io; do
+        [[ -r "$file" ]] || continue
+        while IFS= read -r line; do
+            note "   pressure ${file##*/}: $line"
+        done < "$file"
     done
 }
 
@@ -258,6 +287,7 @@ report_stall() {
         note "the command had not started"
         return
     fi
+    bounded "$PROC_SECONDS" describe_machine
     process_tree "$root"
     note "== the processes of the command, parents first: ${TREE[*]}"
     for pid in "${TREE[@]}"; do
@@ -422,6 +452,8 @@ self_test() {
     expect "the status is $STALL_STATUS (it was $status)" "$status" "^$STALL_STATUS\$"
     expect "the report names the stuck process" "$output" '^ +command line: sleep 600'
     expect "the report has where a thread waits in the kernel" "$output" 'thread [0-9]+ \(sleep\): state S'
+    expect "the report has the memory of the machine" "$output" '^ +MemAvailable: '
+    expect "the report has the memory of the process" "$output" '^ +VmRSS: '
     expect "the report has a backtrace" "$output" '^ +#0 '
 
     if [[ -n "$core_dir" ]]; then
