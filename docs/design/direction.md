@@ -157,8 +157,11 @@ hizukuri で作ったコンポジターが、Wayland compositor として満た�
 - GPU は Vulkan。**Vulkan 1.4 を前提にする。** 最新の拡張機能を前提にしてよい。
 - **descriptor heap の拡張（`VK_EXT_descriptor_heap`）を使う。** 従来の descriptor の仕組みを、引きずらない。
 - バインディングは vulkan-rs を使う。
-- shader の言語は Slang。Slang から SPIR-V へのコンパイルは、エディターの側の層が行う。
-  ビルドしたコンポジターに入るのは、SPIR-V である。ランタイムは、Slang をコンパイルしない。
+- shader の言語は、Slang に統一する。shader のコンパイラーも、Slang のものだけを使う。
+- コンポジターの shader は、エディターの側の層が、Slang から SPIR-V へコンパイルする。
+  ビルドしたコンポジターに入るのは、SPIR-V である。
+- ランタイムは、Slang のコンパイラーを同梱する。OCIO は、色の変換を、shader のソースとして実行時に生成する。
+  それをコンパイルするためである。
 
 ## 12. 範囲の外
 
