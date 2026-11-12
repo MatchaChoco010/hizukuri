@@ -501,7 +501,7 @@ vm-check: <数> passed, <数> failed, <数> skipped. Evidence: <出力のディ�
 
 `.github/workflows/vm.yml` が、GitHub の runner（KVM が使える。GPU は無い）の上で、同じ試験を回す。
 
-- 契機は、`main` への push（文書だけの変更を除く）、毎晩 1 回、手動の起動である。
+- 契機は、`develop` と `release` への push（文書だけの変更を除く）、毎晩 1 回、手動の起動である。
 - 既定の部と、`real-hardware` の部を回す。`venus` の部は、回さない。
 - cargo のビルドの結果を、キャッシュする。無くても、時間がかかるだけである。Nix の store は、キャッシュしない（devShell、QEMU、ゲストは、binary cache から、1 分ほどで取得できる）。
 - 結果の要約は、job の summary に出る。出力のディレクトリと、ゲストのシリアルコンソールのログは、artifact（`vm-check`）に残る。

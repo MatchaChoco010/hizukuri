@@ -165,8 +165,8 @@ workflow は、3 つある。
 
 | workflow | 契機 | 内容 | runner |
 | --- | --- | --- | --- |
-| `.github/workflows/ci.yml` | PR、`main` への push | `tools/ci.sh`（書式、lint、テスト） | GitHub の標準の runner |
-| `.github/workflows/vm.yml` | `main` への push（文書だけの変更を除く）、毎晩、手動 | VM の中の試験（`tools/vm-check.py`） | GitHub の標準の runner |
+| `.github/workflows/ci.yml` | PR、`develop`・`release`・`main` への push | `tools/ci.sh`（書式、lint、テスト） | GitHub の標準の runner |
+| `.github/workflows/vm.yml` | `develop`・`release` への push（文書だけの変更を除く）、毎晩、手動 | VM の中の試験（`tools/vm-check.py`） | GitHub の標準の runner |
 | `.github/workflows/gpu-probe.yml` | 手動 | GPU の付いたインスタンスの上で、ドライバー、Vulkan、KMS の状態を調べる。合否は、判定しない | GPU の付いた、クラウドのインスタンス |
 
 - `ci.yml` と `vm.yml` は、リポジトリの中のものと、公開されている依存だけで動く。GPU も、秘密の値も、外部のサービスの登録も、要らない。
@@ -243,7 +243,7 @@ workflow は、3 つある。
 
 ### キャッシュ
 
-`ci.yml` と `vm.yml` は、GitHub の cache を使う。保存するのは、`main` への push のときだけである。PR は、読むだけである。
+`ci.yml` と `vm.yml` は、GitHub の cache を使う。保存するのは、branch への push のときだけである。PR は、読むだけである。
 どのキャッシュの中身も、公開の場所から取り直すか、ビルドし直せる。無くても、時間がかかるだけである。
 
 | キャッシュ | 鍵 | 中身 | 保存する workflow |

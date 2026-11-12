@@ -9,7 +9,7 @@ name: VM
 
 on:
   push:
-    branches: [main]
+    branches: [develop, release]
     paths-ignore:
       - "docs/**"
       - "**.md"
