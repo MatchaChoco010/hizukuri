@@ -2394,13 +2394,30 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
             key(session, k, false);
         }
     };
+    // The focus on the left tile, which is below the right one. The
+    // fallback raises the focused window; reloaded without a hand-over, the
+    // script still finds the tiles in the order they are on screen.
+    let order = session.script("tile_order", json!([]));
+    logo_key(&mut session, KEY_H, false);
+    let left = order[0].as_u64().unwrap();
+    session.wait(&mut [&mut a, &mut b], "the focus on the left tile", |s| {
+        s["focus"]["window"] == left
+    });
     chord(&mut session, KEY_F);
     assert_eq!(session.script_state()["mode"], "fallback");
+    let stacking: Vec<u64> = session.state()["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(stacking.last(), Some(&left), "the focused window is on top");
     let reloads = session.script_state()["reloads"].as_u64().unwrap();
     chord(&mut session, KEY_R);
     let script = session.script_state();
     assert_eq!(script["mode"], "running");
     assert_eq!(script["reloads"].as_u64().unwrap(), reloads + 1);
+    assert_eq!(session.script("tile_order", json!([])), order);
 
     // Another project altogether, by path.
     let other = script_project(

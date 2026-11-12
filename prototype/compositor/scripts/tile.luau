@@ -73,10 +73,26 @@ function T.init(saved)
             end
         end
     end
+    -- The others (all of them when nothing was handed over, as after a
+    -- reload while the script was out) follow, left to right as they are
+    -- on screen.
+    local others = {}
     for _, window in hz.windows() do
         if not known[window.id] then
-            table.insert(order, window.id)
+            table.insert(others, window)
         end
+    end
+    table.sort(others, function(a, b)
+        if a.x ~= b.x then
+            return a.x < b.x
+        end
+        if a.y ~= b.y then
+            return a.y < b.y
+        end
+        return a.id < b.id
+    end)
+    for _, window in others do
+        table.insert(order, window.id)
     end
     T.arrange()
 end
