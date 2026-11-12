@@ -1,42 +1,42 @@
 # 検証用の compositor
 
-`crates/` にあるのは、hizukuri の基盤の仕組みを確かめるための、検証用の compositor である。製品のコードではない。
+`prototype/` にあるのは、hizukuri の基盤の仕組みを確かめるための、検証用の compositor である。製品のコードではない。
 この文書は、その作りと、動かし方、検査の回し方を説明する。
 
 | 文書 | 内容 |
 | --- | --- |
 | この文書 | 構成、ビルド、起動時の指定、制御口、検査 |
 | [KMS のバックエンド](kms-backend.md) | DRM/KMS の session としての作り、scanout の経路、安全策、自己診断、起動と終了、VM での検査 |
-| [プロトコルの層](protocol-layer.md) | `hizukuri-wl` が中核に見せる口、対応しているプロトコル、バッファの受け渡し |
+| [プロトコルの層](protocol-layer.md) | `proto-wl` が中核に見せる口、対応しているプロトコル、バッファの受け渡し |
 | [スクリプトの層](script-layer.md) | スクリプトで描画とウィンドウ管理を書く仕組み、コアが見せる口、読み直し、故障したときの動き |
 
 ## 構成
 
 | 場所 | 内容 | 主な依存 |
 | --- | --- | --- |
-| `crates/hizukuri-color` | image description、原色の行列、transfer function、輝度の対応づけ。CPU の参照計算 | なし |
-| `crates/hizukuri-render` | Rust で書いた Vulkan のレンダラー。`wl_shm` の取り込み、linear light の `RGBA16F` での合成、出力への符号化、読み戻し | `vulkan-rs`、`naga`（ビルド時） |
-| `crates/hizukuri-layout` | Rust で書いたウィンドウの配置。単純なフローティング | なし |
-| `crates/hizukuri-wl` | Wayland のサーバー側。Smithay の型を外へ出さない | Smithay |
-| `crates/hizukuri-backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む） | `hizukuri-render`、`calloop`、`drm`、Smithay（session、udev、libinput） |
-| `crates/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込み | `vulkan-rs`、`naga` |
-| `crates/gfx-lua` | `gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
-| `crates/hizukuri` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、制御口（`control`）、実行バイナリ `hizukuri` と `hizukuri-ctl` | 上のすべて |
-| `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `hizukuri-test-client` | `wayland-client` |
+| `prototype/color` | image description、原色の行列、transfer function、輝度の対応づけ。CPU の参照計算 | なし |
+| `prototype/render` | Rust で書いた Vulkan のレンダラー。`wl_shm` の取り込み、linear light の `RGBA16F` での合成、出力への符号化、読み戻し | `vulkan-rs`、`naga`（ビルド時） |
+| `prototype/layout` | Rust で書いたウィンドウの配置。単純なフローティング | なし |
+| `prototype/wl` | Wayland のサーバー側。Smithay の型を外へ出さない | Smithay |
+| `prototype/backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む） | `proto-render`、`calloop`、`drm`、Smithay（session、udev、libinput） |
+| `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込み | `vulkan-rs`、`naga` |
+| `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
+| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて |
+| `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
 | `tools/ci.sh` | 検査をまとめて走らせる | |
 | `tools/real-app-check.sh` | 実際のアプリ（weston-terminal）を headless の中で動かして、画面を取り込む | |
 | `tools/vm-check.py` | 検証用 VM の中で、DRM/KMS の session としての動作をまとめて検査する | `tools/vm/vm` |
 
 ### 中核と、3 つの継ぎ目
 
-中核（`hizukuri::compositor::Compositor`）は、プロトコルの層から出来事を受け取り、入力を配り、フレームを描く時機を決め、
+中核（`proto_compositor::compositor::Compositor`）は、プロトコルの層から出来事を受け取り、入力を配り、フレームを描く時機を決め、
 フレームの完了をクライアントに知らせる。描画、ウィンドウの配置、画面への出力は、自分では行わない。3 つの trait を通す。
 
 | 継ぎ目 | trait | 実装 |
 | --- | --- | --- |
-| 描くもの | `hizukuri::scene::Scene` | `FlatScene`（`hizukuri-render` で、ウィンドウを平らな矩形として描く）、`ScriptScene`（スクリプトが描く） |
-| ウィンドウを管理するもの | `hizukuri::wm::WindowManager` | `hizukuri_layout::Layout`（フローティング）、`ScriptWm`（スクリプトが決める） |
-| 出力先 | `hizukuri_backend::Backend` | `HeadlessBackend`、`KmsBackend` |
+| 描くもの | `proto_compositor::scene::Scene` | `FlatScene`（`proto-render` で、ウィンドウを平らな矩形として描く）、`ScriptScene`（スクリプトが描く） |
+| ウィンドウを管理するもの | `proto_compositor::wm::WindowManager` | `proto_layout::Layout`（フローティング）、`ScriptWm`（スクリプトが決める） |
+| 出力先 | `proto_backend::Backend` | `HeadlessBackend`、`KmsBackend` |
 
 `Scene` の口は、次のとおりである。
 
@@ -104,19 +104,19 @@ RT="$XDG_RUNTIME_DIR/hzk-dev"          # 短いパスにする（下の注意）
 mkdir -m 700 "$RT"
 
 env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DISPLAY XDG_RUNTIME_DIR="$RT" \
-    target/debug/hizukuri --backend headless --socket hizukuri-dev --exit-after 60 &
+    target/debug/proto-compositor --backend headless --socket hizukuri-dev --exit-after 60 &
 SERVER=$!
 
 # 検証用のクライアントは --socket が必須で、WAYLAND_DISPLAY を見ない
-target/debug/hizukuri-test-client --socket "$RT/hizukuri-dev" --color 800000ff --size 300x200 &
+target/debug/proto-test-client --socket "$RT/hizukuri-dev" --color 800000ff --size 300x200 &
 
 # 実際のアプリは、XDG_RUNTIME_DIR と WAYLAND_DISPLAY を明示する
 env -u DISPLAY -u WAYLAND_SOCKET XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY=hizukuri-dev weston-terminal &
 
 # 制御口
-target/debug/hizukuri-ctl --socket "$RT/hizukuri-dev.control" state
-target/debug/hizukuri-ctl --socket "$RT/hizukuri-dev.control" screenshot artifacts/shot.png
-target/debug/hizukuri-ctl --socket "$RT/hizukuri-dev.control" quit
+target/debug/proto-ctl --socket "$RT/hizukuri-dev.control" state
+target/debug/proto-ctl --socket "$RT/hizukuri-dev.control" screenshot artifacts/shot.png
+target/debug/proto-ctl --socket "$RT/hizukuri-dev.control" quit
 
 wait "$SERVER"          # 自分が起動したものが終わるのを待つ
 rm -rf "$RT"
@@ -146,8 +146,8 @@ rm -rf "$RT"
 | `--vulkan-icd` | なし | Vulkan のドライバーの manifest。`VK_DRIVER_FILES` に設定してから loader を読み込む |
 | `--vulkan-validation` | off | validation layer を有効にする。layer が無ければ起動に失敗する |
 | `--no-renderer` | off | レンダラーなしで動かす。描画以外はすべて動く |
-| `--renderer` | `rust` | 描くもの。`rust`: `hizukuri-render`。`script`: スクリプトの層 |
-| `--wm` | `rust` | ウィンドウを管理するもの。`rust`: `hizukuri-layout`。`script`: スクリプト。`--renderer script` が要る |
+| `--renderer` | `rust` | 描くもの。`rust`: `proto-render`。`script`: スクリプトの層 |
+| `--wm` | `rust` | ウィンドウを管理するもの。`rust`: `proto-layout`。`script`: スクリプト。`--renderer script` が要る |
 | `--script` | 組み込み | スクリプトのプロジェクトのディレクトリ（`main.luau`）。無いモジュールは、組み込みのものを使う |
 | `--script-on-error` | `safe` | 描画のスクリプトが失敗したとき。`safe`: 組み込みの fallback が描く。`hold`: 直前のフレームを出し続けて、後で試し直す |
 | `--script-budget-ms` | `250` | スクリプトの 1 回の呼び出しに許す時間 |
@@ -167,9 +167,9 @@ rm -rf "$RT"
 
 | コマンド | 内容 |
 | --- | --- |
-| `hizukuri kms-info [--device PATH] [--anonymize] [--output FILE]` | DRM のデバイスの connector、mode、CRTC、plane、property を JSON で出す。読み取りだけで、DRM master を取らず、何も変えない |
-| `hizukuri kms-info --summary` | 人が読む一覧を出す。デバイスごとに、ドライバー、PCI の番地、seat の primary GPU かどうか、つながっている画面と preferred のモード |
-| `hizukuri kms-selftest [--device PATH] --output NAME --seconds N --report DIR` | 出力 1 つにテストパターンを出し、page flip を測り、報告を書いて終わる |
+| `proto-compositor kms-info [--device PATH] [--anonymize] [--output FILE]` | DRM のデバイスの connector、mode、CRTC、plane、property を JSON で出す。読み取りだけで、DRM master を取らず、何も変えない |
+| `proto-compositor kms-info --summary` | 人が読む一覧を出す。デバイスごとに、ドライバー、PCI の番地、seat の primary GPU かどうか、つながっている画面と preferred のモード |
+| `proto-compositor kms-selftest [--device PATH] --output NAME --seconds N --report DIR` | 出力 1 つにテストパターンを出し、page flip を測り、報告を書いて終わる |
 
 ### Vulkan のデバイスの選び方
 
@@ -179,7 +179,7 @@ rm -rf "$RT"
   設定されている環境で、別のドライバー（lavapipe など）を使うときは、manifest を明示する。
 
 ```sh
-target/debug/hizukuri --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" ...
+target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" ...
 ```
 
 - Nix の devShell の中では、lavapipe の manifest の場所が、環境変数 `HIZUKURI_ICD_LAVAPIPE` に入っている。
@@ -215,19 +215,19 @@ target/debug/hizukuri --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" 
 | `script_mode` | `mode` | `running`: スクリプトに任せる。`safe`: 組み込みの fallback に任せる |
 | `quit` | | 終了する |
 
-`hizukuri-ctl` は、これをコマンドにしたものである。失敗の応答のときは、終了コードが 0 以外になる。
+`proto-ctl` は、これをコマンドにしたものである。失敗の応答のときは、終了コードが 0 以外になる。
 
 ```sh
-hizukuri-ctl --socket PATH state
-hizukuri-ctl --socket PATH screenshot out.png --composite out.exr
-hizukuri-ctl --socket PATH key 30 press
-hizukuri-ctl --socket PATH pointer-motion 100 80
-hizukuri-ctl --socket PATH pointer-button 272 press
-hizukuri-ctl --socket PATH pointer-axis --vertical 15 --v120-vertical 120
-hizukuri-ctl --socket PATH move-window 3 40 30
-hizukuri-ctl --socket PATH set-surface-color 2 display-p3
-hizukuri-ctl --socket PATH script-reload
-hizukuri-ctl --socket PATH raw '{"cmd":"state"}'
+proto-ctl --socket PATH state
+proto-ctl --socket PATH screenshot out.png --composite out.exr
+proto-ctl --socket PATH key 30 press
+proto-ctl --socket PATH pointer-motion 100 80
+proto-ctl --socket PATH pointer-button 272 press
+proto-ctl --socket PATH pointer-axis --vertical 15 --v120-vertical 120
+proto-ctl --socket PATH move-window 3 40 30
+proto-ctl --socket PATH set-surface-color 2 display-p3
+proto-ctl --socket PATH script-reload
+proto-ctl --socket PATH raw '{"cmd":"state"}'
 ```
 
 `state` が返すもの:
@@ -263,18 +263,18 @@ luminance:x(80/80) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srg
 
 ## 検証用のクライアント
 
-`hizukuri-test-client` は、1 色で塗った `xdg_toplevel` を 1 つ出し、受け取ったイベントを 1 行 1 つの JSON で標準出力に書く。
+`proto-test-client` は、1 色で塗った `xdg_toplevel` を 1 つ出し、受け取ったイベントを 1 行 1 つの JSON で標準出力に書く。
 
 ```sh
-hizukuri-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
-                     [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888]
-                     [--duration 秒]
+proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
+                  [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888]
+                  [--duration 秒]
 ```
 
 - `--socket` は必須である。`WAYLAND_DISPLAY` を見ない。
 - `--color` は、バッファに書く値そのものである。`wl_shm` は premultiplied なので、半透明の色は掛け算した値を渡す
   （50% の赤は `80000080`）。
-- テストからは、ライブラリ（`hizukuri_test_client::TestClient`）として使う。自分ではブロックせず、`pump` を呼んだときだけ進む。
+- テストからは、ライブラリ（`proto_test_client::TestClient`）として使う。自分ではブロックせず、`pump` を呼んだときだけ進む。
   ライブラリは、バッファの模様、dmabuf での送付、buffer transform、viewport、fractional-scale、presentation の feedback、
   popup、selection、drag and drop、ウィンドウ管理への要求も話す。
 
@@ -291,8 +291,8 @@ hizukuri-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 | `HIZUKURI_TEST_DEVICES` | `lavapipe` | テストに使う Vulkan のデバイス（コンマで並べる）。`lavapipe` と、`gpu`（Vulkan の loader が見せるハードウェアのデバイス）。並べたデバイスが無ければ、失敗する |
 | `HIZUKURI_TEST_REAL_CLIENTS` | `weston-terminal,wl-clipboard,foot,script-tiles` | 実際のアプリを使うテスト（`real_clients.rs`、`script_real_clients.rs`）で、使うもの。並べたものに要るプログラムが `PATH` に無ければ、失敗する。並べていないもののテストは、飛ばす |
 | `HIZUKURI_TEST_SKIP_UDMABUF` | なし | `/dev/udmabuf` が要るテストを、外す。設定しなければ、`/dev/udmabuf` を開けないときに、それらのテストは失敗する（下） |
-| `GFX_SPIKE_VALIDATION` | なし | `gfx-core` と `gfx-lua` のテストが読む、validation layer の指定。`tools/ci.sh` は、`HIZUKURI_TEST_VALIDATION=1` のときに、これも設定する |
-| `HIZUKURI_LOG` | `info` | compositor のログの絞り込み（`tracing` の書式。`debug`、`hizukuri_wl=trace` など）。テストが起動した compositor にも効く |
+| `GFX_SPIKE_VALIDATION` | なし | `proto-gfx-core` と `proto-gfx-lua` のテストが読む、validation layer の指定。`tools/ci.sh` は、`HIZUKURI_TEST_VALIDATION=1` のときに、これも設定する |
+| `HIZUKURI_LOG` | `info` | compositor のログの絞り込み（`tracing` の書式。`debug`、`proto_wl=trace` など）。テストが起動した compositor にも効く |
 
 `HIZUKURI_TEST_REAL_CLIENTS` に並べられる名前:
 
@@ -306,22 +306,22 @@ hizukuri-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 | `alacritty-dmabuf` | `alacritty` | GL のクライアントの dmabuf を、CPU で読む | 既定に入っていない。GPU の GL のドライバーが要る |
 | `vkcube` | `vkcube` | Vulkan のクライアントの dmabuf を、スクリプトの描画のデバイスに取り込む | 既定に入っていない。`HIZUKURI_TEST_DEVICES` に `gpu` が要る |
 
-- `gfx-core` と `gfx-lua` のテストは、プロセスの中で、1 回の実行につき 1 つのデバイスで走る。`HIZUKURI_TEST_DEVICES` に
+- `proto-gfx-core` と `proto-gfx-lua` のテストは、プロセスの中で、1 回の実行につき 1 つのデバイスで走る。`HIZUKURI_TEST_DEVICES` に
   `gpu` が無ければ、lavapipe で走る。
-- 終わらない shader の実験（`crates/gfx-lua/tests/hazards.rs`）は、いつも、lavapipe の子プロセスで走る。
+- 終わらない shader の実験（`prototype/gfx-lua/tests/hazards.rs`）は、いつも、lavapipe の子プロセスで走る。
 - **GPU なしで dma-buf を扱うテストは、kernel の `/dev/udmabuf` を使う。** テストを走らせる利用者が、このデバイスを開けることが要る。
-  対象は、`script.rs` の dma-buf の取り込み、`kms_scanout.rs` の lavapipe での dma-buf の scanout、`gfx-core` の `tests/dmabuf.rs` である
+  対象は、`script.rs` の dma-buf の取り込み、`kms_scanout.rs` の lavapipe での dma-buf の scanout、`proto-gfx-core` の `tests/dmabuf.rs` である
   （lavapipe は、dma-buf の書き出しと取り込みに、`/dev/udmabuf` を使う）。開けなければ、これらは失敗する。
   開けるようにできない環境では、`HIZUKURI_TEST_SKIP_UDMABUF=1` で外す。外したことは、`tools/ci.sh` の出力に出る。
-- `crates/hizukuri/tests/script_measure.rs` は、テストではなく、計測である（フレームの時間、当たり判定の費用、読み直しの時間）。
-  既定では走らない。`cargo test --release -p hizukuri --test script_measure -- --ignored --nocapture` で走らせる。
+- `prototype/compositor/tests/script_measure.rs` は、テストではなく、計測である（フレームの時間、当たり判定の費用、読み直しの時間）。
+  既定では走らない。`cargo test --release -p proto-compositor --test script_measure -- --ignored --nocapture` で走らせる。
   結果は、`target/test-output/script-measure.md` に書く。
 - DRM/KMS の session としての検査は、検証用 VM の中で、`tools/vm-check.py` が行う（[KMS のバックエンド](kms-backend.md#vm-での検査)）。
 
 ### テストが起動するプロセス
 
 テストを走らせる機械では、テストで使うものと同じ名前のプロセスが、すでに動いていることがある
-（クリップボードを見張る `wl-paste`、端末、別の hizukuri）。テストと道具は、次の決まりで作ってある。
+（クリップボードを見張る `wl-paste`、端末、別の `proto-compositor`）。テストと道具は、次の決まりで作ってある。
 
 - **プロセスを、名前で探さない。名前で止めない。** 止めるのは、自分が起動したときに受け取った id と、
   そのプロセスに与えた process group だけである。
@@ -341,7 +341,7 @@ tools/real-app-check.sh artifacts/real-app
 tools/real-app-check.sh artifacts/real-app-lavapipe cpu "$HIZUKURI_ICD_LAVAPIPE"
 ```
 
-weston-terminal を headless の hizukuri の中で動かし、制御口からクリックとキーを送り、画面を PNG に取り込む。
+weston-terminal を headless の `proto-compositor` の中で動かし、制御口からクリックとキーを送り、画面を PNG に取り込む。
 合否は判定しない。`artifacts/` は git で管理しない。
 
 ## 未実装のもの

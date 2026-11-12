@@ -6,7 +6,7 @@ session は libseat、デバイスの検出は udev、入力は libinput、画�
 ## 構成
 
 ```text
-crates/hizukuri-backend/src/kms/
+prototype/backend/src/kms/
   model.rs       デバイスの記述（connector、CRTC、plane、property、mode）。JSON で読み書きできる
   plan.rs        純粋な関数。connector、mode、CRTC、primary plane の選び方、atomic commit の組み立て、
                  scanout の経路の選び方
@@ -20,7 +20,7 @@ crates/hizukuri-backend/src/kms/
   backend.rs     KmsBackend<D: KmsDevice, C: Clock>。バックエンドの本体
   drm_device.rs  KmsDevice の、本物の実装（`drm` crate）
   session.rs     libseat、udev、libinput を calloop につなぐ
-crates/hizukuri/src/
+prototype/compositor/src/
   kms.rs         `--backend kms` の起動、`kms-info`、`kms-selftest`
   safety.rs      仮想マシンの中かどうかの判定、起動の条件、watchdog
   selftest.rs    自己診断の本体（バックエンドに対して generic）
@@ -89,8 +89,8 @@ crates/hizukuri/src/
 ## デバイスの一覧と、自己診断
 
 ```sh
-hizukuri kms-info --summary                      # デバイスと、つながっている画面の一覧
-hizukuri kms-info --device /dev/dri/card1 --anonymize --output device.kms.json
+proto-compositor kms-info --summary                      # デバイスと、つながっている画面の一覧
+proto-compositor kms-info --device /dev/dri/card1 --anonymize --output device.kms.json
 ```
 
 `kms-info` は、読み取りだけである。DRM master を取らず、何も変えない。ほかの compositor が画面を使っているままで実行できる。
@@ -111,7 +111,7 @@ hizukuri kms-info --device /dev/dri/card1 --anonymize --output device.kms.json
 - `card0`、`card1` の番号は、起動のたびに入れ替わることがある。
 
 ```sh
-hizukuri kms-selftest --output Virtual-1 --seconds 10 --report DIR
+proto-compositor kms-selftest --output Virtual-1 --seconds 10 --report DIR
 ```
 
 `kms-selftest` は、決めた出力 1 つだけに対して、モード設定、テストパターンの表示、page flip の時機の計測を行い、
@@ -174,7 +174,7 @@ dmabuf を送るクライアントと popup と selection、自己診断。
 
 - 複数の出力を同時に使うこと。
 - direct scanout、overlay plane、cursor plane。virtio-gpu の cursor plane は、`DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT` を
-  宣言しないクライアントには見えない（hizukuri は宣言していない）。
+  宣言しないクライアントには見えない（検証用の compositor は宣言していない）。
 - HDR の出力、10 bit 以上の scanout、VRR、ティアリング（async page flip）。
 - `IN_FENCE_FD` による、GPU の完了の受け渡し。
 - writeback connector を使った、表示した画素の取り出し。

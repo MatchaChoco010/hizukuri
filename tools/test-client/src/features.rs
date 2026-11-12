@@ -55,7 +55,7 @@ pub(crate) fn fill(
 /// An anonymous file in memory with the given contents.
 pub(crate) fn memory_file(contents: &[u8]) -> Result<File, ClientError> {
     let fd: OwnedFd =
-        rustix::fs::memfd_create("hizukuri-test-client", rustix::fs::MemfdFlags::CLOEXEC)
+        rustix::fs::memfd_create("proto-test-client", rustix::fs::MemfdFlags::CLOEXEC)
             .map_err(|e| ClientError::Io(e.into()))?;
     let mut file = File::from(fd);
     file.write_all(contents)?;

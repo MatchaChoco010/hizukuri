@@ -200,7 +200,7 @@ pub struct ClientOptions {
 impl Default for ClientOptions {
     fn default() -> Self {
         Self {
-            title: "hizukuri-test-client".to_string(),
+            title: "proto-test-client".to_string(),
             app_id: "hizukuri.test-client".to_string(),
             width: 200,
             height: 100,

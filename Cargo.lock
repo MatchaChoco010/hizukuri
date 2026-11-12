@@ -496,27 +496,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gfx-core"
-version = "0.0.0"
-dependencies = [
- "half",
- "naga",
- "rustix",
- "vulkan",
- "vulkan-alloc",
-]
-
-[[package]]
-name = "gfx-lua"
-version = "0.0.0"
-dependencies = [
- "gfx-core",
- "half",
- "mlua",
- "rustix",
-]
-
-[[package]]
 name = "glam"
 version = "0.33.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -560,96 +539,6 @@ name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
-
-[[package]]
-name = "hizukuri"
-version = "0.0.0"
-dependencies = [
- "calloop",
- "clap",
- "gfx-core",
- "gfx-lua",
- "hizukuri-backend",
- "hizukuri-color",
- "hizukuri-layout",
- "hizukuri-render",
- "hizukuri-test-client",
- "hizukuri-wl",
- "mlua",
- "rustix",
- "serde",
- "serde_json",
- "thiserror",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "hizukuri-backend"
-version = "0.0.0"
-dependencies = [
- "calloop",
- "drm",
- "drm-ffi",
- "hizukuri-color",
- "hizukuri-render",
- "rustix",
- "serde",
- "serde_json",
- "smithay",
- "thiserror",
- "tracing",
-]
-
-[[package]]
-name = "hizukuri-color"
-version = "0.0.0"
-
-[[package]]
-name = "hizukuri-layout"
-version = "0.0.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "hizukuri-render"
-version = "0.0.0"
-dependencies = [
- "hizukuri-color",
- "naga",
- "png",
- "rustix",
- "thiserror",
- "tracing",
- "vulkan",
- "vulkan-alloc",
-]
-
-[[package]]
-name = "hizukuri-test-client"
-version = "0.0.0"
-dependencies = [
- "rustix",
- "serde",
- "serde_json",
- "thiserror",
- "wayland-client",
- "wayland-protocols",
- "xkbcommon",
-]
-
-[[package]]
-name = "hizukuri-wl"
-version = "0.0.0"
-dependencies = [
- "calloop",
- "hizukuri-color",
- "hizukuri-test-client",
- "smithay",
- "thiserror",
- "tracing",
-]
 
 [[package]]
 name = "indexmap"
@@ -1125,6 +1014,117 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
+]
+
+[[package]]
+name = "proto-backend"
+version = "0.0.0"
+dependencies = [
+ "calloop",
+ "drm",
+ "drm-ffi",
+ "proto-color",
+ "proto-render",
+ "rustix",
+ "serde",
+ "serde_json",
+ "smithay",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "proto-color"
+version = "0.0.0"
+
+[[package]]
+name = "proto-compositor"
+version = "0.0.0"
+dependencies = [
+ "calloop",
+ "clap",
+ "mlua",
+ "proto-backend",
+ "proto-color",
+ "proto-gfx-core",
+ "proto-gfx-lua",
+ "proto-layout",
+ "proto-render",
+ "proto-test-client",
+ "proto-wl",
+ "rustix",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "proto-gfx-core"
+version = "0.0.0"
+dependencies = [
+ "half",
+ "naga",
+ "rustix",
+ "vulkan",
+ "vulkan-alloc",
+]
+
+[[package]]
+name = "proto-gfx-lua"
+version = "0.0.0"
+dependencies = [
+ "half",
+ "mlua",
+ "proto-gfx-core",
+ "rustix",
+]
+
+[[package]]
+name = "proto-layout"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "proto-render"
+version = "0.0.0"
+dependencies = [
+ "naga",
+ "png",
+ "proto-color",
+ "rustix",
+ "thiserror",
+ "tracing",
+ "vulkan",
+ "vulkan-alloc",
+]
+
+[[package]]
+name = "proto-test-client"
+version = "0.0.0"
+dependencies = [
+ "rustix",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "wayland-client",
+ "wayland-protocols",
+ "xkbcommon",
+]
+
+[[package]]
+name = "proto-wl"
+version = "0.0.0"
+dependencies = [
+ "calloop",
+ "proto-color",
+ "proto-test-client",
+ "smithay",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

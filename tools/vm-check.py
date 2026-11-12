@@ -44,18 +44,18 @@ failed is kept under the output directory (default
 `artifacts/vm-check/<time>/`):
 
     results.json, summary.txt        every item with its detail
-    <path>/hizukuri-<stage>.log      the compositor's log (the guest's tty-run.log)
+    <path>/proto-compositor-<stage>.log  the compositor's log (the guest's tty-run.log)
     <path>/state-<stage>.json        the compositor's state, from the control socket
     <path>/screen-<stage>.png        the guest's screen
     <path>/client.log, foot.log      the clients' output
     <path>/script-*.log              the clients of the script layer item
-    <path>/selftest*/                the reports of `hizukuri kms-selftest`
+    <path>/selftest*/                the reports of `proto-compositor kms-selftest`
     script/screen-*.png              the script layer: real applications tiled, the scene
                                      drawn by both renderers, four busy windows at 1920x1080
     script/frame-time-apps-1080p.json  frame times of the Rust and the script renderer
     script/hzk-script.log            what `hzk script` printed
     kms-info.json                    the guest's DRM device
-    kms-summary.txt                  `hizukuri kms-info --summary` in the guest
+    kms-summary.txt                  `proto-compositor kms-info --summary` in the guest
 
 The exit status is 0 when nothing failed.
 """
@@ -283,7 +283,7 @@ class Run:
     def evidence(self, stage):
         """Saves the log, the state and the screen. Never fails."""
         for kind, action in (
-            ("hizukuri", lambda p: open(p + ".log", "w").write(vm("tty-log", check=False))),
+            ("proto-compositor", lambda p: open(p + ".log", "w").write(vm("tty-log", check=False))),
             ("state", lambda p: open(p + ".json", "w").write(self.ctl_raw("state"))),
             ("screen", lambda p: vm("screendump", p + ".png", check=False)),
             ("unit", lambda p: open(p + ".txt", "w").write(vm("tty-status", check=False))),
@@ -307,7 +307,7 @@ class Run:
     def ctl_raw(self, *args):
         command = " ".join(
             shlex.quote(a)
-            for a in [f"{GUEST_BIN}/hizukuri-ctl", "--socket", self.control, *args]
+            for a in [f"{GUEST_BIN}/proto-ctl", "--socket", self.control, *args]
         )
         return guest(f"timeout 10 {command}", timeout=30)
 
@@ -328,7 +328,7 @@ class Run:
 
     def start(self, *extra):
         vm(
-            "tty-run", "--", f"{GUEST_BIN}/hizukuri", "--backend", "kms",
+            "tty-run", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms",
             "--socket", SOCKET, "--background", BACKGROUND_ARG, "--cursor", "on",
             *self.spec["args"], *extra,
         )
@@ -418,7 +418,7 @@ class Run:
 
     def check_client_window(self):
         spawn(
-            f"{GUEST_BIN}/hizukuri-test-client --socket {self.runtime}/{SOCKET} "
+            f"{GUEST_BIN}/proto-test-client --socket {self.runtime}/{SOCKET} "
             f"--title hzk-client --app-id hzk.client "
             f"--size {CLIENT_SIZE[0]}x{CLIENT_SIZE[1]} --color {CLIENT_COLOR_ARG} --duration 240",
             "client.log",
@@ -627,7 +627,7 @@ class Run:
         vm("key", "ctrl-alt-backspace")
         wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
         log = vm("tty-log", check=False)
-        with open(os.path.join(self.out, "hizukuri-quit-key.log"), "w") as file:
+        with open(os.path.join(self.out, "proto-compositor-quit-key.log"), "w") as file:
             file.write(log)
         if "quit requested" not in log:
             raise Failed("the compositor exited, but its log does not mention the quit request")
@@ -635,11 +635,11 @@ class Run:
 
     def check_exit_after(self):
         started = time.monotonic()
-        vm("tty-run", "--wait", "--", f"{GUEST_BIN}/hizukuri", "--backend", "kms",
+        vm("tty-run", "--wait", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms",
            "--socket", SOCKET, *self.spec["args"], "--exit-after", "3", timeout=60)
         elapsed = time.monotonic() - started
         log = vm("tty-log", check=False)
-        with open(os.path.join(self.out, "hizukuri-exit-after.log"), "w") as file:
+        with open(os.path.join(self.out, "proto-compositor-exit-after.log"), "w") as file:
             file.write(log)
         if "--exit-after elapsed" not in log:
             raise Failed("the log does not show the timer ending the run")
@@ -651,7 +651,7 @@ class Run:
         self.start("--exit-after", "60")
         self.ctl("quit")
         wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
-        return "`hizukuri-ctl quit` over SSH ended the session"
+        return "`proto-ctl quit` over SSH ended the session"
 
     def check_sighup(self):
         """A hangup (the shell or terminal the compositor was started from
@@ -663,7 +663,7 @@ class Run:
         guest(f"kill -HUP {pid}")
         wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
         log = vm("tty-log", check=False)
-        with open(os.path.join(self.out, "hizukuri-sighup.log"), "w") as file:
+        with open(os.path.join(self.out, "proto-compositor-sighup.log"), "w") as file:
             file.write(log)
         if "stopping signal=SIGHUP" not in log:
             raise Failed("the log does not show a clean stop on SIGHUP")
@@ -734,7 +734,7 @@ class Run:
         """The command that is typed after logging in on the console."""
         launcher = "hzk"
         control = f"{self.runtime}/hizukuri-0.control"
-        ctl = f"timeout 10 {GUEST_BIN}/hizukuri-ctl --socket {control}"
+        ctl = f"timeout 10 {GUEST_BIN}/proto-ctl --socket {control}"
         vm("tty-run", "--", launcher, self.name, "--seconds", "60")
 
         def ready():
@@ -756,7 +756,7 @@ class Run:
         log = vm("tty-log", check=False)
         with open(os.path.join(self.out, "launcher.log"), "w") as file:
             file.write(log)
-        if "hizukuri ended with status 0" not in log:
+        if "proto-compositor ended with status 0" not in log:
             raise Failed(f"the launcher did not report a clean end: {log.strip()[-200:]}")
         # The launcher's clients are known by what they were given, the
         # launcher's socket, not by their names.
@@ -772,12 +772,12 @@ class Run:
         guest(f"rm -rf {report_dir}")
         failure = None
         try:
-            vm("tty-run", "--wait", "--", f"{GUEST_BIN}/hizukuri", "kms-selftest",
+            vm("tty-run", "--wait", "--", f"{GUEST_BIN}/proto-compositor", "kms-selftest",
                "--output", "Virtual-1", "--seconds", "6", "--report", report_dir,
                *self.spec["selftest"], *extra, timeout=90)
         except Failed as error:
             failure = error
-        with open(os.path.join(self.out, f"hizukuri-{label}.log"), "w") as file:
+        with open(os.path.join(self.out, f"proto-compositor-{label}.log"), "w") as file:
             file.write(vm("tty-log", check=False))
         local = os.path.join(self.out, label)
         vm("pull", report_dir + "/", local + "/", check=False)
@@ -916,7 +916,7 @@ class Run:
         """Drawing and window management by the script layer, on a real KMS
         session: the script renderer on lavapipe with the CPU copy path, the
         tiling script, input to a window the script turned, and recovery
-        from a script that fails. `crates/hizukuri/tests/script.rs` checks
+        from a script that fails. `prototype/compositor/tests/script.rs` checks
         the same things on a headless backend."""
         self.start("--renderer", "script", "--wm", "script", "--exit-after", "240")
         screen = tuple(int(v) for v in vm("screen-size").strip().split("x"))
@@ -946,7 +946,7 @@ class Run:
         expected = {"hzk-left": [gap, gap], "hzk-right": [2 * gap + width, gap]}
         for title, color in colors.items():
             spawn(
-                f"{GUEST_BIN}/hizukuri-test-client --socket {self.runtime}/{SOCKET} "
+                f"{GUEST_BIN}/proto-test-client --socket {self.runtime}/{SOCKET} "
                 f"--title {title} --size 300x200 --color {'%02X%02X%02XFF' % color} "
                 f"--duration 200",
                 f"script-{title}.log",
@@ -1163,7 +1163,7 @@ def check_vkms(out, uid, results):
     os.makedirs(directory, exist_ok=True)
     runtime = f"/run/user/{uid}"
     socket = "hzk-vkms"
-    ctl = f"timeout 10 {GUEST_BIN}/hizukuri-ctl --socket {runtime}/{socket}.control"
+    ctl = f"timeout 10 {GUEST_BIN}/proto-ctl --socket {runtime}/{socket}.control"
     common = f"export XDG_RUNTIME_DIR={runtime} LIBSEAT_BACKEND=noop; "
     found = {}
 
@@ -1187,7 +1187,7 @@ def check_vkms(out, uid, results):
 
     def load():
         found["card"] = guest("vkms-load").strip()
-        info = json.loads(guest(f"{GUEST_BIN}/hizukuri kms-info --device {found['card']}"))
+        info = json.loads(guest(f"{GUEST_BIN}/proto-compositor kms-info --device {found['card']}"))
         # With --device the output is one device's description; without it,
         # a list of {device, snapshot}.
         snapshot = info[0]["snapshot"] if isinstance(info, list) else info
@@ -1199,7 +1199,7 @@ def check_vkms(out, uid, results):
 
     def session():
         pids = [spawn(
-            f"env XDG_RUNTIME_DIR={runtime} LIBSEAT_BACKEND=noop {GUEST_BIN}/hizukuri "
+            f"env XDG_RUNTIME_DIR={runtime} LIBSEAT_BACKEND=noop {GUEST_BIN}/proto-compositor "
             f"--backend kms --socket {socket} --kms-device {found['card']} "
             f"--vulkan-device cpu --kms-scanout cpu --background {BACKGROUND_ARG} "
             f"--exit-after 30", "vkms-session.log")]
@@ -1207,7 +1207,7 @@ def check_vkms(out, uid, results):
             wait_for("the control socket", lambda: "ok" in guest(f"{ctl} ping", check=False),
                      seconds=15)
             pids.append(spawn(
-                f"{GUEST_BIN}/hizukuri-test-client --socket {runtime}/{socket} "
+                f"{GUEST_BIN}/proto-test-client --socket {runtime}/{socket} "
                 f"--title hzk-vkms --size 300x200 --color {CLIENT_COLOR_ARG} --duration 20",
                 "vkms-client.log"))
 
@@ -1230,18 +1230,18 @@ def check_vkms(out, uid, results):
                     f"{output['mode'][0]}x{output['mode'][1]} ({output['scanout']}), "
                     f"{output['frames_presented']} frames presented, a client window mapped")
         finally:
-            keep(f"{GUEST_DIR}/vkms-session.log", "hizukuri-session.log")
+            keep(f"{GUEST_DIR}/vkms-session.log", "proto-compositor-session.log")
             for pid in pids:
                 stop_spawned(pid)
 
     def selftest():
         report_dir = f"{GUEST_DIR}/vkms-selftest"
         guest(f"rm -rf {report_dir}")
-        log = guest(f"{common}{GUEST_BIN}/hizukuri kms-selftest --device {found['card']} "
+        log = guest(f"{common}{GUEST_BIN}/proto-compositor kms-selftest --device {found['card']} "
                     f"--output {found['connector']} --seconds 5 --report {report_dir} "
                     f"--mode 1920x1080 --vulkan-device cpu --scanout cpu 2>&1", check=False,
                     timeout=60)
-        with open(os.path.join(directory, "hizukuri-selftest.log"), "w") as file:
+        with open(os.path.join(directory, "proto-compositor-selftest.log"), "w") as file:
             file.write(log)
         vm("pull", report_dir + "/", os.path.join(directory, "selftest") + "/", check=False)
         try:
@@ -1296,21 +1296,21 @@ class Part:
 
     def keep_log(self, stage):
         try:
-            with open(os.path.join(self.out, f"hizukuri-{stage}.log"), "w") as file:
+            with open(os.path.join(self.out, f"proto-compositor-{stage}.log"), "w") as file:
                 file.write(vm("tty-log", check=False))
         except Exception:
             pass
 
     def ctl(self, *args):
         command = " ".join(shlex.quote(a) for a in
-                           [f"{GUEST_BIN}/hizukuri-ctl", "--socket", self.control, *args])
+                           [f"{GUEST_BIN}/proto-ctl", "--socket", self.control, *args])
         return json.loads(guest(f"timeout 10 {command}", timeout=30))
 
     def unit_active(self):
         return "ActiveState=active" in vm("tty-status", check=False)
 
     def start(self, *args):
-        vm("tty-run", "--", f"{GUEST_BIN}/hizukuri", "--backend", "kms", "--socket", SOCKET,
+        vm("tty-run", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms", "--socket", SOCKET,
            "--background", BACKGROUND_ARG, "--vulkan-device", "cpu", *args)
         try:
             wait_for("the control socket to answer", lambda: self.unit_active()
@@ -1355,7 +1355,7 @@ def check_outputs(out, uid, results):
         vm("output", "1", "on")
         summary = wait_for("Virtual-2 in the summary", lambda: (lambda text: text if
                            "Virtual-2" in text else None)(
-                               guest(f"{GUEST_BIN}/hizukuri kms-info --summary")), seconds=8)
+                               guest(f"{GUEST_BIN}/proto-compositor kms-info --summary")), seconds=8)
         with open(os.path.join(part.out, "kms-summary.txt"), "w") as file:
             file.write(summary)
         return " | ".join(line.strip() for line in summary.splitlines())
@@ -1400,7 +1400,7 @@ def check_outputs(out, uid, results):
                      lambda: all(near(v, BACKGROUND) for v in second(corners)), seconds=5)
             if pixels(corners) != first_before:
                 raise Failed("the first output changed")
-            spawn(f"{GUEST_BIN}/hizukuri-test-client --socket {part.runtime}/{SOCKET} "
+            spawn(f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} "
                   f"--title hzk-outputs --size {CLIENT_SIZE[0]}x{CLIENT_SIZE[1]} "
                   f"--color {CLIENT_COLOR_ARG} --duration 80", "outputs-client.log")
             window = wait_for("the client's window", lambda: next(
@@ -1437,7 +1437,7 @@ def check_outputs(out, uid, results):
         try:
             colors = {"hzk-hot-a": (200, 100, 50), "hzk-hot-b": (60, 160, 220)}
             for title, color in colors.items():
-                spawn(f"{GUEST_BIN}/hizukuri-test-client --socket {part.runtime}/{SOCKET} "
+                spawn(f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} "
                       f"--title {title} --size 300x200 --color "
                       f"{'%02X%02X%02XFF' % color} --duration 80", f"{title}.log")
                 wait_for(f"the window of {title}", lambda: next(
@@ -1507,7 +1507,7 @@ def check_safety(out, uid, results):
             raise Failed("the unit has no main process")
         answer = guest(f"freeze-main-loop {pid} watchdog 30", timeout=60).split()
         log = vm("tty-log", check=False)
-        with open(os.path.join(part.out, "hizukuri-watchdog.log"), "w") as file:
+        with open(os.path.join(part.out, "proto-compositor-watchdog.log"), "w") as file:
             file.write(log)
         if answer[0] != "gone":
             raise Failed("the process survived a main loop that was stuck for 30 s")
@@ -1833,7 +1833,7 @@ def check_script(out, uid, results):
 
     def scene():
         """A fixed scene with the Rust layout: the same for both renderers."""
-        client = f"{GUEST_BIN}/hizukuri-test-client --socket {part.runtime}/{SOCKET} --duration 90"
+        client = f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} --duration 90"
         placed = []
         for title, size, color, x, y in (("a", "300x200", "C86432FF", 100, 100),
                                          ("b", "300x200", "3CA0DCFF", 250, 200),
@@ -1938,7 +1938,7 @@ def check_script(out, uid, results):
         edited = "/home/hizukuri/hzk-scripts"
 
         def hzk_state():
-            text = guest(f"timeout 10 {GUEST_BIN}/hizukuri-ctl --socket {control} state "
+            text = guest(f"timeout 10 {GUEST_BIN}/proto-ctl --socket {control} state "
                          f"2>/dev/null || true", timeout=30)
             return json.loads(text) if text.strip() else None
 
@@ -1953,7 +1953,7 @@ def check_script(out, uid, results):
             return windows
 
         guest(f"rm -rf {edited}.orig && mkdir -p {edited}.orig")
-        vm("push", os.path.join(ROOT, "crates", "hizukuri", "scripts") + "/",
+        vm("push", os.path.join(ROOT, "prototype", "compositor", "scripts") + "/",
            "hzk-scripts.orig/")
         vm("tty-run", "--", "hzk", "script", "--seconds", "90", "--reset-scripts")
         try:
@@ -1976,7 +1976,7 @@ def check_script(out, uid, results):
             vm("key", "ctrl-alt-backspace")
             wait_for("the launcher to end", lambda: not part.unit_active(), seconds=10)
             log = vm("tty-log", check=False)
-            if "hizukuri ended with status 0" not in log:
+            if "proto-compositor ended with status 0" not in log:
                 raise Failed(f"the launcher's log ends with: {log.strip().splitlines()[-1:]}")
             left = guest("".join(f"kill -0 {pid} 2>/dev/null && echo {pid}; "
                                  for pid in children) + "true").split()
@@ -1996,7 +1996,7 @@ def check_script(out, uid, results):
     # The project the session runs: the built-in scripts as files, with the
     # faults added to its entry. Editing these files is what `live-edit` does.
     guest(f"rm -rf {project} && mkdir -p {project}")
-    vm("push", os.path.join(ROOT, "crates", "hizukuri", "scripts") + "/", f"{project}/")
+    vm("push", os.path.join(ROOT, "prototype", "compositor", "scripts") + "/", f"{project}/")
     guest(f"cat > {project}/main.luau <<'LUAU'\n{FAULTY_PROJECT}LUAU")
     try:
         if part.item("real-apps-tiled", real_apps):
@@ -2018,13 +2018,13 @@ def check_real_hardware(out, uid, results):
     """The guard against taking over a real display by accident. Needs a VM
     that looks like real hardware: start it with
     HIZUKURI_VM_CPU=host,-hypervisor (the guest then has no `hypervisor` CPU
-    flag, which is what hizukuri goes by)."""
+    flag, which is what the compositor goes by)."""
     part = Part("real-hardware", out, uid, results)
     if guest("grep -c -w hypervisor /proc/cpuinfo || true").strip() != "0":
         part.record("configured", "FAIL", "the guest has the hypervisor CPU flag; start the VM "
                                           "with HIZUKURI_VM_CPU=host,-hypervisor")
         return
-    binary = f"{GUEST_BIN}/hizukuri"
+    binary = f"{GUEST_BIN}/proto-compositor"
     device, output = ["--kms-device", "/dev/dri/card0"], ["--kms-output", "Virtual-1"]
     allow = ["--allow-real-hardware"]
     words = {"allow": "--allow-real-hardware", "device": "--kms-device", "output": "--kms-output"}
@@ -2057,7 +2057,7 @@ def check_real_hardware(out, uid, results):
     def accepted():
         status, log = run_exit(binary, "--backend", "kms", "--exit-after", "3",
                                "--vulkan-device", "cpu", *allow, *device, *output)
-        with open(os.path.join(part.out, "hizukuri-accepted.log"), "w") as file:
+        with open(os.path.join(part.out, "proto-compositor-accepted.log"), "w") as file:
             file.write(log)
         if status != 0:
             raise Failed(f"exit status {status}: {log.strip()[-200:]}")
@@ -2114,9 +2114,9 @@ def main():
     if not args.skip_build:
         subprocess.run(
             ["cargo", "build", "-j", os.environ.get("CARGO_BUILD_JOBS", "8"),
-             "-p", "hizukuri", "-p", "hizukuri-test-client"], cwd=ROOT, check=True)
+             "-p", "proto-compositor", "-p", "proto-test-client"], cwd=ROOT, check=True)
     binaries = [os.path.join(target, name)
-                for name in ("hizukuri", "hizukuri-ctl", "hizukuri-test-client")]
+                for name in ("proto-compositor", "proto-ctl", "proto-test-client")]
     results = []
     try:
         guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR}")
@@ -2126,7 +2126,7 @@ def main():
         print(f"FAIL setup: {error}")
         return 1
     try:
-        versions = guest(f"uname -r; {GUEST_BIN}/hizukuri --version; "
+        versions = guest(f"uname -r; {GUEST_BIN}/proto-compositor --version; "
                          "cat /run/current-system/nixos-version; echo; "
                          "readlink /run/current-system; "
                          "vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverInfo'")
@@ -2141,8 +2141,8 @@ def main():
 
     # The guest's DRM device as the planning code sees it. Read-only.
     try:
-        info = guest(f"{GUEST_BIN}/hizukuri kms-info --anonymize 2>/dev/null || "
-                     f"sudo {GUEST_BIN}/hizukuri kms-info --anonymize", check=False)
+        info = guest(f"{GUEST_BIN}/proto-compositor kms-info --anonymize 2>/dev/null || "
+                     f"sudo {GUEST_BIN}/proto-compositor kms-info --anonymize", check=False)
         with open(os.path.join(out, "kms-info.json"), "w") as file:
             file.write(info)
     except Failed:
@@ -2150,8 +2150,8 @@ def main():
 
     # The list a person reads to choose --kms-device and --kms-output.
     try:
-        summary = guest(f"{GUEST_BIN}/hizukuri kms-info --summary 2>&1 || "
-                        f"sudo {GUEST_BIN}/hizukuri kms-info --summary 2>&1", check=False)
+        summary = guest(f"{GUEST_BIN}/proto-compositor kms-info --summary 2>&1 || "
+                        f"sudo {GUEST_BIN}/proto-compositor kms-info --summary 2>&1", check=False)
         with open(os.path.join(out, "kms-summary.txt"), "w") as file:
             file.write(summary)
         lines = summary.splitlines()

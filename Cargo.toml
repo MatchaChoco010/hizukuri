@@ -1,14 +1,14 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/hizukuri-color",
-    "crates/hizukuri-render",
-    "crates/hizukuri-layout",
-    "crates/hizukuri-wl",
-    "crates/hizukuri-backend",
-    "crates/hizukuri",
-    "crates/gfx-core",
-    "crates/gfx-lua",
+    "prototype/color",
+    "prototype/render",
+    "prototype/layout",
+    "prototype/wl",
+    "prototype/backend",
+    "prototype/compositor",
+    "prototype/gfx-core",
+    "prototype/gfx-lua",
     "tools/test-client",
 ]
 
@@ -19,26 +19,26 @@ rust-version = "1.96"
 publish = false
 
 [workspace.dependencies]
-hizukuri-color = { path = "crates/hizukuri-color" }
-hizukuri-render = { path = "crates/hizukuri-render" }
-hizukuri-layout = { path = "crates/hizukuri-layout" }
-hizukuri-wl = { path = "crates/hizukuri-wl" }
-hizukuri-backend = { path = "crates/hizukuri-backend" }
-hizukuri = { path = "crates/hizukuri" }
-hizukuri-test-client = { path = "tools/test-client" }
+proto-color = { path = "prototype/color" }
+proto-render = { path = "prototype/render" }
+proto-layout = { path = "prototype/layout" }
+proto-wl = { path = "prototype/wl" }
+proto-backend = { path = "prototype/backend" }
+proto-compositor = { path = "prototype/compositor" }
+proto-test-client = { path = "tools/test-client" }
 
-# Pinned to the published vulkan-rs revision. Only hizukuri-render and
-# hizukuri-backend may depend on these directly.
+# Pinned to the published vulkan-rs revision. Only proto-render and
+# proto-backend may depend on these directly.
 vulkan = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0", features = ["wayland"] }
 vulkan-alloc = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0" }
 
-# Pinned Smithay master revision. Only hizukuri-wl and
-# hizukuri-backend may depend on it.
+# Pinned Smithay master revision. Only proto-wl and
+# proto-backend may depend on it.
 smithay = { git = "https://github.com/Smithay/smithay", rev = "8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55", default-features = false }
 
 # The checked GPU API for scripts and its script binding.
-gfx-core = { path = "crates/gfx-core" }
-gfx-lua = { path = "crates/gfx-lua" }
+proto-gfx-core = { path = "prototype/gfx-core" }
+proto-gfx-lua = { path = "prototype/gfx-lua" }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-in", "spv-out"] }
 # The script language is not decided; Luau is the provisional choice.
 mlua = { version = "0.12.2", default-features = false }

@@ -2,12 +2,12 @@
 # display. Source this from a scene script; run the scene with run-scene.sh,
 # which puts it in the Nix development shell.
 #
-#   hz_start [HIZUKURI ARGS...]   start a headless compositor (CPU rendering)
-#   hz_client [ARGS...]           start hizukuri-test-client in it
+#   hz_start [COMPOSITOR ARGS...] start a headless compositor (CPU rendering)
+#   hz_client [ARGS...]           start proto-test-client in it
 #   hz_app CMD [ARGS...]          start a real application in it
 #   hz_wait_windows N             wait until N windows exist
 #   hz_settle                     wait until no frame is owed
-#   hz_ctl ARGS...                hizukuri-ctl against this compositor
+#   hz_ctl ARGS...                proto-ctl against this compositor
 #   hz_window_id PATTERN          id of the first window whose title or app id
 #                                 contains PATTERN
 #   hz_shot NAME                  write $HZ_OUT/NAME.png
@@ -83,10 +83,10 @@ hz_start() {
     mkdir -m 700 "$HZ_RT"
     mkdir -p "$HZ_RT/home/.config" "$HZ_RT/home/.cache" "$HZ_OUT"
     _hz_write_fontconfig
-    "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" "$HZ_BIN/hizukuri" \
+    "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" "$HZ_BIN/proto-compositor" \
         --backend headless --socket "$HZ_SOCKET" --exit-after "${HZ_SECONDS:-180}" \
         --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" \
-        "$@" >"$HZ_RT/hizukuri.log" 2>&1 &
+        "$@" >"$HZ_RT/proto-compositor.log" 2>&1 &
     HZ_SERVER=$!
     local _
     for _ in $(seq 100); do
@@ -95,16 +95,16 @@ hz_start() {
         sleep 0.1
     done
     echo "headless.sh: the compositor did not start:" >&2
-    cat "$HZ_RT/hizukuri.log" >&2
+    cat "$HZ_RT/proto-compositor.log" >&2
     return 1
 }
 
 hz_ctl() {
-    timeout 30 "$HZ_BIN/hizukuri-ctl" --socket "$HZ_RT/$HZ_SOCKET.control" "$@"
+    timeout 30 "$HZ_BIN/proto-ctl" --socket "$HZ_RT/$HZ_SOCKET.control" "$@"
 }
 
 hz_client() {
-    "$HZ_BIN/hizukuri-test-client" --socket "$HZ_RT/$HZ_SOCKET" "$@" >/dev/null 2>&1 &
+    "$HZ_BIN/proto-test-client" --socket "$HZ_RT/$HZ_SOCKET" "$@" >/dev/null 2>&1 &
     HZ_CLIENTS+=($!)
 }
 

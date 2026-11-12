@@ -31,9 +31,9 @@ done
 
 target="${CARGO_TARGET_DIR:-$root/target}/debug"
 if ((build)); then
-    (cd "$root" && cargo build -j "${CARGO_BUILD_JOBS:-8}" -p hizukuri -p hizukuri-test-client)
+    (cd "$root" && cargo build -j "${CARGO_BUILD_JOBS:-8}" -p proto-compositor -p proto-test-client)
 fi
-for name in hizukuri hizukuri-ctl hizukuri-test-client; do
+for name in proto-compositor proto-ctl proto-test-client; do
     [[ -x "$target/$name" ]] || { echo "try-hizukuri: $target/$name is missing" >&2; exit 1; }
 done
 
@@ -52,8 +52,8 @@ if [[ "$status" != *"state: running"* ]]; then
 fi
 "$vm" wait-ssh
 "$vm" ssh 'mkdir -p ~/bin'
-"$vm" push "$target/hizukuri" "$target/hizukuri-ctl" "$target/hizukuri-test-client" bin/
-if ! "$vm" ssh '~/bin/hizukuri --version' >/dev/null 2>&1; then
+"$vm" push "$target/proto-compositor" "$target/proto-ctl" "$target/proto-test-client" bin/
+if ! "$vm" ssh '~/bin/proto-compositor --version' >/dev/null 2>&1; then
     echo "try-hizukuri: the binary does not start in the guest. Build it in the Nix" >&2
     echo "              development shell: nix develop --command tools/vm/try-hizukuri" >&2
     exit 1
@@ -62,7 +62,7 @@ fi
 # every time; the one that is edited in the guest (~/hzk-scripts) is made from
 # it by `hzk script` and is left alone here.
 "$vm" ssh 'rm -rf ~/hzk-scripts.orig && mkdir -p ~/hzk-scripts.orig'
-"$vm" push "$root/crates/hizukuri/scripts/" hzk-scripts.orig/
+"$vm" push "$root/prototype/compositor/scripts/" hzk-scripts.orig/
 
 cat <<TEXT
 

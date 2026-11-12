@@ -1,0 +1,32 @@
+[package]
+name = "proto-backend"
+description = "Backends of the verification compositor: where frames go and where input comes from"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["kms"]
+# The parts of the KMS backend that touch real devices: the DRM device over
+# the `drm` crate, and the libseat / udev / libinput session. Without this
+# feature the planning code, the backend logic and the mock device are
+# still built and tested.
+kms = ["dep:drm", "dep:drm-ffi", "dep:smithay"]
+
+[dependencies]
+proto-color.workspace = true
+proto-render.workspace = true
+calloop.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rustix = { version = "1", features = ["time", "mm", "fs"] }
+serde.workspace = true
+serde_json.workspace = true
+drm = { version = "0.15", optional = true }
+drm-ffi = { version = "0.9", optional = true }
+smithay = { workspace = true, optional = true, features = [
+    "backend_session_libseat",
+    "backend_udev",
+    "backend_libinput",
+] }

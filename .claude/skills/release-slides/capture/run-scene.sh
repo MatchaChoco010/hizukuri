@@ -24,7 +24,7 @@ done
 
 cd "$root"
 fonts="$(nix develop .#slides --command printenv TYPST_FONT_PATHS)"
-nix develop --command cargo build -j "${CARGO_BUILD_JOBS:-8}" -p hizukuri -p hizukuri-test-client
+nix develop --command cargo build -j "${CARGO_BUILD_JOBS:-8}" -p proto-compositor -p proto-test-client
 
 status=0
 for scene in "${scenes[@]}"; do

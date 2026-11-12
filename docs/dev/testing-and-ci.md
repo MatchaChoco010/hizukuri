@@ -54,7 +54,7 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
   テストを走らせる利用者が、このデバイスを開けることが要る。開けるようにできない環境では、`HIZUKURI_TEST_SKIP_UDMABUF=1` で外す。
   対象のテストと、`HIZUKURI_TEST_REAL_CLIENTS` に並べられる名前は、[検証用の compositor](../prototype/README.md)にある。
 - 実行バイナリを使うテストは、テストごとに、専用の `XDG_RUNTIME_DIR` を作り、終わったら消す。
-- 取り込んだ画像と、hizukuri のログは、`target/test-output/<テスト名>-<デバイス>/` に残る
+- 取り込んだ画像と、`proto-compositor` のログは、`target/test-output/<テスト名>-<デバイス>/` に残る
   （devShell の中では、`$CARGO_TARGET_DIR/test-output/`）。
 - **`tools/ci.sh` は、最後に、テストが起動したプロセスが残っていないことを確かめる。**
   実行ごとに違う値の環境変数（`HIZUKURI_TEST_RUN`）を付けてテストを走らせ、その値を引き継いだプロセスを探す。
@@ -65,17 +65,17 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | 種類 | 場所 | 内容 | Vulkan |
 | --- | --- | --- | --- |
 | 書式と lint | `tools/ci.sh lint` | `cargo fmt --check`、`cargo clippy` | 不要 |
-| 色の計算 | `hizukuri-color` の単体テスト | 原色の行列と transfer function を、規格の値と比べる。往復で、元の値に戻ること | 不要 |
-| 配置 | `hizukuri-layout` の単体テスト | 個別の場面と、proptest による不変条件 | 不要 |
-| プロトコル | `crates/hizukuri/tests/protocol.rs`、`hizukuri-wl` の `tests/server.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。レンダラーなし。configure、focus、キー、ポインター、バッファの解放、subsurface | 不要 |
-| バックエンドの取り決め | `crates/hizukuri/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
-| KMS のロジック | `hizukuri-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
-| レンダラー | `crates/hizukuri-render/tests/gpu.rs` | 表面と出力の image description の組み合わせを描き、CPU の参照計算と比べる | 要る |
-| KMS の scanout | `crates/hizukuri/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイス、実際のレンダラーをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する | 要る |
-| headless の全体 | `crates/hizukuri/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。Rust のレンダラーと、スクリプトの描画の両方で走る | 要る |
-| スクリプトの層 | `crates/hizukuri/tests/script.rs` | 2 つのレンダラーの画素の比較、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し | 要る |
-| スクリプトに見せる GPU の API | `crates/gfx-core/tests/`、`crates/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み | 要る |
-| 実際のアプリ | `crates/hizukuri/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。popup と grab、selection、fractional-scale、dmabuf | 要る |
+| 色の計算 | `proto-color` の単体テスト | 原色の行列と transfer function を、規格の値と比べる。往復で、元の値に戻ること | 不要 |
+| 配置 | `proto-layout` の単体テスト | 個別の場面と、proptest による不変条件 | 不要 |
+| プロトコル | `prototype/compositor/tests/protocol.rs`、`proto-wl` の `tests/server.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。レンダラーなし。configure、focus、キー、ポインター、バッファの解放、subsurface | 不要 |
+| バックエンドの取り決め | `prototype/compositor/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
+| KMS のロジック | `proto-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
+| レンダラー | `prototype/render/tests/gpu.rs` | 表面と出力の image description の組み合わせを描き、CPU の参照計算と比べる | 要る |
+| KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイス、実際のレンダラーをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する | 要る |
+| headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。Rust のレンダラーと、スクリプトの描画の両方で走る | 要る |
+| スクリプトの層 | `prototype/compositor/tests/script.rs` | 2 つのレンダラーの画素の比較、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し | 要る |
+| スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み | 要る |
+| 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。popup と grab、selection、fractional-scale、dmabuf | 要る |
 
 検証用のクライアント（`tools/test-client`）は、内容の決まったバッファを出す。フォントやテーマで、結果が変わらない。
 画素を比べるテストは、これを使う。
@@ -95,7 +95,7 @@ Vulkan の部分は、`PATH` の `vulkaninfo` が、その時の環境で見る�
 
 ### 色の検証
 
-- `hizukuri-color` は、純粋な計算である。原色から求めた行列と、transfer function を、規格の値と比べる。
+- `proto-color` は、純粋な計算である。原色から求めた行列と、transfer function を、規格の値と比べる。
   CPU の参照計算（デコード、合成、エンコード、量子化）も、ここにある。
 - レンダラーのテストは、表面の image description と、出力の image description の組み合わせを変えて、何通りも描く。
   読み戻すのは、合成用の浮動小数点のバッファ（linear light）と、出力の符号化後の画像の 2 つである。
@@ -109,14 +109,14 @@ Vulkan の部分は、`PATH` の `vulkaninfo` が、その時の環境で見る�
 KMS のバックエンドは、DRM のデバイスに触る部分を、trait の向こうに置いている。
 テストでは、その向こうを、kernel の決まり（atomic commit の検査など）を再現する、模擬のデバイスに差し替える。
 
-- 模擬のデバイスは、実際のデバイスの記録から作る。記録は、`crates/hizukuri-backend/tests/fixtures/` にある
+- 模擬のデバイスは、実際のデバイスの記録から作る。記録は、`prototype/backend/tests/fixtures/` にある
   （amdgpu、virtio-gpu、vkms のドライバーのもの）。`drm_info -j` の記録（`tools/vm/reference/`）も、読める。
 - 記録は、次のコマンドで取る。デバイスを読み取り専用で開き、DRM master を取らず、何も変えない。
   `--anonymize` は、EDID から、モニターを特定できる情報（製造者、製品コード、製造番号、製造の時期、名前）を消す。
   リポジトリに入れる記録は、必ず `--anonymize` を付けて取る。
 
 ```sh
-hizukuri kms-info --device /dev/dri/cardN --anonymize
+proto-compositor kms-info --device /dev/dri/cardN --anonymize
 ```
 
 - 模擬のデバイスは、framebuffer のメモリを、画素として見せる（dumb buffer と、map できる LINEAR の dma-buf）。
@@ -256,7 +256,7 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
   **開けるようにできなかったときは、`HIZUKURI_TEST_SKIP_UDMABUF=1` を設定して、`/dev/udmabuf` が要るテストを外す。**
   外したことは、ジョブの要約と、警告に出る。
 - 同じ PR の古い実行は、新しい push で取り消す。ブランチへの push では、push した commit ごとに実行を持ち、後の push が、前の実行を取り消すことは無い。
-- 失敗したときは、`target/*/test-output/`（取り込んだ画像と、hizukuri のログ）を、artifact として 14 日残す。
+- 失敗したときは、`target/*/test-output/`（取り込んだ画像と、`proto-compositor` のログ）を、artifact として 14 日残す。
 
 ### `vm.yml`
 
@@ -266,7 +266,7 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 
 1. runner の `/dev/kvm` を、使えるようにする。
 2. Nix を入れ、`ci` の devShell と、ゲストと QEMU を用意する（`tools/vm/vm build`）。
-3. devShell の中で、`hizukuri` と `hizukuri-test-client` をビルドする。
+3. devShell の中で、`proto-compositor` と `proto-test-client` をビルドする。
 4. `tools/vm/vm test tools/vm-check.py` で、既定の部を回す。
 5. VM を、仮想化されていない機械に見える構成で起動し直して、`real-hardware` の部を回す。
 6. 結果を、ジョブの要約に書く。項目ごとの結果、ログ、取り込んだ画面、ゲストのシリアルコンソールのログを、artifact として 14 日残す。
@@ -319,14 +319,14 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 | Write how the dev shell reaches the driver | nixpkgs のライブラリを取ってきて、`settings.sh` を書く |
 | Check what the Vulkan driver offers | devShell の中で、`tools/gpu-report.sh`。デバイスが見えないか、`VK_EXT_descriptor_heap` か `VK_EXT_external_memory_dma_buf` が無ければ、失敗する。ドライバーの準備の不備を、テストの前に、それとわかる形で出す |
 | Make /dev/udmabuf usable, or leave its tests out | `ci.yml` と同じ。`/dev/udmabuf` を開けるようにし、できなければ、それが要るテストを外す |
-| Build the compositor | テストのプロファイルで、`hizukuri` をビルドする。後のテストは、これを使い回す |
-| Self test on vkms | GPU で描いて、vkms に出す `hizukuri kms-selftest`（`--vulkan-device gpu --scanout cpu`）。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `hizukuri kms-selftest: PASSED` でなければ、失敗する |
+| Build the compositor | テストのプロファイルで、`proto-compositor` をビルドする。後のテストは、これを使い回す |
+| Self test on vkms | GPU で描いて、vkms に出す `proto-compositor kms-selftest`（`--vulkan-device gpu --scanout cpu`）。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `proto-compositor kms-selftest: PASSED` でなければ、失敗する |
 | Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる。自己診断だけが失敗したときも、走る |
 | Summary | ジョブの要約に、ドライバーの版、`tools/gpu-report.sh` の Vulkan の報告（`vulkan-summary.md`）、自己診断の `summary.txt`（無ければ、ログの終わり）を書く |
 
 - `--scanout dmabuf`（GPU の image を、dma-buf のまま vkms に渡す）は、確かめない。描くデバイスと、出すデバイスが違うので、自己診断が、意図して断る。
 - `artifacts/gpu/`（installer のログ、ドライバーの版、DRM のノード、Vulkan の報告、自己診断の報告とログ）と、
-  `target/*/test-output/`（テストが取り込んだ画像と、hizukuri のログ）を、artifact `gpu` として 14 日残す。成否によらない。
+  `target/*/test-output/`（テストが取り込んだ画像と、`proto-compositor` のログ）を、artifact `gpu` として 14 日残す。成否によらない。
 
 ### 共通のこと
 

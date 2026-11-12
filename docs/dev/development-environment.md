@@ -57,14 +57,14 @@ hizukuri は、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバー�
 | validation layer | Vulkan の使い方の誤りの検出。`HIZUKURI_TEST_VALIDATION=1` を付けたテストに要る |
 | `vulkaninfo` | デバイスと拡張の確認。ドライバーが、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つかは、これで見る |
 
-- Rust のレンダラー（`hizukuri-render`）が要るのは、Vulkan 1.3 である。
-  スクリプトに見せる GPU の API（`gfx-core`）は、`VK_EXT_descriptor_heap` を使う。
+- Rust のレンダラー（`proto-render`）が要るのは、Vulkan 1.3 である。
+  スクリプトに見せる GPU の API（`proto-gfx-core`）は、`VK_EXT_descriptor_heap` を使う。
 - **どのデバイスで描いたかを、いつも明示する。** デバイスの選び方は、3 つある。
 
 | 手段 | 内容 |
 | --- | --- |
-| `--vulkan-device` | hizukuri の起動時の指定。`auto`、`gpu`、`cpu`、またはデバイス名かドライバー名の一部 |
-| `--vulkan-icd` | hizukuri の起動時の指定。ドライバーの manifest を 1 つ指す。lavapipe に固定するときに使う |
+| `--vulkan-device` | `proto-compositor` の起動時の指定。`auto`、`gpu`、`cpu`、またはデバイス名かドライバー名の一部 |
+| `--vulkan-icd` | `proto-compositor` の起動時の指定。ドライバーの manifest を 1 つ指す。lavapipe に固定するときに使う |
 | `VK_DRIVER_FILES` | Vulkan の loader の環境変数。指定した manifest だけを、loader に見せる。ほかのプログラム（`vulkaninfo` など）にも効く |
 
 - テストに使うデバイスは、環境変数 `HIZUKURI_TEST_DEVICES` で選ぶ（[テストと CI](testing-and-ci.md)）。既定は、lavapipe である。
@@ -72,7 +72,7 @@ hizukuri は、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバー�
   （[テストと CI](testing-and-ci.md)）。
 - テストは、lavapipe の manifest を、環境変数 `HIZUKURI_ICD_DIRS`（`:` で区切ったディレクトリの並び）、
   `/usr/share/vulkan/icd.d`、`/usr/local/share/vulkan/icd.d`、`/etc/vulkan/icd.d` の順に探す。
-- 選ばれたデバイスは、hizukuri の起動時のログと、制御口の `state` の `renderer` に出る。
+- 選ばれたデバイスは、`proto-compositor` の起動時のログと、制御口の `state` の `renderer` に出る。
 
 ## 検証に使うクライアント
 
@@ -104,7 +104,7 @@ hizukuri は、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバー�
 
 - **専用の `XDG_RUNTIME_DIR` を使う。** 利用者の session の socket と、同じ場所に置かない。終わったら、自分で消す。
 - **`WAYLAND_DISPLAY` と `DISPLAY` を外して起動する。** 付いたままだと、nested として、デスクトップにウィンドウを出してしまう。
-- **クライアントは、hizukuri の socket を明示して起動する。**
+- **クライアントは、compositor の socket を明示して起動する。**
 - **自動終了の時間（`--exit-after`）を付ける。** プロセスを残さない。
 - **止めるのは、自分が起動したプロセスだけである。PID で止める。** 名前の一致で止めない。
   デスクトップでは、テストで使うものと同じ名前のプロセス（端末、`wl-paste` など）が動いている。

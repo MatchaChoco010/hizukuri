@@ -1,5 +1,5 @@
 [package]
-name = "hizukuri-test-client"
+name = "proto-test-client"
 description = "Wayland client for verifying hizukuri: shows solid fills and records the input it receives"
 version.workspace = true
 edition.workspace = true
