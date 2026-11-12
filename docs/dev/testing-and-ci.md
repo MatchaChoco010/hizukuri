@@ -256,7 +256,7 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 - `check (test)` は、検査の前に、runner の `/dev/udmabuf` を、だれでも開けるようにする。
   **開けるようにできなかったときは、`HIZUKURI_TEST_SKIP_UDMABUF=1` を設定して、`/dev/udmabuf` が要るテストを外す。**
   外したことは、ジョブの要約と、警告に出る。
-- 同じ PR の古い実行は、新しい push で取り消す。
+- 同じ PR の古い実行は、新しい push で取り消す。ブランチへの push では、push した commit ごとに実行を持ち、後の push が、前の実行を取り消すことは無い。
 - 失敗したときは、`target/*/test-output/`（取り込んだ画像と、hizukuri のログ）を、artifact として 14 日残す。
 
 ### `vm.yml`
@@ -273,6 +273,7 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 6. 結果を、ジョブの要約に書く。項目ごとの結果、ログ、取り込んだ画面、ゲストのシリアルコンソールのログを、artifact として 14 日残す。
 
 - runner は、`ubuntu-24.04` である。KVM を使う。GPU は、使わない。
+- push した commit ごとに実行を持つ。後の push が、前の実行を取り消すことは無い。
 - `venus` の部は、GPU が要るので、回さない。
 
 ### `gpu.yml`
