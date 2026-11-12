@@ -213,6 +213,7 @@ nix develop --command tools/vm/try-hizukuri [--gtk] [--skip-build]
 3. バイナリ（`proto-compositor`、`proto-ctl`、`proto-test-client`）を、ゲストの `~/bin/` へ送る。
    送ったバイナリが、ゲストで起動しなければ、その旨を出して止まる。
 4. 組み込みのプロジェクト（`prototype/compositor/scripts/`）を、ゲストの `~/hzk-scripts.orig/` へ送る。
+5. 描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）を、ゲストの `~/hzk-draw-only/` へ送る。
 
 ゲストは、起動のたびに最初の状態に戻る。VM を起動し直したら、`try-hizukuri` で、送り直す。
 
@@ -231,9 +232,8 @@ VT の上の session から実行する。コンソールにログインして�
 
 | 指定 | 内容 |
 | --- | --- |
-| `lavapipe`（既定） | Rust のレンダラーを lavapipe で動かし、dumb buffer へ写して scanout する |
-| `script` | スクリプトの描画と、スクリプトのウィンドウ管理（タイル）。lavapipe で描く |
-| `venus` | Rust のレンダラーを Venus で動かし、dma-buf で scanout する。`HIZUKURI_VM_GPU=venus` で起動した VM で使う |
+| `lavapipe`（既定） | 組み込みの描画（スクリプト）を lavapipe で動かし、dumb buffer へ写して scanout する。ウィンドウは、コアの fallback が置く（`~/hzk-draw-only` の、描くだけのプロジェクト） |
+| `script` | `~/hzk-scripts` のスクリプトの描画と、スクリプトのウィンドウ管理（タイル）。lavapipe で描く |
 | `--reset-scripts` | `script` と一緒に使う。ゲストで書き換えたプロジェクトを、送ったものに戻す（書き換えたものは、`~/hzk-scripts.bak` に残る） |
 | `--seconds N` | 自動で終わるまでの秒数（既定は 600） |
 | `--mode 1920x1080` | モード（既定は 1280x800） |
@@ -246,7 +246,7 @@ VT の上の session から実行する。コンソールにログインして�
 
 ### スクリプトの層を触る（`hzk script`）
 
-`hzk script` は、検証用の compositor を、`--renderer script --wm script --script ~/hzk-scripts` で起動する。
+`hzk script` は、検証用の compositor を、`--script ~/hzk-scripts` で起動する（描画とウィンドウ管理は、既定でスクリプトに任せる）。
 画面を描くのも、ウィンドウを並べるのも、`~/hzk-scripts/` のプロジェクトのスクリプトである（Luau。検証用の、仮の言語である）。
 端末が 3 つ（`foot`、`weston-terminal`、`alacritty`）、タイルに並ぶ。
 
@@ -274,6 +274,7 @@ VT の上の session から実行する。コンソールにログインして�
 | `~/hzk-scripts.orig/` | `prototype/compositor/scripts/` の写し。`tools/vm/try-hizukuri` が、毎回置き換える |
 | `~/hzk-scripts/` | `hzk script` が使うもの。無ければ、上の写しから作る。**ゲストで書き換えるのは、ここである** |
 | `~/hzk-scripts.bak/` | `hzk script --reset-scripts` が、書き換えたものを退避する場所 |
+| `~/hzk-draw-only/` | `prototype/compositor/projects/draw-only/` の写し。`hzk`（`lavapipe`）が使う。`tools/vm/try-hizukuri` が、毎回置き換える |
 
 どれも、VM を止めると消える。残したい変更は、`tools/vm/vm pull` で取り出す。
 
@@ -330,12 +331,14 @@ VM を動かす機械に GPU があれば、ゲストに、その GPU で描く 
   それ以外の GPU では、`HIZUKURI_VM_QEMU` で、その機械の QEMU を指定する。
 - **ゲストに、Vulkan のデバイスが、複数見える。** Venus のデバイスと、lavapipe である。
   先頭のデバイスを選ぶ作りにしない。
+- **スクリプトの描画と、`kms-selftest` のパターンの描画は、Venus では動かない。** どちらも、`VK_EXT_descriptor_heap` が要る。
+  `tools/vm-check.py` の試験は、Venus を使わない。
 
 | | Venus | lavapipe |
 | --- | --- | --- |
 | `VK_EXT_descriptor_heap` | 無い。virglrenderer が、この拡張をゲストへ通す必要があり、1.3.0 は通さない | ある |
-| 描けるもの | Rust のレンダラー（`proto-render`） | Rust のレンダラーと、スクリプトの描画（`proto-gfx-core`） |
-| scanout | Vulkan で確保した `DRM_FORMAT_MOD_LINEAR` の画像を、dma-buf として取り出して、flip する | dumb buffer へ、CPU で写す |
+| 描けるもの | Rust のレンダラー（`proto-render`。`--renderer rust`） | Rust のレンダラーと、`proto-gfx-core` の上の描画（スクリプトの描画、`kms-selftest`） |
+| scanout | Rust のレンダラーが Vulkan で確保した `DRM_FORMAT_MOD_LINEAR` の画像を、dma-buf として取り出して、flip する | dumb buffer へ、CPU で写す |
 
 - scanout する画像は、`DRM_FORMAT_MOD_LINEAR` で確保し、`drmModeAddFB2` に、modifier を付けない。
   ドライバーに modifier を選ばせると、virtio-gpu の KMS が扱えない modifier が選ばれうる。
@@ -447,22 +450,24 @@ GPU は、要らない。数分で終わる。
 
 | 部 | 内容 | VM の構成 |
 | --- | --- | --- |
-| `lavapipe` | Rust のレンダラーを lavapipe で動かし、dumb buffer で scanout する。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
-| `script` | スクリプトの層を、実際のアプリで。タイル、キーの割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、Rust のレンダラーとの画素の比較、フレームの時間、`hzk script` | 既定 |
-| `vkms` | vkms の上で、VT なしで起動する。自己診断 | 既定 |
+| `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
+| `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーの割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、明示して選んだ Rust のレンダラー（`--renderer rust --wm rust`）との画素とフレームの時間の比較、`hzk script` | 既定 |
+| `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
 | `outputs` | 2 つの出力。使う出力の指定、ほかの出力に触れないこと、hotplug | 既定 |
 | `real-hardware` | VM の外で起動するときの安全策 | `HIZUKURI_VM_CPU=host,-hypervisor` |
-| `venus` | `lavapipe` と同じ項目を、Venus と dma-buf で（スクリプトの層を除く） | `HIZUKURI_VM_GPU=venus` |
 
-既定の実行に入らない 2 つの部は、VM の起動のしかたが違う。VM を止めてから、実行する。
+- compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目（組み込みのプロジェクトで、`--wm script`）のほかは、
+  描くだけのプロジェクトで動かし、ウィンドウを、項目が置いた場所に保つ。`vm-check.py` は、バイナリと一緒に、
+  描くだけのプロジェクトを、ゲストの `/home/hizukuri/hzk-draw-only` へ送る。
+- 自己診断の項目（`selftest`、`selftest-1080p`、`vkms/selftest-1080p`）は、`kms-selftest` を動かす。パターンは、`proto-gfx-core` で描く。
+
+既定の実行に入らない `real-hardware` の部は、VM の起動のしかたが違う。VM を止めてから、実行する。
 
 ```sh
 HIZUKURI_VM_CPU=host,-hypervisor nix develop --command tools/vm/vm test tools/vm-check.py --only real-hardware
-HIZUKURI_VM_GPU=venus nix develop --command tools/vm/vm test tools/vm-check.py --only venus
 ```
 
-- `venus` の部は、GPU のある機械で、明示して回す。
 - **構成が合わない VM に、部を頼むと、失敗になる**（`<部>/configured` が FAIL）。飛ばさない。
 - 画面は、VNC の socket から読み、数値で比べる。入力は、QMP から送る。
 - 試験が起動した、ゲストの中のプロセスは、起動したときの PID と、`tty-run` の unit の `MainPID` で扱う。名前で探して止めることは、しない。
@@ -504,7 +509,7 @@ vm-check: <数> passed, <数> failed, <数> skipped. Evidence: <出力のディ�
 
 - 契機は、`develop`、`release`、`release-candidate/**` への push と、毎晩 1 回、手動の起動である。
   `develop` と `release` への push では、文書だけの変更なら、試験を飛ばす。`release-candidate/**` への push では、必ず回す。
-- 既定の部と、`real-hardware` の部を回す。`venus` の部は、回さない。
+- 既定の部と、`real-hardware` の部を回す。
 - cargo のビルドの結果を、キャッシュする。無くても、時間がかかるだけである。Nix の store は、キャッシュしない（devShell、QEMU、ゲストは、binary cache から、1 分ほどで取得できる）。
 - 結果の要約は、job の summary に出る。出力のディレクトリと、ゲストのシリアルコンソールのログは、artifact（`vm-check`）に残る。
 
@@ -533,7 +538,6 @@ CI の全体は、[テストと CI](testing-and-ci.md)にある。
 | 複数の出力、hotplug | virtio-gpu の 2 つ目の出力、`vm output` | `outputs` |
 | メインループが固まったときの、watchdog の動作 | `freeze-main-loop` | `safety`、`script` |
 | VM の外で起動するときの安全策 | CPU の `hypervisor` フラグを隠した構成 | `real-hardware` |
-| dma-buf を、KMS に載せる経路 | Venus（`LINEAR`、`XRGB8888`） | `venus` |
 | libseat の seatd のバックエンド | `tty-run --seatd` | 試験は、未実装 |
 | ジェスチャー、タッチパッド、入力の機器の抜き差し | uinput（`uinput-touchpad.py`）、`libinput replay` | 試験は、未実装 |
 | vkms が表示した画素の値 | vkms の writeback | 試験は、未実装 |
@@ -545,5 +549,6 @@ CI の全体は、[テストと CI](testing-and-ci.md)にある。
 - VRR と、ティアリング（async page flip）。
 - 実ドライバーの modifier（tiled のバッファの scanout）、plane の format と scaling の制約。
 - GPU のドライバーでの、descriptor heap を使う描画から、KMS までの経路と、その性能。
+- 描画の dma-buf の画像を、KMS に載せる経路（ゲストの Vulkan のデバイスのうち、スクリプトの描画に使えるのは lavapipe だけで、その画像は KMS のデバイスのものではない）。
 - 表示の実際のタイミング（vblank、presentation の時刻）。
 - モニターごとに違う EDID、複数の GPU。

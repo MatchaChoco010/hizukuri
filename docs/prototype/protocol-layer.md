@@ -85,7 +85,7 @@ transform だけを変えて、バッファを付け直さない commit は、�
 | --- | --- | --- |
 | `off`（既定） | 公開しない | クライアントは `wl_shm` を使う。GL のクライアントは、ソフトウェア描画に切り替える。GPU で描く Vulkan のクライアントは、起動できない |
 | `cpu` | `ARGB8888`、`XRGB8888`、`ABGR8888`、`XBGR8888` の、`DRM_FORMAT_MOD_LINEAR` | mmap して、画素を複写する。ドライバーが mmap を許さないバッファ（GPU のメモリの多く）は、表示されない |
-| `gpu` | スクリプトの描画のデバイスが取り込める format と modifier | Vulkan に取り込む。複写しない。`--renderer script` が要る |
+| `gpu` | スクリプトの描画のデバイスが取り込める format と modifier | Vulkan に取り込む。複写しない。スクリプトの描画（`--renderer script`。既定）が要る |
 
 - 受け付ける format と modifier は、プロトコルの層が決めない。取り込む側が決めて、`ServerConfig::dmabuf` で渡す。
 - デバイス（DRM の `major`、`minor`）が分かっていれば、feedback つきの global（version 6）になる。
@@ -115,7 +115,7 @@ transform だけを変えて、バッファを付け直さない commit は、�
 
 - 最大化と全画面の要求には、configure で答える決まりである。ウィンドウ管理が何も送らなければ、次の `flush_clients` で、
   内容の変わらない configure を送る。
-- 中核は、要求を `WindowManager::window_request` へ渡す。**Rust のレイアウトも、スクリプトのウィンドウ管理も、
+- 中核は、要求を `WindowManager::window_request` へ渡す。**Rust のレイアウトも、fallback のウィンドウ管理も、スクリプトのウィンドウ管理も、
   いまは、要求に応じない**（スクリプトへの口は、未実装である）。
 
 ## 出力

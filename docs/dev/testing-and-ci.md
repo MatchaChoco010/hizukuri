@@ -67,15 +67,20 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | 書式と lint | `tools/ci.sh lint` | `cargo fmt --check`、`cargo clippy` | 不要 |
 | 色の計算 | `proto-color` の単体テスト | 原色の行列と transfer function を、規格の値と比べる。往復で、元の値に戻ること | 不要 |
 | 配置 | `proto-layout` の単体テスト | 個別の場面と、proptest による不変条件 | 不要 |
-| プロトコル | `prototype/compositor/tests/protocol.rs`、`proto-wl` の `tests/server.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。レンダラーなし。configure、focus、キー、ポインター、バッファの解放、subsurface | 不要 |
-| バックエンドの取り決め | `prototype/compositor/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
+| fallback | `proto-compositor` の `fallback/` の単体テスト | ずらした配置と、ウィンドウの表（`fallback::Windows`）を、`proto-layout` の `Layout` と比べる。当たり判定 | 不要 |
+| プロトコル | `prototype/compositor/tests/protocol.rs`、`proto-wl` の `tests/server.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。何も描かない `NullScene` と、fallback のウィンドウ管理（`Compositor::new`）。configure、focus、キー、ポインター、バッファの解放、subsurface | 不要 |
+| バックエンドの取り決め | `prototype/compositor/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。`NullScene` と、fallback のウィンドウ管理。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
 | KMS のロジック | `proto-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
 | レンダラー | `prototype/render/tests/gpu.rs` | 表面と出力の image description の組み合わせを描き、CPU の参照計算と比べる | 要る |
-| KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイス、実際のレンダラーをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する | 要る |
-| headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。Rust のレンダラーと、スクリプトの描画の両方で走る | 要る |
-| スクリプトの層 | `prototype/compositor/tests/script.rs` | 2 つのレンダラーの画素の比較、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し | 要る |
+| KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイスと、Rust のレンダラー、スクリプトの描画のそれぞれをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する（tiled の modifier だけを出す場合は、スクリプトの描画を包んで作る）。模擬のデバイスの上の自己診断（`PatternRenderer`） | 要る |
+| headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。どの場面も、2 回走る。比較の相手として明示した Rust の実装（`--renderer rust --wm rust`）と、スクリプトの描画（描くだけのプロジェクトで、配置は fallback） | 要る |
+| スクリプトの層 | `prototype/compositor/tests/script.rs` | 2 つのレンダラーの画素の比較（Rust のレンダラーは、明示して選ぶ）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し | 要る |
 | スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み | 要る |
-| 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。popup と grab、selection、fractional-scale、dmabuf | 要る |
+| 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。スクリプトの描画（`real_clients.rs` は、描くだけのプロジェクト）。popup と grab、selection、fractional-scale、dmabuf | 要る |
+
+実行バイナリを起動するテスト（`prototype/compositor/tests/common/mod.rs` の `Session`）は、`--wm` か `--script` を指定しない限り、
+描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）を `--script` に渡して起動する。ウィンドウは、テストが置いた場所に残る。
+`session` を読んで、タイルに並べないはずのテスト用のプロジェクトは、`session` のモジュールとして、描くだけのプロジェクトの `session.luau` を持つ。
 
 検証用のクライアント（`tools/test-client`）は、内容の決まったバッファを出す。フォントやテーマで、結果が変わらない。
 画素を比べるテストは、これを使う。
@@ -138,7 +143,7 @@ nix develop .#ci --command tools/vm/vm test tools/vm-check.py
   ディスクは無く、起動するたびに、同じ状態から始まる。`/nix/store` を共有するので、devShell でビルドしたバイナリが、ゲストでそのまま動く。
 - `vm test` は、ゲストをビルドし、VM を起動し、試験を走らせ、VM を止める。
 - 既定で回るのは、GPU の要らない部である（`lavapipe`、`script`、`vkms`、`safety`、`outputs`）。
-  VM の起動のしかたが違う部（`real-hardware`、`venus`）は、`--only` で、別に回す。構成が合わない VM に頼むと、失敗になる。
+  VM の起動のしかたが違う部（`real-hardware`）は、`--only` で、別に回す。構成が合わない VM に頼むと、失敗になる。
 
 VM の作りと、試験の部の一覧は、[検証用の VM](vm-environment.md)にある。
 この試験は、`ci.yml` ではなく、`vm.yml` が回す（下の「CI」）。
@@ -153,7 +158,7 @@ VM の作りと、試験の部の一覧は、[検証用の VM](vm-environment.md
 | VRR | virtio-gpu にも vkms にも、無い |
 | ティアリング（async page flip） | virtio-gpu には、無い。async の commit を拒否する条件は、ドライバーごとに違う |
 | direct scanout | どの format と modifier のバッファを、どの plane に載せられるかは、ドライバーと GPU ごとに違う |
-| GPU のドライバーでの、Vulkan から KMS への経路 | VM の既定の構成は、GPU を使わない。Venus の構成は、仮想化を通る |
+| GPU のドライバーでの、Vulkan から KMS への経路 | VM の検査は、GPU を使わない。VM に Venus のデバイスを見せられるが、`VK_EXT_descriptor_heap` を持たないので、描画に使えない |
 | page flip の実際の時刻と、遅延 | VM の時刻は、外側の機械の都合で揺れる |
 | 複数の GPU | VM には、GPU が 1 つしか無い |
 | 画面に出た光（HDR の見え方、ティアリングの見え方、色） | 取り込む手段が無い |
@@ -273,7 +278,6 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 
 - runner は、`ubuntu-24.04` である。KVM を使う。GPU は、使わない。
 - push した commit ごとに実行を持つ。後の push が、前の実行を取り消すことは無い。
-- `venus` の部は、GPU が要るので、回さない。
 
 ### `gpu.yml`
 
@@ -320,7 +324,7 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 | Check what the Vulkan driver offers | devShell の中で、`tools/gpu-report.sh`。デバイスが見えないか、`VK_EXT_descriptor_heap` か `VK_EXT_external_memory_dma_buf` が無ければ、失敗する。ドライバーの準備の不備を、テストの前に、それとわかる形で出す |
 | Make /dev/udmabuf usable, or leave its tests out | `ci.yml` と同じ。`/dev/udmabuf` を開けるようにし、できなければ、それが要るテストを外す |
 | Build the compositor | テストのプロファイルで、`proto-compositor` をビルドする。後のテストは、これを使い回す |
-| Self test on vkms | GPU で描いて、vkms に出す `proto-compositor kms-selftest`（`--vulkan-device gpu --scanout cpu`）。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `proto-compositor kms-selftest: PASSED` でなければ、失敗する |
+| Self test on vkms | GPU で描いて、vkms に出す `proto-compositor kms-selftest`（`--vulkan-device gpu --scanout cpu`）。テストパターンは、`proto-gfx-core` で、GPU の上で描く。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `proto-compositor kms-selftest: PASSED` でなければ、失敗する |
 | Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる。自己診断だけが失敗したときも、走る |
 | Summary | ジョブの要約に、ドライバーの版、`tools/gpu-report.sh` の Vulkan の報告（`vulkan-summary.md`）、自己診断の `summary.txt`（無ければ、ログの終わり）を書く |
 

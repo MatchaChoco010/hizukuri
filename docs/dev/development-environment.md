@@ -57,8 +57,8 @@ hizukuri は、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバー�
 | validation layer | Vulkan の使い方の誤りの検出。`HIZUKURI_TEST_VALIDATION=1` を付けたテストに要る |
 | `vulkaninfo` | デバイスと拡張の確認。ドライバーが、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つかは、これで見る |
 
-- Rust のレンダラー（`proto-render`）が要るのは、Vulkan 1.3 である。
-  スクリプトに見せる GPU の API（`proto-gfx-core`）は、`VK_EXT_descriptor_heap` を使う。
+- スクリプトの描画と、`kms-selftest` のパターンの描画は、スクリプトに見せる GPU の API（`proto-gfx-core`）の上で動き、
+  Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。Rust のレンダラー（`proto-render`。`--renderer rust` のときだけ使う）が要るのは、Vulkan 1.3 である。
 - **どのデバイスで描いたかを、いつも明示する。** デバイスの選び方は、3 つある。
 
 | 手段 | 内容 |

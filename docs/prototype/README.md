@@ -15,13 +15,13 @@
 | 場所 | 内容 | 主な依存 |
 | --- | --- | --- |
 | `prototype/color` | image description、原色の行列、transfer function、輝度の対応づけ。CPU の参照計算 | なし |
-| `prototype/render` | Rust で書いた Vulkan のレンダラー。`wl_shm` の取り込み、linear light の `RGBA16F` での合成、出力への符号化、読み戻し | `vulkan-rs`、`naga`（ビルド時） |
-| `prototype/layout` | Rust で書いたウィンドウの配置。単純なフローティング | なし |
+| `prototype/render` | Rust で書いた Vulkan のレンダラー。`wl_shm` の取り込み、linear light の `RGBA16F` での合成、出力への符号化、読み戻し。`--renderer rust` のときだけ使う | `vulkan-rs`、`naga`（ビルド時） |
+| `prototype/layout` | Rust で書いたウィンドウの配置。単純なフローティング。`--wm rust` のときだけ使う | なし |
 | `prototype/wl` | Wayland のサーバー側。Smithay の型を外へ出さない | Smithay |
 | `prototype/backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む） | `proto-render`、`calloop`、`drm`、Smithay（session、udev、libinput） |
 | `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込み | `vulkan-rs`、`naga` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
-| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、スクリプトが使えないときの最小の描画と配置（`fallback/`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて |
+| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、誰も決めないときと、スクリプトが使えないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、自己診断（`selftest`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて |
 | `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
 | `tools/ci.sh` | 検査をまとめて走らせる | |
 | `tools/real-app-check.sh` | 実際のアプリ（weston-terminal）を headless の中で動かして、画面を取り込む | |
@@ -34,8 +34,8 @@
 
 | 継ぎ目 | trait | 実装 |
 | --- | --- | --- |
-| 描くもの | `proto_compositor::scene::Scene` | `FlatScene`（`proto-render` で、ウィンドウを平らな矩形として描く）、`ScriptScene`（スクリプトが描く） |
-| ウィンドウを管理するもの | `proto_compositor::wm::WindowManager` | `proto_layout::Layout`（フローティング）、`ScriptWm`（スクリプトが決める） |
+| 描くもの | `proto_compositor::scene::Scene` | `ScriptScene`（スクリプトが描く）、`NullScene`（何も描かない）、`FlatScene`（`proto-render` で、ウィンドウを平らな矩形として描く。`--renderer rust` のときだけ） |
+| ウィンドウを管理するもの | `proto_compositor::wm::WindowManager` | `ScriptWm`（スクリプトが決める）、`proto_compositor::fallback::Windows`（fallback の決まりで置く）、`proto_layout::Layout`（フローティング。`--wm rust` のときだけ） |
 | 出力先 | `proto_backend::Backend` | `HeadlessBackend`、`KmsBackend` |
 
 `Scene` の口は、次のとおりである。
@@ -44,14 +44,29 @@
 - 出力へ描く口（`draw`）: 出力の描画先へ、ウィンドウの一覧とカーソルを描かせる。
 - 当たり判定の口（`hit_test`、`locate`）: 画面上の点から、表面と、表面の中の座標を求めさせる。
 
-描くものと、ウィンドウを管理するものは、起動時に選ぶ（`--renderer`、`--wm`）。既定は、どちらも Rust の実装である。
-hizukuri が目指す形は、スクリプトの側である（[方針](../design/direction.md)）。Rust の実装は、スクリプトの描画と
-数値を比べる相手として置いてある。スクリプトの層の作りは、[スクリプトの層](script-layer.md)に書く。
+描くものと、ウィンドウを管理するものは、起動時に選ぶ（`--renderer`、`--wm`、`--no-renderer`）。既定は、どちらもスクリプトである。
+hizukuri が目指す形は、スクリプトの側である（[方針](../design/direction.md)）。Rust の実装（`proto-render` と `proto-layout`）は、
+スクリプトの描画と数値を比べる相手として置いてあり、明示したときだけ使う。
+
+| 指定 | 描くもの | ウィンドウを管理するもの | `state` の `window_manager` |
+| --- | --- | --- | --- |
+| 既定（`--renderer script --wm script`） | `ScriptScene` | `ScriptWm` | `script` |
+| `--renderer script --wm rust` | `ScriptScene` | `proto_layout::Layout` | `rust-floating` |
+| `--renderer rust --wm rust` | `FlatScene` | `proto_layout::Layout` | `rust-floating` |
+| `--no-renderer` | `NullScene` | `fallback::Windows` | `fallback` |
+
+- `--wm script` には、`--renderer script` が要る。`--renderer rust` のときは、`--wm rust` を付ける（付けなければ、起動に失敗する）。
+- `ScriptWm` は、fallback のウィンドウの表（`fallback::Windows`）の上で動く。プロジェクトがウィンドウ管理の関数を定義しなければ、
+  fallback の決まりで、ウィンドウを置き、focus を与える（[スクリプトの層](script-layer.md#fallback-のウィンドウ管理)）。
+- `NullScene`（`proto_compositor::scene::NullScene`）は、ウィンドウの位置と不透明度を持ち、当たり判定には fallback の当たり判定で答える。
+  何も描かず、表面の内容を持たない。GPU も、スクリプトも、使わない。
+
+スクリプトの層の作りは、[スクリプトの層](script-layer.md)に書く。
 
 ### 色
 
-- 合成は、linear light の `RGBA16F` のバッファで行う。Rust のレンダラーの作業用の原色は BT.2020 である。
-  スクリプトの描画では、作業用の色空間をスクリプトが選ぶ。
+- 合成は、linear light の `RGBA16F` のバッファで行う。作業用の色空間は、スクリプトが選ぶ（既定の描画）。
+  Rust のレンダラー（`--renderer rust`）の作業用の原色は、BT.2020 である。
 - 表面も出力も、image description（原色、transfer function、輝度）を持つ。色の指定が無い表面は、
   BT.709 の原色と、指数 2.2 のべき乗として扱う（`srgb-gamma22`）。
 - 出力の既定も `srgb-gamma22` なので、既定の構成では、指定の無い表面の値が、そのまま出力に出る。
@@ -145,9 +160,9 @@ rm -rf "$RT"
 | `--vulkan-device` | `auto` | `auto`、`gpu`、`cpu`、またはデバイス名かドライバー名の一部（`llvmpipe` など）。KMS での `auto` は、画面を出している GPU |
 | `--vulkan-icd` | なし | Vulkan のドライバーの manifest。`VK_DRIVER_FILES` に設定してから loader を読み込む |
 | `--vulkan-validation` | off | validation layer を有効にする。layer が無ければ起動に失敗する |
-| `--no-renderer` | off | レンダラーなしで動かす。描画以外はすべて動く |
-| `--renderer` | `rust` | 描くもの。`rust`: `proto-render`。`script`: スクリプトの層 |
-| `--wm` | `rust` | ウィンドウを管理するもの。`rust`: `proto-layout`。`script`: スクリプト。`--renderer script` が要る |
+| `--renderer` | `script` | 描くもの。`script`: スクリプトの層。`rust`: `proto-render`（比較用。`--wm rust` が要る） |
+| `--wm` | `script` | ウィンドウを管理するもの。`script`: スクリプト（プロジェクトが決めないところは fallback）。`--renderer script` が要る。`rust`: `proto-layout` |
+| `--no-renderer` | off | 何も描かずに動かす。GPU も、スクリプトも使わない。ウィンドウは、fallback が管理する。描画以外はすべて動く。`--renderer`、`--wm`、`--script` と一緒には指定できない |
 | `--script` | 組み込み | スクリプトのプロジェクトのディレクトリ（`main.luau`）。無いモジュールは、組み込みのものを使う |
 | `--script-on-error` | `fallback` | 描画のスクリプトが失敗したとき。`fallback`: 組み込みの fallback が描く。`hold`: 直前のフレームを出し続けて、後で試し直す |
 | `--script-budget-ms` | `250` | スクリプトの 1 回の呼び出しに許す時間 |
@@ -169,12 +184,12 @@ rm -rf "$RT"
 | --- | --- |
 | `proto-compositor kms-info [--device PATH] [--anonymize] [--output FILE]` | DRM のデバイスの connector、mode、CRTC、plane、property を JSON で出す。読み取りだけで、DRM master を取らず、何も変えない |
 | `proto-compositor kms-info --summary` | 人が読む一覧を出す。デバイスごとに、ドライバー、PCI の番地、seat の primary GPU かどうか、つながっている画面と preferred のモード |
-| `proto-compositor kms-selftest [--device PATH] --output NAME --seconds N --report DIR` | 出力 1 つにテストパターンを出し、page flip を測り、報告を書いて終わる |
+| `proto-compositor kms-selftest [--device PATH] --output NAME --seconds N --report DIR` | 出力 1 つにテストパターンを出し、page flip を測り、報告を書いて終わる。パターンは、`proto-gfx-core` の上で直接描く（[KMS のバックエンド](kms-backend.md#デバイスの一覧と自己診断)） |
 
 ### Vulkan のデバイスの選び方
 
-- Rust のレンダラーは、Vulkan 1.3（dynamic rendering と synchronization2）が要る。スクリプトの描画は、
-  Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
+- スクリプトの描画と、`kms-selftest` のパターンの描画は、Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
+  Rust のレンダラー（`--renderer rust`）は、Vulkan 1.3（dynamic rendering と synchronization2）が要る。
 - Vulkan の loader は、`VK_DRIVER_FILES` が設定されていると、そこに並んだドライバーだけを見る。
   設定されている環境で、別のドライバー（lavapipe など）を使うときは、manifest を明示する。
 
@@ -183,7 +198,7 @@ target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LA
 ```
 
 - Nix の devShell の中では、lavapipe の manifest の場所が、環境変数 `HIZUKURI_ICD_LAVAPIPE` に入っている。
-- 選ばれたデバイスは、起動時のログと、`state` の `renderer` に出る。
+- 選ばれたデバイスは、起動時のログと、`state` の `renderer` に出る。`--no-renderer` では、`renderer` は `null` である。
 
 ## 制御口
 
@@ -232,7 +247,7 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 
 `state` が返すもの:
 
-- `backend`、`session_active`、`socket`、`renderer`（デバイス名、ドライバー、validation のエラー数）、`frames_rendered`
+- `backend`、`session_active`、`socket`、`renderer`（デバイス名、ドライバー、validation のエラー数。`--no-renderer` では `null`）、`frames_rendered`
 - `backend_status`: KMS のとき、ドライバー、connector、CRTC、plane、モード、scanout の経路、表示したフレーム数、
   flip の間隔の統計、拒否された commit の数。headless では `null`
 - `frame_time_ms`: 最近のフレームの、描画と present にかかった時間の統計
@@ -244,7 +259,7 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 - `pointer`: 位置、クライアントが求めたカーソル
 - `selection`: クリップボードの持ち主が出している MIME type
 - `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
-- `window_manager`: `rust-floating` か `script`
+- `window_manager`: `script`（`--wm script`）、`fallback`（`--no-renderer`）、`rust-floating`（`--wm rust`）
 - `script`（`--renderer script` のとき）: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計
 
 `decode_pipeline` と `encode_pipeline` は、どの変換をどの順でかけるかを表す文字列である。
@@ -354,5 +369,5 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - IME（text-input、input-method）、xwayland-satellite のための対応、pointer-constraints、relative-pointer、
   primary selection、data-control、タッチ、ジェスチャー。
 - Rust のレンダラーは、GPU の完了を CPU で待つ（表面の内容を取り込むたびと、フレームを描くたびに 1 回ずつ）。
-  KMS でも、待ってから flip する（`IN_FENCE_FD` を使わない）。VM の Venus のように、完了の通知が遅い環境では、
+  KMS でも、待ってから flip する（`IN_FENCE_FD` を使わない）。完了の通知が遅い環境では、
   更新のあるクライアントの数に比例して、フレームが遅くなる。
