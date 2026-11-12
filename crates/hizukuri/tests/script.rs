@@ -44,6 +44,7 @@ script_tests!(
     holding_the_last_frame_while_the_script_fails,
     a_script_that_fails_on_events_is_taken_out_of_charge,
     a_script_is_reloaded_while_windows_stay_open,
+    a_module_that_does_not_compile_is_not_taken,
 );
 
 // ---------------------------------------------------------------------------
@@ -2401,6 +2402,117 @@ fn a_script_is_reloaded_while_windows_stay_open(device: Device) {
     });
     assert_eq!(session.script("which", json!([])), "other");
     assert_eq!(session.script_state()["project"], other.to_str().unwrap());
+    session.assert_renderer_clean();
+    session.quit();
+}
+
+/// A reload checks every module of the project before the running script
+/// goes, not only `main`: one that does not compile leaves the running
+/// script in charge, and the answer says which file and line are wrong.
+/// The modules are the `NAME.luau` files of the project directory, the
+/// ones `main` includes and the others. A module that compiles but fails
+/// while the script loads is found only by loading it, after the running
+/// script is gone: the built-in behaviour takes over, until the next
+/// reload.
+fn a_module_that_does_not_compile_is_not_taken(device: Device) {
+    let main = "local gaps = hz.include(\"gaps\")\n\
+                local tile = hz.include(\"tile\")\n\
+                tile.gap = gaps.gap\n\
+                function gap() return gaps.gap end\n\
+                hz.include(\"session\")\n";
+    let project = script_project(
+        "reload-module",
+        device,
+        &[("main", main), ("gaps", "return { gap = 20 }\n")],
+    );
+    let write = |file: &str, source: &str| std::fs::write(project.join(file), source).unwrap();
+    let mut session = Session::start(
+        "reload-module",
+        device,
+        &[
+            "--output-size",
+            "640x400",
+            "--wm",
+            "script",
+            "--script",
+            project.to_str().unwrap(),
+        ],
+    );
+    let mut a = session.client(options("a", 100, 60, RED));
+    wait_tiles(&mut session, &mut [&mut a], &[("a", [20, 20], [600, 360])]);
+
+    let refused = |session: &mut Session, file: &str| {
+        let error = session
+            .try_send(Request::ScriptReload { path: None })
+            .unwrap_err();
+        assert!(error.contains("does not compile"), "{error}");
+        assert!(error.contains("the running one was kept"), "{error}");
+        assert!(error.contains(file), "{error}");
+        error
+    };
+    let assert_kept = |session: &mut Session, reloads: u64| {
+        let script = session.script_state();
+        assert_eq!(
+            (&script["mode"], &script["reloads"]),
+            (&json!("running"), &json!(reloads))
+        );
+        assert_eq!(session.script("gap", json!([])), 20);
+    };
+
+    // A syntax error on the second line of a module `main` includes.
+    write("gaps.luau", "return {\n    gap = = 30,\n}\n");
+    let error = refused(&mut session, "\"gaps.luau\"]:2:");
+    assert!(error.contains("syntax error"), "{error}");
+    assert_kept(&mut session, 0);
+    let encoded = session.screenshot_png("module-refused");
+    assert_fallback_marker(&encoded, false, "after a refused reload");
+    assert_rgb(&encoded, 300, 200, RED, 1, "a, drawn by the script");
+    wait_tiles(&mut session, &mut [&mut a], &[("a", [20, 20], [600, 360])]);
+
+    // Fixed: the new module is taken.
+    write("gaps.luau", "return { gap = 30 }\n");
+    session.send(Request::ScriptReload { path: None });
+    wait_tiles(&mut session, &mut [&mut a], &[("a", [30, 30], [580, 340])]);
+    let script = session.script_state();
+    assert_eq!(
+        (&script["mode"], &script["reloads"]),
+        (&json!("running"), &json!(1))
+    );
+    assert_eq!(session.script("gap", json!([])), 30);
+
+    // A module nothing includes is checked as well. A file whose name is
+    // not a module name is not a module, and is not read.
+    write("scratch.luau", "local unfinished =\n");
+    refused(&mut session, "\"scratch.luau\"]:");
+    write("scratch.luau", "return nil\n");
+    write("gaps.old.luau", "this is not a script (\n");
+    session.send(Request::ScriptReload { path: None });
+    assert_eq!(session.script_state()["reloads"], 2);
+
+    // An error in `main` itself is answered the same way.
+    write("main.luau", "this is not a script (\n");
+    refused(&mut session, "\"main.luau\"]:1:");
+    write("main.luau", main);
+
+    // A module that compiles but fails while the script loads: the
+    // running script is gone by then, and the fallback draws.
+    write("gaps.luau", "error(\"no gaps today\")\n");
+    let error = session
+        .try_send(Request::ScriptReload { path: None })
+        .unwrap_err();
+    assert!(error.contains("failed to load"), "{error}");
+    assert!(error.contains("no gaps today"), "{error}");
+    assert_eq!(session.script_state()["mode"], "safe");
+    let encoded = session.screenshot_png("module-failed");
+    assert_fallback_marker(&encoded, true, "after a module failed to load");
+    assert_client_alive(&mut session, &mut a, "a", WHITE);
+
+    // Fixed and reloaded: the script is back.
+    write("gaps.luau", "return { gap = 20 }\n");
+    session.send(Request::ScriptReload { path: None });
+    assert_eq!(session.script_state()["mode"], "running");
+    let encoded = session.screenshot_png("module-fixed");
+    assert_fallback_marker(&encoded, false, "after the fix");
     session.assert_renderer_clean();
     session.quit();
 }

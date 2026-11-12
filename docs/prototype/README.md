@@ -211,7 +211,7 @@ target/debug/hizukuri --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" 
 | `set_window_opacity` | `window`、`opacity` | 描くときの不透明度 |
 | `set_surface_color` | `surface`、`image_description`、`alpha_mode`（省略可） | 表面の値の意味を指定する |
 | `script_call` | `function`、`args`（JSON の配列） | スクリプトの大域の関数を呼び、戻り値を `result` で返す |
-| `script_reload` | `path`（省略可） | スクリプトを読み直す。`path` があれば、そのプロジェクトに替える |
+| `script_reload` | `path`（省略可） | スクリプトを読み直す。`path` があれば、そのプロジェクトに替える。コンパイルできないモジュールがあれば、読み直さずに、失敗を返す（[スクリプトの層](script-layer.md#読み直し)） |
 | `script_mode` | `mode` | `running`: スクリプトに任せる。`safe`: 組み込みの fallback に任せる |
 | `quit` | | 終了する |
 
