@@ -435,9 +435,20 @@ impl Session {
     ///   writes history or state into their home. The cache directory is
     ///   left alone (font and shader caches are safe to share and slow to
     ///   rebuild).
+    /// - The system's configuration directory is the only other one it
+    ///   looks in: the list it inherited may hold directories of the person
+    ///   who runs the tests (a per-user profile).
+    /// - A terminal started without a command runs `/bin/sh`, not their
+    ///   login shell, and nothing points a shell at their startup files.
     pub fn client_command(&self, program: &str) -> Command {
         let mut command = Command::new(program);
         isolate(&mut command, &self.runtime_dir);
+        for variable in ["ZDOTDIR", "ENV", "BASH_ENV"] {
+            command.env_remove(variable);
+        }
+        command
+            .env("SHELL", "/bin/sh")
+            .env("XDG_CONFIG_DIRS", "/etc/xdg");
         let home = self.runtime_dir.join("home");
         let cache = std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)

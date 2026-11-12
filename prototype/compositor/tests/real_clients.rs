@@ -472,6 +472,13 @@ fn applications_are_started_without_a_way_to_the_desktop() {
             value_of(variable)
         );
     }
+    // Neither a terminal nor its shell reads the startup files or the
+    // configuration of whoever runs the tests.
+    assert_eq!(value_of("SHELL"), Some("/bin/sh"));
+    assert_eq!(value_of("XDG_CONFIG_DIRS"), Some("/etc/xdg"));
+    for variable in ["ZDOTDIR", "ENV", "BASH_ENV"] {
+        assert_eq!(value_of(variable), None, "{variable} leaked");
+    }
     session.quit();
 }
 
