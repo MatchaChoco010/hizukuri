@@ -55,8 +55,9 @@
 | `zwp_input_method_manager_v2` | 1 | 入力メソッド（IME）。どのクライアントにも見せる |
 | `zwp_virtual_keyboard_manager_v1` | 1 | 仮想キーボード。どのクライアントにも見せる |
 | `zwp_linux_dmabuf_v1` | 6 または 3 | `--dmabuf` で公開したときだけ（下） |
+| `wp_color_manager_v1` | 3 | parametric な image description だけ。ICC は公開しない（下） |
 
-未実装: `wp_color_management_v1`、タッチとジェスチャー。
+未実装: `wp_color_representation_v1`、タッチとジェスチャー。
 
 ## バッファ
 
@@ -235,6 +236,56 @@ text-input-v3（アプリ）、input-method-v2（IME）、virtual-keyboard-v1（
   キーは IME を通り、IME が使わなかったキーが、仮想キーボードで popup に届く。
 - text-input-v3 の version 2（`set_cursor_rectangle` を `wl_surface.commit` に合わせる）は、扱わない
   （固定した版の Smithay が、version 1 だけを公開する）。
+
+## 色
+
+`wp_color_manager_v1`（color-management-v1）は、Smithay に実装が無いので、この層が自分で受け答えする（`prototype/wl/src/color.rs`）。
+プロトコルの記述は、すべて `proto_color::ImageDescription` に直す。変換はしない。表面の image description は、
+`SurfaceNode` の `image_description` として、描く側に渡る。
+
+公開するもの:
+
+| 種類 | 内容 |
+| --- | --- |
+| rendering intent | `perceptual`、`relative`。どちらも、白を白へ写し（色順応）、出力の外を切り捨てる |
+| feature | `parametric`、`set_primaries`、`set_tf_power`、`set_luminances`、`set_mastering_display_primaries`、`extended_target_volume`、`windows_scrgb`。version 3 で bind したクライアントには、`windows_bt2100` も |
+| transfer function | `bt1886`、`gamma22`、`gamma28`、`ext_linear`、`st2084_pq`、`hlg`。version 2 以上では `compound_power_2_4`（IEC 61966-2-1 の区分的な関数）、version 1 では `srgb`（指数 2.2 のべき乗として扱う） |
+| primaries | 10 種のすべて（`srgb`、`pal_m`、`pal`、`ntsc`、`generic_film`、`bt2020`、`cie1931_xyz`、`dci_p3`、`display_p3`、`adobe_rgb`） |
+
+- **ICC は、公開しない。** `icc_v2_v4` を公開しないので、`create_icc_creator` は、プロトコルの決まりのとおり、
+  `unsupported_feature` のエラーになる。
+- parametric な記述は、`create` の時点で、`ready`（version 1）か `ready2`（version 2 以上）を返す。決まりに反してはいないが、
+  変換できない記述（原色が縮退している、など）は、`failed`（`unsupported`）で返す。
+  決まりに反するもの（同じ項目の 2 度目の設定、足りない項目、公開していない名前、輝度の大小）は、仕様のエラーにする。
+- PQ では、`set_luminances` の最大は使わない（最小 + 10000 cd/m² とする）。
+- `create_windows_scrgb` は、BT.709 の原色、linear、0〜80 cd/m²（値 1.0 が 80 cd/m²）、reference white 203 cd/m² である。
+  `create_windows_bt2100` は、BT.2020 の原色、PQ、最小 0、reference white 203 cd/m² である（プロトコルが勧める仮定）。
+- mastering display の原色と輝度、max_cll、max_fall は、`ImageDescription::mastering` に入れる。変換には使わない。
+- image description の identity は、1 から数え、使い回さない。出力の記述は、変わるまで同じ identity を持つ。
+
+表面:
+
+- 設定（`wp_color_management_surface_v1.set_image_description`、`unset_image_description`、object の破棄）は、
+  Smithay の表面の cached state に置く。`wl_surface.commit` で有効になり、同期した subsurface では、親の commit で有効になる。
+  設定は写しなので、直後に image description を破棄しても、変わらない。
+- 1 つの表面に、object は 1 つだけである（2 つ目は `surface_exists`）。表面が消えた object への要求は、`inert` のエラーになる。
+- 設定の無い表面は、`DEFAULT_SURFACE_IMAGE_DESCRIPTION`（BT.709、指数 2.2 のべき乗）として扱う。
+- `WlServer::set_surface_color`（制御口の `set_surface_color`）は、プロトコルの設定より優先する。alpha mode も、これで決める
+  （color-representation-v1 は未実装。プロトコルで設定した表面は、`premultiplied_electrical` である）。
+  `SurfaceNode::color_source` が、どれが効いているか（`Control`、`Protocol(intent)`、`Default`）を示す。
+
+出力と feedback:
+
+- 出力の image description は、`OutputConfig::image_description` である。`update_output` で変わると、その出力の
+  `wp_color_management_output_v1` に `image_description_changed` を送り、続けて `wl_output.done` を送る。
+- 出力の記述の中身（`get_information`）は、bind された版で送れる形で送る。区分的な sRGB の関数は、version 1 には名前が無いので、
+  version 1 のクライアントには `failed`（`low_version`）を返す。
+- 表面に望む image description（`wp_color_management_surface_feedback_v1`）は、表面の主な出力（ウィンドウの出力の一覧の最初）の
+  記述である。出力の無い表面は、最初の出力の記述、出力が 1 つも無ければ、設定の無い表面と同じ記述である。
+  feedback を作ったときと、望む記述が変わったとき（ウィンドウの出力、出力の記述、出力の増減）に、`preferred_changed`
+  （version 2 以上では `preferred_changed2`）を送る。
+- `wp_image_description_info_v1` の中身は、要求を処理した dispatch の後で送る（`done` が object を消すので、
+  作った要求の処理の中では送れない）。
 
 ## 入力
 

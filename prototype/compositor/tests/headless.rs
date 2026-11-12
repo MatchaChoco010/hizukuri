@@ -400,8 +400,8 @@ fn translucent_windows_blend_in_linear_light(device: Device) {
 }
 
 /// A surface whose values are declared to be Display P3 (through the
-/// control interface, until the color protocols exist) is converted
-/// accordingly.
+/// control interface; `script.rs` does it through color-management-v1) is
+/// converted accordingly.
 fn surface_image_description_is_honored(device: Device) {
     let mut session = Session::start("surface-description", device, &["--output-size", "256x192"]);
     let color = [255u8, 64, 32, 255];

@@ -67,12 +67,12 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | 書式と lint | `tools/ci.sh lint` | `cargo fmt --check`、`cargo clippy` | 不要 |
 | 色の計算 | `proto-color` の単体テスト | 原色の行列と transfer function を、規格の値と比べる。往復で、元の値に戻ること | 不要 |
 | fallback | `proto-compositor` の `fallback/` の単体テスト | ずらした配置の位置と、2 つの出力の上での、ウィンドウと出力の出来事の列に対する、ウィンドウの表（`fallback::Windows`）の振る舞いを、具体的な期待値で確かめる。当たり判定 | 不要 |
-| プロトコル | `prototype/compositor/tests/protocol.rs`、`tests/input_protocols.rs`、`proto-wl` の `tests/server.rs`、`tests/ime.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。何も描かない `NullScene` と、fallback のウィンドウ管理（`Compositor::new`）。configure、focus、キー、ポインター、バッファの解放、subsurface。相対的な動き、ポインターの制約、primary selection、data control。入力メソッド（検証用のクライアントが、入力欄のあるアプリと IME の両方を演じる）: activate と deactivate、grab、preedit と commit、仮想キーボード、IME が落ちたとき、候補ウィンドウの位置、grab の間のメニュー | 不要 |
+| プロトコル | `prototype/compositor/tests/protocol.rs`、`tests/input_protocols.rs`、`tests/color_management.rs`、`proto-wl` の `tests/server.rs`、`tests/ime.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。何も描かない `NullScene` と、fallback のウィンドウ管理（`Compositor::new`）。configure、focus、キー、ポインター、バッファの解放、subsurface。相対的な動き、ポインターの制約、primary selection、data control。入力メソッド（検証用のクライアントが、入力欄のあるアプリと IME の両方を演じる）: activate と deactivate、grab、preedit と commit、仮想キーボード、IME が落ちたとき、候補ウィンドウの位置、grab の間のメニュー。`wp_color_management_v1`: bind した版ごとの公開の内容、image description の作成と、commit で有効になること、出力の記述と、その変化の通知、望まれる記述、仕様が定めるエラー | 不要 |
 | バックエンドの取り決め | `prototype/compositor/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。`NullScene` と、fallback のウィンドウ管理。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
 | KMS のロジック | `proto-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
 | KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核と KMS のバックエンドを、模擬のデバイスの上で、スクリプトの描画とつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、スクリプトの描画が書き出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する（スクリプトの描画が tiled の modifier だけを出す場合は、`TiledOnly` で作る）。模擬のデバイスの上の自己診断（`PatternRenderer`）。テストが Vulkan のドライバーの manifest を探す順 | 要る |
 | headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。どの場面も、Vulkan のデバイス（`HIZUKURI_TEST_DEVICES`）ごとに 1 回走る。スクリプトが描く（描くだけのプロジェクトで、配置は fallback）。色は、`proto-color` の CPU の参照計算と比べる | 要る |
-| スクリプトの層 | `prototype/compositor/tests/script.rs` | 混ざった場面を 4 つの出力に描き、CPU の参照計算と比べる（下の「色の検証」）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し、入力メソッドの候補ウィンドウ | 要る |
+| スクリプトの層 | `prototype/compositor/tests/script.rs` | 混ざった場面を 4 つの出力に描き、CPU の参照計算と比べる（下の「色の検証」）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し、入力メソッドの候補ウィンドウ、`wp_color_management_v1` で設定した色の画素 | 要る |
 | スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み。`gfx-core` のテストの多くは、shader を、源の入口と、SPIR-V の入口（naga が書いた SPIR-V）の両方で作って、同じ結果になることを確かめる。SPIR-V の入口の、添字の切り詰めと、拒むべき module と、1 語ずつ書き換えた module（`spirv_input.rs`。全 bit を試す版は `--ignored`） | 要る |
 | 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。スクリプトの描画（`real_clients.rs` は、描くだけのプロジェクト）。popup と grab、selection、fractional-scale、dmabuf | 要る |
 
@@ -107,8 +107,11 @@ Vulkan の部分は、`PATH` の `vulkaninfo` が、その時の環境で見る�
   読み戻すのは、合成用の浮動小数点のバッファ（linear light）と、出力の符号化後の画像の 2 つである。
   - 浮動小数点のバッファは、参照計算との差（絶対誤差と相対誤差）で判定する。
   - 符号化後の画像は、参照計算を量子化した値との差が、符号値で決まった範囲に入ることで判定する。
-- headless の全体のテストは、検証用のクライアントが単色のバッファを出し、表面の image description を、制御口の `set_surface_color` で指定する
-  （`wp_color_management_v1` は、未実装である）。指定した情報が、スクリプトの描画まで届いていることを、出力の画素で確かめる。
+- headless の全体のテストは、検証用のクライアントが単色のバッファを出し、表面の image description を、制御口の `set_surface_color` で指定する。
+  指定した情報が、スクリプトの描画まで届いていることを、出力の画素で確かめる。
+- `script.rs` は、検証用のクライアントが `wp_color_management_v1` で設定した表面を、制御口で同じ記述を指定した表面と並べて描き、
+  合成用のバッファの値を、`proto-color` の参照計算と比べる（Display P3、BT.2100 PQ、BT.709 の linear、Windows の scRGB、HLG、BT.1886、
+  数値で与えた原色と指数と輝度）。`wl_shm` は 8 bit なので、範囲の外の値（scRGB の負の値や 1.0 を超える値）は、画素では確かめない。
 
 ### KMS のロジックのテスト
 
