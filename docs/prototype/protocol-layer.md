@@ -76,7 +76,7 @@ pub struct BufferUpdate {
 - **`BufferUpdate` を持っている間、クライアントは、そのバッファを再利用できない。** 画素を複写した側は、
   すぐ手放してよい。dmabuf を取り込んで使う側は、使っている間、持ち続ける。
 - `BufferUpdate::upright_pixels()` は、内容を、正しい向きの画素として CPU のメモリに返す。`wl_shm` は並べ替えるだけで、
-  dmabuf は mmap して複写する。dmabuf を取り込めない描画（Rust のレンダラー）のための、遅い経路である。
+  dmabuf は mmap して複写する。`--dmabuf cpu` で受け取ったバッファを、`wl_shm` と同じように複写して使うための、遅い経路である。
 
 ### buffer transform
 
@@ -93,8 +93,8 @@ transform だけを変えて、バッファを付け直さない commit は、�
 | 値 | 公開するもの | 受け取ったバッファ |
 | --- | --- | --- |
 | `off`（既定） | 公開しない | クライアントは `wl_shm` を使う。GL のクライアントは、ソフトウェア描画に切り替える。GPU で描く Vulkan のクライアントは、起動できない |
-| `cpu` | `ARGB8888`、`XRGB8888`、`ABGR8888`、`XBGR8888` の、`DRM_FORMAT_MOD_LINEAR` | mmap して、画素を複写する。ドライバーが mmap を許さないバッファ（GPU のメモリの多く）は、表示されない |
-| `gpu` | スクリプトの描画のデバイスが取り込める format と modifier | Vulkan に取り込む。複写しない。スクリプトの描画（`--renderer script`。既定）が要る |
+| `cpu` | `ARGB8888`、`XRGB8888`、`ABGR8888`、`XBGR8888` の、`DRM_FORMAT_MOD_LINEAR` | `wl_shm` と同じように、mmap して、画素を複写する。プロトコルを試すための経路である。ドライバーが mmap を許さないバッファ（GPU のメモリの多く）は、表示されない |
+| `gpu` | スクリプトの描画のデバイスが取り込める format と modifier | Vulkan に取り込む。複写しない。`--no-drawing` とは一緒に使えない |
 
 - 受け付ける format と modifier は、プロトコルの層が決めない。取り込む側が決めて、`ServerConfig::dmabuf` で渡す。
 - デバイス（DRM の `major`、`minor`）が分かっていれば、feedback つきの global（version 6）になる。
@@ -124,7 +124,7 @@ transform だけを変えて、バッファを付け直さない commit は、�
 
 - 最大化と全画面の要求には、configure で答える決まりである。ウィンドウ管理が何も送らなければ、次の `flush_clients` で、
   内容の変わらない configure を送る。
-- 中核は、要求を `WindowManager::window_request` へ渡す。**Rust のレイアウトも、fallback のウィンドウ管理も、スクリプトのウィンドウ管理も、
+- 中核は、要求を `WindowManager::window_request` へ渡す。**fallback のウィンドウ管理も、スクリプトのウィンドウ管理も、
   いまは、要求に応じない**（スクリプトへの口は、未実装である）。
 
 ## 出力
@@ -162,7 +162,6 @@ transform だけを変えて、バッファを付け直さない commit は、�
 - いまの selection の MIME type は、`selection_mime_types` で読める（focus に関わらずに調べるため）。
 - drag and drop: 相手の表面は、中核の当たり判定の結果で決まる（`pointer_motion` に渡した表面が、offer の相手になる）。
   drag のアイコンの表面は、`drag_icon_surfaces` で取り出せる。スクリプトの描画は、アイコンを描く。
-  Rust のレンダラーは、描かない。
 - `wl_data_source.target`（相手が受け入れた MIME type を、source に伝えるイベント）は、送られない
   （固定した版の Smithay が、送らない）。
 

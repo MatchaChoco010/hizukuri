@@ -459,7 +459,7 @@ mod tests {
     use super::*;
 
     fn temp_path(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("proto-render-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("proto-image-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }

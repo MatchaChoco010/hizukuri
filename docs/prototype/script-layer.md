@@ -1,8 +1,8 @@
 # スクリプトの層
 
-検証用の compositor は、描画と、ウィンドウ管理を、スクリプトで書ける。既定（`--renderer script --wm script`）では、
-Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`）は使われず、スクリプトが、色の変換を含む描画、
-当たり判定、ウィンドウの配置を受け持つ。スクリプトが決めないところは、コアの fallback が受け持つ。
+検証用の compositor では、描画と、ウィンドウ管理を、スクリプトの層が行う。スクリプトが、色の変換を含む描画、
+当たり判定、ウィンドウの配置を受け持つ。スクリプトが決めないところと、スクリプトが動かないときは、コアの fallback が受け持つ。
+ほかに、描くものも、ウィンドウを置くものも無い。
 
 **スクリプト言語は、決まっていない。** いまは、検証のために Luau を使っている。言語に依存する部分は、
 `prototype/gfx-lua` と、`prototype/compositor/src/script/` の中の値の受け渡しに限ってある。
@@ -35,26 +35,25 @@ Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`�
 
 - 描くもの（`Scene`）と、ウィンドウを管理するもの（`WindowManager`）の、スクリプトの側の実装が、`ScriptScene` と `ScriptWm` である。
 - VM は 1 つである。描画とウィンドウ管理は、同じ VM の中の、同じスクリプトである。
-- バックエンドは、誰が描くかを知らない。出力の画像を作る口（`TargetProvider`）を、Rust のレンダラーと
-  スクリプトの側の両方が実装している。headless と KMS（CPU コピーと dma-buf）は、どちらにもつながる。
+- バックエンドは、誰が描くかを知らない。出力の画像を作る口（`TargetProvider`）は、`proto-backend` が定める。
+  スクリプトの側（`ScriptTargets`）と、`kms-selftest` のパターンの描画（`PatternRenderer`）が、これを実装している。
+  headless と KMS（CPU コピーと dma-buf）は、この口だけを通して、出力の画像を受け取る。
 - スクリプトの側の出力の画像は、`proto-gfx-core` の上に作り、`OutputImages`（`prototype/compositor/src/targets.rs`）が持つ。
   画面に出さない描画先には 2 枚、scanout の描画先には、dma-buf として書き出す 1 枚である。
   `kms-selftest` のパターンの描画（`PatternRenderer`）も、同じものを使う。
 - スクリプトの描画は、Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
 
-## スクリプトの置き場所と、切り替え
+## スクリプトの置き場所
 
 - 組み込みのプロジェクトは、`prototype/compositor/scripts/` にあり、バイナリに埋め込まれる。入口は `main.luau` である。
 - `--script DIR` で、別のプロジェクト（`main.luau` のあるディレクトリ）を使う。プロジェクトに無いモジュールは、
   組み込みのものを使う。`hz.include("session")` の 1 行で、組み込みの動作から始めて、変えたい関数だけを置き換えられる。
-- `--renderer` と `--wm` の既定は、どちらも `script` である。描画も、ウィンドウ管理も、スクリプトに任せる。
-  `--wm rust` を付けると、配置は `proto-layout` が決め、スクリプトは描くだけである。
-  `--renderer rust --wm rust` は、スクリプトの描画と比べるための、Rust の実装である。
-  `--wm script` には、`--renderer script` が要る。
+- `--script` を付けなければ、組み込みのプロジェクトが、描画と、ウィンドウをタイルに並べることを受け持つ。
+- `--no-drawing` では、スクリプトを使わない（何も描かず、ウィンドウは fallback が管理する）。`--script` と一緒には指定できない。
 - ウィンドウ管理の関数（`window_opened`、`window_changed`、`window_closed`、`focus_changed`、`outputs_changed`、
   `key`、`pointer_button`）を定義しないプロジェクトでは、fallback の決まり（[下](#fallback-のウィンドウ管理)）で、
   ウィンドウが置かれ、focus が与えられる。
-- `hz.manages_windows()` は、この session が、ウィンドウ管理をスクリプトに任せているか（`--wm script` か）を返す。
+- `hz.manages_windows()` は、この session が、ウィンドウ管理をスクリプトに任せているかを返す。`proto-compositor` では、いつも真である。
   組み込みのプロジェクトは、これが真のときに、ウィンドウをタイルに並べる。
 - 描くだけのプロジェクトが、`prototype/compositor/projects/draw-only/` にある。`main.luau` は `hz.include("session")` の 1 行で、
   `session.luau` は、組み込みの session から、タイルを除いたもの（組み込みの描画だけで、ウィンドウ管理の関数を定義しない）である。
@@ -78,7 +77,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   作業用の色空間は、名前（`bt2020`、`srgb`、`display-p3`、`adobe-rgb`）か、色度の表で選ぶ。
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。入力メソッドの候補ウィンドウも、同じである。
-- タイル（`tile.luau`）: `--wm script` のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
+- タイル（`tile.luau`）: `hz.manages_windows()` が真のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
   logo+Q で閉じる。logo+Escape で、ポインターの lock と confine を解く。キーの割り当ても、スクリプトの中にある。
 
 ## コアがスクリプトに見せる口
@@ -122,7 +121,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.cursor()` | 描くべきカーソル。組み込みの矢印のテクスチャ、またはクライアントの表面 |
 | `hz.drag_icon()` | drag 中のアイコンの表面 |
 | `hz.background()`、`hz.time()` | 背景色、起動からの秒数 |
-| `hz.manages_windows()` | この session が、ウィンドウ管理をスクリプトに任せているか（`--wm script` か）。読み込みの途中でも使える |
+| `hz.manages_windows()` | この session が、ウィンドウ管理をスクリプトに任せているか（`proto-compositor` では、いつも真）。読み込みの途中でも使える |
 | `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号、alpha の扱い） |
 | `hz.encode_transform(working, output)` | 作業用の値を、出力の符号の値にする変換 |
 | `hz.decode_color(r, g, b, a, working)` | 1 色を CPU で変換する（背景色に使う） |
@@ -160,7 +159,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.log(text)` | ログ |
 
 ウィンドウ管理の関数（`hz.place`、`hz.configure`、`hz.focus`、`hz.raise`、`hz.restack`、`hz.close`）は、
-`--wm script` のときだけ使える（それ以外では、エラーが返る）。位置、大きさ、focus、重なりの順は、fallback のウィンドウの表に書く。
+`hz.manages_windows()` が真のときだけ使える（それ以外では、エラーが返る）。位置、大きさ、focus、重なりの順は、fallback のウィンドウの表に書く。
 存在しないウィンドウや、負の大きさも、エラーで返る。
 
 ### GPU の API（`gfx`）
@@ -249,7 +248,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   変形して描いたウィンドウでは、移さない（表面の座標から画面の座標へ戻す口が、無いため）。
 - カーソルは、lock の間も、`hz.cursor()` のとおりに描く（ふつう、クライアントは、カーソルを隠す）。
   見せ方を変えるスクリプトは、`hz.pointer_constraint()` を見る。
-- ウィンドウ管理の関数なので、`--wm script` のときだけ使える。`--wm rust`、`--no-renderer`、fallback の間と、プロジェクトが `pointer_constraint` を定義しないときは、コアの既定に従う。
+- ウィンドウ管理の関数なので、`hz.manages_windows()` が真のときだけ呼ばれる。`--no-drawing`、fallback の間と、プロジェクトが `pointer_constraint` を定義しないときは、コアの既定に従う。
 
 ## dmabuf の取り込み
 
@@ -324,7 +323,6 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 ### fallback のウィンドウ管理
 
 ウィンドウの表は、fallback のもの（`proto_compositor::fallback::Windows`）である。誰も決めないところには、次の決まりが当てはまる。
-決まりは、`proto-layout` のフローティングの配置と同じである。
 
 - 新しいウィンドウは、最初の出力の、次のずらした位置に置く（32 論理画素ずつ、8 か所。その後は、最初に戻る）。
   いちばん上に置き、focus を与える。
@@ -339,8 +337,8 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 
 | とき | 内容 |
 | --- | --- |
-| `Compositor::new` と、`--no-renderer` | 既定のウィンドウ管理として、上の決まりで、すべてを決める |
-| `--wm script` | スクリプトのウィンドウ管理が書き換える表として。スクリプトが動いている間は、配置、重なりの順、focus をスクリプトが決め、上の決まりは、スクリプトが決めないところ（ウィンドウ管理の関数を定義しない、関数が失敗した）にだけ当てはまる |
+| `Compositor::new` と、`--no-drawing` | 既定のウィンドウ管理として、上の決まりで、すべてを決める |
+| スクリプトが動いているとき（`ScriptWm`） | スクリプトのウィンドウ管理が書き換える表として。スクリプトが動いている間は、配置、重なりの順、focus をスクリプトが決め、上の決まりは、スクリプトが決めないところ（ウィンドウ管理の関数を定義しない、関数が失敗した）にだけ当てはまる |
 | スクリプトを外したとき（`script.mode` が `fallback`） | 上の決まりに加えて、focus のあるウィンドウを、いつもいちばん上に保つ |
 
 - 無くなった出力のウィンドウを、残った最初の出力へ移すことは、スクリプトが動いている間にも行う。スクリプトには、そのあとで `outputs_changed` が届く。
@@ -358,7 +356,6 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 - どちらでも、失敗したフレームは、画面に出ない。出力の画像を 2 枚持ち、スクリプトには、表示していないほうを渡す。
   成功したときだけ、入れ替える。
 - 緊急用のキー: Ctrl+Alt+Shift+R で読み直し、Ctrl+Alt+Shift+F で fallback に切り替える。スクリプトより先に、コアが見る。
-- Rust のレンダラー（`proto-render`）への、実行中の切り替えは、無い（別の Vulkan のデバイスを持つため）。
 - 制御口の `state` の `script` に、モード（`running`、`hold`、`fallback`）、失敗の回数と直近の内容、読み直しの回数、
   呼び出しごとの時間、dmabuf の取り込みの統計が出る。
 

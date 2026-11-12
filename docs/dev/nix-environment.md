@@ -195,7 +195,7 @@ nixpkgs の既定の `libdisplay-info` は、0.4 である。Rust の `libdispla
 
 ### テストが、lavapipe の manifest を探す場所
 
-テストは、lavapipe の manifest を、`proto_render::find_icd_manifest` で探す。
+テストは、lavapipe の manifest を、`find_icd_manifest`（`prototype/compositor/tests/common/icd.rs`）で探す。
 この関数は、環境変数 `HIZUKURI_ICD_DIRS` を先に見て、その後に、システムの場所を見る。
 devShell は、`HIZUKURI_ICD_DIRS` を、nixpkgs の Mesa の `icd.d` に向けている。
 devShell の中のテストは、システムに Mesa があっても、nixpkgs の lavapipe を使う。
