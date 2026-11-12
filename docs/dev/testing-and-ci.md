@@ -168,20 +168,19 @@ lavapipe（llvmpipe）は、実行時に、その CPU 向けのコードを作�
 
 ## CI
 
-workflow は、4 つある。
+workflow は、3 つある。
 
 | workflow | 契機 | 内容 | runner |
 | --- | --- | --- | --- |
 | `.github/workflows/ci.yml` | PR、`develop`・`release`・`main`・`release-candidate/**` への push | `tools/ci.sh`（書式、lint、テスト） | GitHub の標準の runner |
 | `.github/workflows/vm.yml` | `develop`・`release`・`release-candidate/**` への push、毎晩、手動 | VM の中の試験（`tools/vm-check.py`） | GitHub の標準の runner |
 | `.github/workflows/gpu.yml` | 毎晩、`release-candidate/**` への push、手動 | GPU の付いたインスタンスの上で、ハードウェアのドライバーを使って、`tools/ci.sh test` と、vkms での自己診断を走らせる。合否を判定する | GPU の付いた、クラウドのインスタンス |
-| `.github/workflows/gpu-probe.yml` | 手動 | GPU の付いたインスタンスの上で、ドライバー、Vulkan、KMS の状態を調べる。合否は、判定しない | GPU の付いた、クラウドのインスタンス |
 
 - `ci.yml` と `vm.yml` は、リポジトリの中のものと、公開されている依存だけで動く。GPU も、秘密の値も、外部のサービスの登録も、要らない。
   fork でも、そのまま動く。**必須の検査は、この 2 つの範囲に置く。**
-- `gpu.yml` と `gpu-probe.yml` は、リポジトリの持ち主が用意した runner が要る。どちらも、必須の検査ではない。
+- `gpu.yml` は、リポジトリの持ち主が用意した runner が要る。必須の検査ではない。
   PR では、起動しない。fork からの PR が、GPU のインスタンスを起動できないようにするためである。
-  fork には、その runner が無い。`gpu.yml` のジョブは、このリポジトリでだけ走り、fork では飛ばされる。`gpu-probe.yml` のジョブは、fork では、待ったままになる。
+  fork には、その runner が無い。`gpu.yml` のジョブは、このリポジトリでだけ走り、fork では飛ばされる。
 
 ### 文書だけの変更と、候補のブランチ
 
@@ -329,63 +328,6 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 - `artifacts/gpu/`（installer のログ、ドライバーの版、DRM のノード、Vulkan の報告、自己診断の報告とログ）と、
   `target/*/test-output/`（テストが取り込んだ画像と、hizukuri のログ）を、artifact `gpu` として 14 日残す。成否によらない。
 
-### `gpu-probe.yml`
-
-実際の GPU のドライバーの上で、hizukuri に要るものが、どこまで動くかを調べる。**何も判定しない。**
-調べた結果を、ジョブの要約と、artifact（14 日）に残す。調べる step が失敗しても、ジョブは、先へ進む。
-
-- 契機は、手動（`workflow_dispatch`）だけである。
-- runner は、[RunsOn](https://runs-on.com) が、ジョブごとに起動して、終わると消す、AWS のインスタンスである。
-  ジョブの `runs-on` のラベルで、インスタンスの種類、image、ディスクの大きさを指定している。秘密の値は、使わない。
-- ジョブは、`nvidia` の 1 つである。インスタンスは `g4dn.xlarge`（NVIDIA T4）、image は `ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている）。
-- 入力は、2 つある。
-
-  | 入力 | 既定 | 内容 |
-  | --- | --- | --- |
-  | `nvidia_driver` | 空 | NVIDIA のドライバーの版（`download.nvidia.com` にあるもの）。入れると、image のドライバーを、その版に入れ替えてから調べる。空なら、image のドライバーのまま調べる |
-  | `tests` | `true` | compositor のビルド、vkms での自己診断、テストを回す。`false` なら、ドライバーとデバイスを調べるだけで、ジョブは、短く終わる |
-
-- キャッシュは、使わない。step ごとの時間が、何も無い状態から始めた機械での時間になる。
-- 準備のうち、システムを変えるもの（パッケージの導入、ドライバーの入れ替え、kernel の module の読み込み、`/dev/dri/` のノードの権限）は、
-  workflow の step が行う。インスタンスは、そのジョブのためだけにある。`tools/gpu-report.sh` は、システムを変えない。
-
-devShell からドライバーに届かせる考え方は、`gpu.yml` と同じである（上の節の「devShell からドライバーへの届き方」）。
-`gpu.yml` が使うのは、下の表の `egl-nix` である。`gpu-probe.yml` は、devShell の中で、次の 3 通りを試す。
-
-| 方法 | `VK_DRIVER_FILES` | 足すライブラリ |
-| --- | --- | --- |
-| `egl` | ドライバーの manifest の、ライブラリの名前を `libEGL_nvidia.so.0` に替えたもの | なし |
-| `egl-nix` | `egl` と同じ | `flake.lock` の nixpkgs の `libdrm`、`libgbm`、`libx11`、`libxext`、`wayland` |
-| `glx-nix` | ドライバーの manifest | `egl-nix` と同じ |
-
-- 足すライブラリは、`flake.lock` の nixpkgs から取る。ドライバーのほかに、システムのライブラリを読み込まないためである。
-- 方法ごとに、`tools/gpu-report.sh` の報告と、`vulkaninfo` を動かしたときに、dynamic linker が探したライブラリの名前（`LD_DEBUG=libs` から取ったもの）を残す。
-- 後の step で使う方法は、Vulkan のデバイスが見えた方法のうち、上の表の順で、`VK_EXT_external_memory_dma_buf` がある最初のものである。
-  どれにも無ければ、デバイスが見えた最初のものを使う。どれでも見えなければ、ビルド、自己診断、テストの step は、飛ばす。
-- 比べるために、image の loader とライブラリのまま、`libEGL_nvidia.so.0` を指す manifest でも、`tools/gpu-report.sh` を走らせる。
-
-テストは、`tools/ci.sh test` ではなく、cargo-nextest で回す。テストごとに、時間の上限がある（60 秒を 5 回、つまり 5 分）。
-`cargo test` では、応答しなくなったテストが 1 つあると、ジョブの時間を使い切って、その後のテストの結果が得られない。
-nextest は、上限を超えたテストを終わらせて、残りのテストを続ける。そのため、`tools/ci.sh` が行う、テストが残したプロセスの検査は、ここでは行わない。
-
-| step | 内容 |
-| --- | --- |
-| Describe the image's NVIDIA driver | image のドライバーの版（`nvidia-smi`）と、その入り方（パッケージか、NVIDIA の installer か） |
-| Replace the NVIDIA driver | 入力の `nvidia_driver` があるときだけ。古いドライバーを外し、NVIDIA の installer で、指定の版を入れる |
-| Load vkms | 仮想の KMS のドライバー（vkms）を読み込む |
-| Describe the Vulkan driver, outside the dev shell | image の loader と `vulkaninfo` で、`tools/gpu-report.sh` |
-| Gather the libraries of the NVIDIA driver | ドライバーのライブラリを 1 つのディレクトリに集め、`libEGL_nvidia.so.0` を指す manifest を書く |
-| Describe the Vulkan driver, outside the dev shell, through its EGL library | image の loader で、`libEGL_nvidia.so.0` を指す manifest を使って、`tools/gpu-report.sh` |
-| Describe the KMS devices with drm_info | `flake.lock` の nixpkgs の `drm_info` |
-| Fetch the libraries of nixpkgs that the driver may need | 上の表の、足すライブラリを取ってくる |
-| Describe the Vulkan driver, inside the dev shell | 上の 3 通りの方法で、それぞれ、`tools/gpu-report.sh` と、探したライブラリの一覧 |
-| Choose how the dev shell reaches the driver | 後の step で使う方法を選ぶ |
-| Build the compositor | 入力の `tests` が `true` のときだけ（以下、テストまで同じ）。テストのプロファイルで、`hizukuri` をビルドする |
-| Describe the KMS devices | `hizukuri kms-info --summary`、`kms-info --anonymize` |
-| Self test on vkms | GPU で描いて、vkms に出す `hizukuri kms-selftest`。`--scanout cpu` と `--scanout dmabuf` の 2 回。seat は、libseat の `noop` を使う |
-| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`cargo nextest run --workspace` |
-| Summary | step ごとの結果、選んだ方法と、それが dma-buf を扱えるか、方法ごとの Vulkan の報告、探したライブラリ、テストの出力の終わりを、ジョブの要約に書く |
-
 ### 共通のこと
 
 - action は、どれも、commit の hash で固定している。
@@ -395,7 +337,7 @@ nextest は、上限を超えたテストを終わらせて、残りのテスト
 ### キャッシュ
 
 `ci.yml` と `vm.yml` は、GitHub の cache を使う。保存するのは、branch への push のときだけである。PR は、読むだけである。
-`gpu.yml` と `gpu-probe.yml` は、キャッシュを使わない。
+`gpu.yml` は、キャッシュを使わない。
 どのキャッシュの中身も、公開の場所から取り直すか、ビルドし直せる。無くても、時間がかかるだけである。
 
 | キャッシュ | 鍵 | 中身 | 保存する workflow |
