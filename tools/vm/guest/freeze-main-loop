@@ -32,18 +32,34 @@ set scheduler-locking on
 continue
 GDB
 
+# What has become of the process, decided from one read of its status. A
+# process that ends is a zombie for a moment and then disappears; looking
+# twice (does the process exist? is it a zombie?) can fall between the two
+# and take a process that is gone for one that lives.
+process_state() {
+    local status=""
+    { read -r -d '' status <"/proc/$pid/status"; } 2>/dev/null || true
+    if [[ "$status" =~ State:[[:space:]]+([A-Za-z]) ]]; then
+        case "${BASH_REMATCH[1]}" in
+            Z | X) echo gone ;;
+            *) echo alive ;;
+        esac
+    else
+        # No status to read: the process does not exist any more.
+        echo gone
+    fi
+}
+
 start="$(date +%s%N)"
 sudo timeout "$seconds" gdb -q -batch -x "$commands" >/dev/null 2>&1 || true
 end="$(date +%s%N)"
-# An aborted process stays around while its core dump is written.
+# gdb comes back when the process has ended, which is after its core dump was
+# written. Its parent may take a moment more to collect it.
+state="$(process_state)"
 for _ in $(seq 100); do
-    kill -0 "$pid" 2>/dev/null || break
-    grep -qs '^State:.*Z' "/proc/$pid/status" && break
+    [[ "$state" == gone ]] && break
     sleep 0.1
+    state="$(process_state)"
 done
-if kill -0 "$pid" 2>/dev/null && ! grep -qs '^State:.*Z' "/proc/$pid/status"; then
-    echo alive
-else
-    echo gone
-fi
+echo "$state"
 echo $(((end - start) / 1000000))
