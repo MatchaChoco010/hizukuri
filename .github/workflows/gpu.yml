@@ -1,0 +1,382 @@
+# Checks that the tests pass on a hardware Vulkan driver: on an NVIDIA GPU,
+# with the driver this workflow names, it runs `tools/ci.sh test` on the GPU
+# and the self test of the compositor drawing on the GPU and showing on vkms.
+# A step that fails fails the run. It is not a required check. See
+# docs/dev/testing-and-ci.md.
+#
+# Unlike ci.yml and vm.yml, this one needs a runner that the owner of the
+# repository provides: RunsOn (https://runs-on.com) starts an AWS instance
+# with an NVIDIA GPU for the job and removes it afterwards.
+#
+# It runs every night, on a push to a release-candidate/** branch, and when
+# started by hand. It is never started for pull requests, so that a pull
+# request from a fork cannot start a GPU instance. It takes no secret.
+#
+# Nothing is cached: a run that starts from nothing is short, and the
+# workflow starts once a night.
+#
+# Every action is pinned to a commit; the comment after it names the release.
+name: GPU
+
+on:
+  schedule:
+    # Every night (UTC), so that a change on the default branch, or in what
+    # the instance provides, shows up without a push.
+    - cron: "47 18 * * *"
+  # A branch cut from develop at the commit that is about to be taken into
+  # release: the checks run there before it is merged.
+  push:
+    branches: ["release-candidate/**"]
+  workflow_dispatch:
+    inputs:
+      nvidia_driver:
+        description: >-
+          NVIDIA driver to install instead of the one this workflow names, as
+          a version of download.nvidia.com.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The instance type has 4 vCPUs.
+  CARGO_BUILD_JOBS: "4"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # The driver the check runs on: the first series that offers
+  # VK_EXT_descriptor_heap. It is changed here, deliberately.
+  NVIDIA_DRIVER: "595.104.02"
+  # Where the reports and logs are written.
+  OUT: artifacts/gpu
+
+jobs:
+  # NVIDIA T4. The image carries an NVIDIA driver; the dev shell does not.
+  nvidia:
+    # The runner exists for this repository only; in a fork the job would
+    # stay queued.
+    if: github.repository == 'MatchaChoco010/hizukuri'
+    # Spot is the default; RunsOn falls back to on-demand without capacity.
+    # The image leaves too little of its own disk free for a build.
+    runs-on: runs-on=${{ github.run_id }}/family=g4dn.xlarge/image=ubuntu24-gpu-x64/volume=80gb
+    # Nothing is cached: the dependencies are built from scratch.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image's driver does not offer VK_EXT_descriptor_heap. The
+      # installer of download.nvidia.com builds the kernel modules for the
+      # running kernel. The instance exists for this job only.
+      - name: Replace the NVIDIA driver
+        id: driver
+        env:
+          REQUESTED_DRIVER: ${{ inputs.nvidia_driver }}
+        run: |
+          version="${REQUESTED_DRIVER:-$NVIDIA_DRIVER}"
+          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "not a driver version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "installing the NVIDIA driver $version"
+          mkdir -p "$OUT"
+          installer="$RUNNER_TEMP/nvidia-installer.run"
+          curl --fail --silent --show-error --location --retry 3 --output "$installer" \
+            "https://download.nvidia.com/XFree86/Linux-x86_64/$version/NVIDIA-Linux-x86_64-$version.run"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential "linux-headers-$(uname -r)"
+
+          # The old driver: whatever keeps its modules busy, its packages or
+          # its own installation, and the modules themselves.
+          sudo systemctl stop nvidia-persistenced 2> /dev/null || true
+          if command -v nvidia-uninstall > /dev/null; then
+            sudo nvidia-uninstall --silent || true
+          fi
+          mapfile -t packages < <(dpkg-query -W -f='${Package}\n' \
+            | grep -E '^(nvidia-|libnvidia-|xserver-xorg-video-nvidia)' | grep -v container || true)
+          if ((${#packages[@]})); then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y "${packages[@]}"
+          fi
+          for module in nvidia_uvm nvidia_drm nvidia_modeset nvidia; do
+            sudo modprobe -r "$module" 2> /dev/null || true
+          done
+          if grep -q '^nvidia' /proc/modules; then
+            echo "modules of the old driver are still loaded:"
+            grep '^nvidia' /proc/modules
+          fi
+
+          status=0
+          sudo sh "$installer" --silent -M=open || status=$?
+          sudo cp /var/log/nvidia-installer.log "$OUT/nvidia-installer.log" 2> /dev/null || true
+          sudo chmod a+r "$OUT/nvidia-installer.log" 2> /dev/null || true
+          if [ "$status" -ne 0 ]; then
+            tail -n 40 "$OUT/nvidia-installer.log" || true
+            exit "$status"
+          fi
+          for module in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do
+            sudo modprobe "$module"
+          done
+          sudo udevadm settle
+
+          status=0
+          {
+            cat /proc/driver/nvidia/version
+            echo
+            nvidia-smi
+          } > "$OUT/nvidia-driver.txt" 2>&1 || status=$?
+          cat "$OUT/nvidia-driver.txt"
+          exit "$status"
+
+      # The virtual KMS driver, with every plane type and the writeback
+      # connector. enable_plane_pipeline exists on newer kernels only.
+      - name: Load vkms
+        run: |
+          if ! modinfo vkms > /dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          fi
+          sudo modprobe vkms enable_cursor=1 enable_writeback=1 enable_overlay=1 enable_plane_pipeline=1 \
+            2> /dev/null \
+            || sudo modprobe vkms enable_cursor=1 enable_writeback=1 enable_overlay=1
+          sudo udevadm settle
+
+      # The instance exists for this job only. The vkms card is named here
+      # for the steps below.
+      - name: Make the DRM nodes usable
+        run: |
+          for node in /dev/dri/card* /dev/dri/renderD*; do
+            if [ -e "$node" ]; then
+              sudo chmod a+rw "$node"
+            fi
+          done
+          ls -l /dev/dri/ > "$OUT/dri-nodes.txt" 2>&1 || true
+          cat "$OUT/dri-nodes.txt"
+          vkms=""
+          for card in /sys/class/drm/card*; do
+            case "$card" in *-*) continue ;; esac # connectors, not cards
+            name="${card##*/}"
+            path="$(readlink -f "$card/device")"
+            driver=""
+            if [ -e "$card/device/driver" ]; then
+              driver="$(basename "$(readlink -f "$card/device/driver")")"
+            fi
+            echo "$name: driver ${driver:-none}, device $path" | tee -a "$OUT/dri-nodes.txt"
+            if [ "$driver" = vkms ] || [[ "$path" == *vkms* ]] \
+              || sudo grep -qs '^vkms' "/sys/kernel/debug/dri/${name#card}/name"; then
+              vkms="/dev/dri/$name"
+            fi
+          done
+          if [ -z "$vkms" ]; then
+            echo "no vkms card was found" >&2
+            exit 1
+          fi
+          echo "VKMS_CARD=$vkms" >> "$GITHUB_ENV"
+
+      # The dev shell has no NVIDIA driver, and the driver has to match the
+      # kernel module of the instance. The libraries of the driver, and
+      # nothing else of the system, are gathered where the dynamic linker of
+      # the shell can be pointed at them. The driver's manifest names its GLX
+      # library, which needs the X11 libraries; the driver documents its EGL
+      # library as the Vulkan driver to use without them, so a second
+      # manifest names that one.
+      - name: Gather the libraries of the NVIDIA driver
+        run: |
+          manifest=""
+          for candidate in /etc/vulkan/icd.d/nvidia_icd*.json /usr/share/vulkan/icd.d/nvidia_icd*.json; do
+            if [ -f "$candidate" ]; then
+              manifest="$candidate"
+              break
+            fi
+          done
+          echo "the manifest of the NVIDIA driver: ${manifest:-not found}"
+          directory="$RUNNER_TEMP/nvidia"
+          mkdir -p "$directory/lib"
+          glx="$(/sbin/ldconfig -p | awk '$1 == "libGLX_nvidia.so.0" && /x86-64/ { print $NF; exit }')"
+          echo "libGLX_nvidia.so.0: ${glx:-not found}"
+          libraries="$(dirname "${glx:?the driver has no libGLX_nvidia.so.0}")"
+          for library in "$libraries"/libnvidia*.so* "$libraries"/libGLX_nvidia.so* \
+            "$libraries"/libEGL_nvidia.so*; do
+            if [ -e "$library" ]; then
+              ln -sf "$library" "$directory/lib/"
+            fi
+          done
+          ls "$directory/lib" > "$OUT/nvidia-libraries.txt"
+          sed 's/libGLX_nvidia\.so\.0/libEGL_nvidia.so.0/' \
+            "${manifest:?the manifest of the NVIDIA driver was not found}" > "$directory/nvidia_icd_egl.json"
+          cat "$directory/nvidia_icd_egl.json"
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Fetch the dev shell
+        run: nix develop .#ci --command true
+
+      # Libraries that the driver opens besides its own: without libdrm and
+      # libgbm it does not offer VK_EXT_external_memory_dma_buf. They come
+      # from the nixpkgs that flake.lock pins, so no library of the system
+      # other than the driver's is loaded. `^out` is the output with the
+      # libraries; without it, nix builds the outputs a package installs,
+      # which for some leave out `out`.
+      #
+      # Variables that are set outside the dev shell do not reach it (it
+      # drops LD_LIBRARY_PATH and sets VK_DRIVER_FILES when it starts), so
+      # the settings are written to a file that the steps below read.
+      - name: Write how the dev shell reaches the driver
+        run: |
+          paths=()
+          while IFS= read -r path; do
+            paths+=("$path/lib")
+          done < <(nix build --inputs-from . --no-link --print-out-paths \
+            'nixpkgs#libdrm^out' 'nixpkgs#libgbm^out' 'nixpkgs#libx11^out' \
+            'nixpkgs#libxext^out' 'nixpkgs#wayland^out')
+          # The status of nix build is lost in the substitution above.
+          if [ "${#paths[@]}" -ne 5 ]; then
+            echo "nix build gave ${#paths[@]} paths, not 5" >&2
+            exit 1
+          fi
+          nix_libraries="$(IFS=:; echo "${paths[*]}")"
+          {
+            echo "export LD_LIBRARY_PATH='$RUNNER_TEMP/nvidia/lib:$nix_libraries'"
+            echo "export VK_DRIVER_FILES='$RUNNER_TEMP/nvidia/nvidia_icd_egl.json'"
+          } > "$RUNNER_TEMP/nvidia/settings.sh"
+          cat "$RUNNER_TEMP/nvidia/settings.sh"
+
+      # A driver that the dev shell cannot reach, or that lacks what the
+      # compositor needs, fails here rather than in the tests.
+      - name: Check what the Vulkan driver offers
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          source "$RUNNER_TEMP/nvidia/settings.sh"
+          tools/gpu-report.sh "$OUT/vulkan"
+          cat "$OUT/vulkan/vulkan-summary.md"
+          info="$OUT/vulkan/vulkaninfo.txt"
+          if ! grep -qs '^GPU[0-9]*:$' "$info"; then
+            echo "::error title=No Vulkan device::The Vulkan loader of the dev shell found no device through the NVIDIA driver."
+            exit 1
+          fi
+          missing=()
+          for extension in VK_EXT_descriptor_heap VK_EXT_external_memory_dma_buf; do
+            if ! grep -qE "^[[:space:]]+${extension}[[:space:]]+: extension revision" "$info"; then
+              missing+=("$extension")
+            fi
+          done
+          if ((${#missing[@]})); then
+            echo "::error title=Vulkan extensions missing::The NVIDIA driver, as the dev shell reaches it, does not offer ${missing[*]}."
+            exit 1
+          fi
+          echo "the NVIDIA driver offers VK_EXT_descriptor_heap and VK_EXT_external_memory_dma_buf"
+
+      # As in the CI workflow: lavapipe exports dma-bufs through /dev/udmabuf,
+      # and the tests of the dma-buf paths need that. The device belongs to a
+      # group the runner's user is not in. Where it cannot be used, those
+      # tests are left out, and the summary of the job says so.
+      - name: Make /dev/udmabuf usable, or leave its tests out
+        run: |
+          if [ -e /dev/udmabuf ]; then
+            sudo chmod a+rw /dev/udmabuf || true
+          fi
+          if [ -r /dev/udmabuf ] && [ -w /dev/udmabuf ]; then
+            echo "/dev/udmabuf is usable; the dma-buf tests run"
+            exit 0
+          fi
+          message="This runner has no usable /dev/udmabuf, so the tests that need it (dma-bufs on lavapipe) were left out."
+          echo "HIZUKURI_TEST_SKIP_UDMABUF=1" >> "$GITHUB_ENV"
+          echo "::warning title=dma-buf tests left out::$message"
+          {
+            echo "### dma-buf tests left out"
+            echo
+            echo "$message"
+            echo
+            echo "\`HIZUKURI_TEST_SKIP_UDMABUF=1\` was set for this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # With the profile of the tests, so that the tests below reuse what is
+      # built here.
+      - name: Build the compositor
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: cargo build --profile test -p hizukuri
+
+      # Drawn on the GPU, shown on vkms: frames are read back and copied
+      # into dumb buffers. Handing the GPU's images to vkms as dma-bufs is
+      # refused by design (the renderer and the display are different
+      # devices), so that is not checked.
+      - name: Self test on vkms
+        id: selftest
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        run: |
+          source "$RUNNER_TEMP/nvidia/settings.sh"
+          hizukuri="$CARGO_TARGET_DIR/debug/hizukuri"
+          export LIBSEAT_BACKEND=noop
+          XDG_RUNTIME_DIR="$(mktemp -d /tmp/hzk-XXXXXX)"
+          export XDG_RUNTIME_DIR
+          trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
+          connector="$("$hizukuri" kms-info --device "${VKMS_CARD:?no vkms card was found}" \
+            | jq -r '[.connectors[] | select(.connected) | .name][0] // empty')"
+          echo "card $VKMS_CARD, connector ${connector:-none}"
+          "$hizukuri" kms-selftest --device "$VKMS_CARD" --output "${connector:?no connected connector}" \
+            --seconds 5 --report "$OUT/selftest-vkms" --mode 1920x1080 \
+            --vulkan-device gpu --scanout cpu 2>&1 \
+            | tee "$OUT/selftest-vkms.log"
+          summary="$OUT/selftest-vkms/summary.txt"
+          if ! [ -f "$summary" ] || [ "$(head -n 1 "$summary")" != "hizukuri kms-selftest: PASSED" ]; then
+            echo "::error title=Self test failed::hizukuri kms-selftest on vkms did not pass; see $summary."
+            exit 1
+          fi
+
+      # The same script the required CI runs, on the hardware device. It
+      # also runs when only the self test failed, so that a run tells both.
+      - name: Run the tests on the GPU
+        if: ${{ !cancelled() && (success() || steps.selftest.outcome == 'failure') }}
+        shell: nix develop .#ci --command bash -euo pipefail {0}
+        env:
+          HIZUKURI_TEST_DEVICES: gpu
+        run: |
+          source "$RUNNER_TEMP/nvidia/settings.sh"
+          tools/ci.sh test
+
+      - name: Summary
+        if: always()
+        env:
+          REQUESTED: ${{ steps.driver.outputs.version }}
+        run: |
+          block() { # title, file, lines to keep
+            [ -s "$2" ] || return 0
+            echo
+            echo "#### $1"
+            echo
+            echo '```'
+            # Without the escape sequences of colored output.
+            tail -n "$3" "$2" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g'
+            echo '```'
+          }
+          loaded="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2> /dev/null | head -n 1 || true)"
+          {
+            echo "### GPU: NVIDIA (g4dn.xlarge)"
+            echo
+            echo "NVIDIA driver: ${REQUESTED:-not chosen}, loaded: ${loaded:-none}"
+            if [ -s "$OUT/vulkan/vulkan-summary.md" ]; then
+              echo
+              cat "$OUT/vulkan/vulkan-summary.md"
+            fi
+            block "Self test on vkms: summary.txt" "$OUT/selftest-vkms/summary.txt" 40
+            [ -s "$OUT/selftest-vkms/summary.txt" ] \
+              || block "Self test on vkms: the end of the log" "$OUT/selftest-vkms.log" 15
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The reports and logs above, and the screenshots and logs of the
+      # tests.
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gpu
+          path: |
+            artifacts/gpu/
+            target/*/test-output/
+          if-no-files-found: ignore
+          retention-days: 14

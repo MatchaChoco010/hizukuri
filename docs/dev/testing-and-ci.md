@@ -6,7 +6,7 @@
 ## 考え方
 
 - **テストは、画面なし（headless）と、CPU で描く Vulkan（lavapipe）で動くものを、基本にする。**
-  仮想コンソールも、ディスプレイも、GPU も、要らない。CI も、この範囲で回す。
+  仮想コンソールも、ディスプレイも、GPU も、要らない。必須の CI も、この範囲で回す。
   テストは、Vulkan 1.4 と `VK_EXT_descriptor_heap` を持つドライバーなら、どれでも動く。
 - **ハードウェアに触る部分を、薄くする。** KMS のバックエンドは、DRM のデバイスに触る部分を、trait の向こうに置いている。
   判断のロジック（モードと plane の選び方、atomic commit の組み立て、フレームを描く時機）は、模擬のデバイスでテストする。
@@ -161,17 +161,20 @@ lavapipe（llvmpipe）は、実行時に、その CPU 向けのコードを作�
 
 ## CI
 
-workflow は、3 つある。
+workflow は、4 つある。
 
 | workflow | 契機 | 内容 | runner |
 | --- | --- | --- | --- |
 | `.github/workflows/ci.yml` | PR、`develop`・`release`・`main` への push | `tools/ci.sh`（書式、lint、テスト） | GitHub の標準の runner |
 | `.github/workflows/vm.yml` | `develop`・`release` への push（文書だけの変更を除く）、毎晩、手動 | VM の中の試験（`tools/vm-check.py`） | GitHub の標準の runner |
+| `.github/workflows/gpu.yml` | 毎晩、`release-candidate/**` への push、手動 | GPU の付いたインスタンスの上で、ハードウェアのドライバーを使って、`tools/ci.sh test` と、vkms での自己診断を走らせる。合否を判定する | GPU の付いた、クラウドのインスタンス |
 | `.github/workflows/gpu-probe.yml` | 手動 | GPU の付いたインスタンスの上で、ドライバー、Vulkan、KMS の状態を調べる。合否は、判定しない | GPU の付いた、クラウドのインスタンス |
 
 - `ci.yml` と `vm.yml` は、リポジトリの中のものと、公開されている依存だけで動く。GPU も、秘密の値も、外部のサービスの登録も、要らない。
   fork でも、そのまま動く。**必須の検査は、この 2 つの範囲に置く。**
-- `gpu-probe.yml` は、リポジトリの持ち主が用意した runner が要る。fork には、その runner が無いので、ジョブは、待ったままになる。
+- `gpu.yml` と `gpu-probe.yml` は、リポジトリの持ち主が用意した runner が要る。どちらも、必須の検査ではない。
+  PR では、起動しない。fork からの PR が、GPU のインスタンスを起動できないようにするためである。
+  fork には、その runner が無い。`gpu.yml` のジョブは、このリポジトリでだけ走り、fork では飛ばされる。`gpu-probe.yml` のジョブは、fork では、待ったままになる。
 
 ### `ci.yml`
 
@@ -206,6 +209,59 @@ workflow は、3 つある。
 - runner は、`ubuntu-24.04` である。KVM を使う。GPU は、使わない。
 - `venus` の部は、GPU が要るので、回さない。
 
+### `gpu.yml`
+
+実際の GPU のドライバーの上で、テストが通ることを確かめる。**合否を判定する。** step が 1 つでも失敗すれば、ジョブは失敗する。
+必須の検査ではない。
+
+- 契機は、3 つある。
+  - 毎晩（UTC の 18:47）。既定の branch で走る。
+  - `release-candidate/**` への push。`release-candidate/**` は、`release` に取り込む commit で、`develop` から切る branch である。
+    `release` に merge する前に、そこで、この検査を回す。
+  - 手動（`workflow_dispatch`）。どの branch でも選べる。
+- runner は、[RunsOn](https://runs-on.com) が、ジョブごとに起動して、終わると消す、AWS のインスタンスである。
+  ジョブの `runs-on` のラベルで、インスタンスの種類、image、ディスクの大きさを指定している。秘密の値は、使わない。
+- ジョブは、`nvidia` の 1 つである。インスタンスは `g4dn.xlarge`（NVIDIA T4）、image は `ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている）。
+  ジョブは、このリポジトリ（`MatchaChoco010/hizukuri`）でだけ走る。
+- キャッシュは、使わない。何も無い状態から始めても、実行は短く、起動するのは一晩に 1 回だからである。
+- 同じ ref の実行は、重ねない。走っている実行は、取り消さない。
+
+**ドライバー。** image に入っている NVIDIA のドライバーは、`VK_EXT_descriptor_heap` を持たない。
+そこで、workflow の環境変数 `NVIDIA_DRIVER` に書いた版（`595.104.02`）を、`download.nvidia.com` の installer で入れ直す。
+595 の系列は、`VK_EXT_descriptor_heap` を持つ最初の系列である。検査に使う版は、この値を書き換えて、意図して変える。
+手動で起動するときは、入力の `nvidia_driver` で、別の版を指定できる。空なら、`NVIDIA_DRIVER` の版を入れる。
+
+**devShell からドライバーへの届き方。** devShell は、NVIDIA のドライバーを持たない。ドライバーは、インスタンスの kernel の module と、版が合っている必要がある。
+そこで、インスタンスに入っている NVIDIA のライブラリだけを、1 つのディレクトリに集め、devShell の中で、`LD_LIBRARY_PATH` をそこに向ける。
+
+- ドライバーの manifest は GLX のライブラリ（`libGLX_nvidia.so.0`）を指していて、これは X11 のライブラリを要る。
+  `VK_DRIVER_FILES` は、manifest の、ライブラリの名前を `libEGL_nvidia.so.0` に替えた写しに向ける。
+- ドライバーは、動いているあいだに、自分のもののほかのライブラリを開く。`LD_LIBRARY_PATH` には、
+  `flake.lock` の nixpkgs の `libdrm`、`libgbm`、`libx11`、`libxext`、`wayland` の `lib` も足す。
+  `libdrm` と `libgbm` が無いと、ドライバーは、`VK_EXT_external_memory_dma_buf` を公開しない。
+  nixpkgs から取るのは、ドライバーのほかに、システムのライブラリを読み込まないためである。
+- devShell は、起動するときに、`LD_LIBRARY_PATH` を外し、`VK_DRIVER_FILES` を設定する。
+  そこで、この 2 つを設定する行を、ファイル（`$RUNNER_TEMP/nvidia/settings.sh`）に書き、devShell の中の step が、それを読み込む。
+
+| step | 内容 |
+| --- | --- |
+| Replace the NVIDIA driver | image のドライバーのパッケージと、kernel の module を外し、NVIDIA の installer（`--silent -M=open`）で、上の版を入れる。installer のログを残し、失敗したときは、その終わりを出す。入れた後の `/proc/driver/nvidia/version` と `nvidia-smi` を出す |
+| Load vkms | 仮想の KMS のドライバー（vkms）を読み込む |
+| Make the DRM nodes usable | `/dev/dri/` のノードを、だれでも開けるようにし、vkms の card を探す。見つからなければ、失敗する |
+| Gather the libraries of the NVIDIA driver | ドライバーの manifest を探し、ドライバーのライブラリを 1 つのディレクトリに集め、`libEGL_nvidia.so.0` を指す manifest を書く |
+| Fetch the dev shell | `ci` の devShell を用意する |
+| Write how the dev shell reaches the driver | nixpkgs のライブラリを取ってきて、`settings.sh` を書く |
+| Check what the Vulkan driver offers | devShell の中で、`tools/gpu-report.sh`。デバイスが見えないか、`VK_EXT_descriptor_heap` か `VK_EXT_external_memory_dma_buf` が無ければ、失敗する。ドライバーの準備の不備を、テストの前に、それとわかる形で出す |
+| Make /dev/udmabuf usable, or leave its tests out | `ci.yml` と同じ。`/dev/udmabuf` を開けるようにし、できなければ、それが要るテストを外す |
+| Build the compositor | テストのプロファイルで、`hizukuri` をビルドする。後のテストは、これを使い回す |
+| Self test on vkms | GPU で描いて、vkms に出す `hizukuri kms-selftest`（`--vulkan-device gpu --scanout cpu`）。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `hizukuri kms-selftest: PASSED` でなければ、失敗する |
+| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる。自己診断だけが失敗したときも、走る |
+| Summary | ジョブの要約に、ドライバーの版、`tools/gpu-report.sh` の Vulkan の報告（`vulkan-summary.md`）、自己診断の `summary.txt`（無ければ、ログの終わり）を書く |
+
+- `--scanout dmabuf`（GPU の image を、dma-buf のまま vkms に渡す）は、確かめない。描くデバイスと、出すデバイスが違うので、自己診断が、意図して断る。
+- `artifacts/gpu/`（installer のログ、ドライバーの版、DRM のノード、Vulkan の報告、自己診断の報告とログ）と、
+  `target/*/test-output/`（テストが取り込んだ画像と、hizukuri のログ）を、artifact `gpu` として 14 日残す。成否によらない。
+
 ### `gpu-probe.yml`
 
 実際の GPU のドライバーの上で、hizukuri に要るものが、どこまで動くかを調べる。**何も判定しない。**
@@ -226,10 +282,8 @@ workflow は、3 つある。
 - 準備のうち、システムを変えるもの（パッケージの導入、ドライバーの入れ替え、kernel の module の読み込み、`/dev/dri/` のノードの権限）は、
   workflow の step が行う。インスタンスは、そのジョブのためだけにある。`tools/gpu-report.sh` は、システムを変えない。
 
-devShell は、NVIDIA のドライバーを持たない。ドライバーは、インスタンスの kernel の module と、版が合っている必要がある。
-そこで、インスタンスに入っている NVIDIA のライブラリだけを、1 つのディレクトリに集め、devShell の中で、`LD_LIBRARY_PATH` をそこに向ける。
-ドライバーの manifest は GLX のライブラリ（`libGLX_nvidia.so.0`）を指していて、これは X11 のライブラリを要る。
-ドライバーは、動いているあいだに、自分のもののほかのライブラリ（`libdrm`、`libgbm` など）を開くこともある。devShell の中では、次の 3 通りを試す。
+devShell からドライバーに届かせる考え方は、`gpu.yml` と同じである（上の節の「devShell からドライバーへの届き方」）。
+`gpu.yml` が使うのは、下の表の `egl-nix` である。`gpu-probe.yml` は、devShell の中で、次の 3 通りを試す。
 
 | 方法 | `VK_DRIVER_FILES` | 足すライブラリ |
 | --- | --- | --- |
@@ -274,6 +328,7 @@ nextest は、上限を超えたテストを終わらせて、残りのテスト
 ### キャッシュ
 
 `ci.yml` と `vm.yml` は、GitHub の cache を使う。保存するのは、branch への push のときだけである。PR は、読むだけである。
+`gpu.yml` と `gpu-probe.yml` は、キャッシュを使わない。
 どのキャッシュの中身も、公開の場所から取り直すか、ビルドし直せる。無くても、時間がかかるだけである。
 
 | キャッシュ | 鍵 | 中身 | 保存する workflow |
@@ -291,5 +346,4 @@ nextest は、上限を超えたテストを終わらせて、残りのテスト
 
 - 基準画像（PNG）との比較。いまのテストは、画素の値を、計算した期待値と比べている。
 - 回数の多い proptest などを回す、夜間の検査。
-- 実際の GPU のドライバーでのテストを、決まった契機で回して、合否を判定する workflow。いまあるのは、手動で起動して、状態を調べる `gpu-probe.yml` だけである。
 - nested のバックエンドと、そのテスト。
