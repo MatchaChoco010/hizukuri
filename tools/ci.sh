@@ -7,7 +7,8 @@
 # usage: tools/ci.sh [lint|test|all]
 #
 #   lint  cargo fmt --check and cargo clippy
-#   test  cargo test, then a check that the tests left no process running
+#   test  cargo test (every test binary, also after a failure), then a
+#         check that the tests left no process running
 #   all   both, in that order (the default)
 #
 # Environment:
@@ -99,8 +100,12 @@ test_all() {
         echo "== note: HIZUKURI_TEST_SKIP_UDMABUF is set; the tests that need /dev/udmabuf are left out"
     fi
 
+    # Every test binary runs, also after one of them failed: a run that
+    # fails shows everything that fails, not only the first.
+    local failed=0
+
     echo "== cargo test"
-    cargo test --workspace
+    cargo test --workspace --no-fail-fast || failed=1
 
     # The tests of the script GPU API (proto-gfx-core, proto-gfx-lua) run
     # in-process, on one device per run: on lavapipe, unless gpu is listed.
@@ -115,7 +120,8 @@ test_all() {
             exit 1
         fi
         echo "== cargo test (proto-gfx-core, proto-gfx-lua on lavapipe: $lavapipe)"
-        VK_DRIVER_FILES="$lavapipe" cargo test -p proto-gfx-core -p proto-gfx-lua
+        VK_DRIVER_FILES="$lavapipe" cargo test -p proto-gfx-core -p proto-gfx-lua --no-fail-fast \
+            || failed=1
     fi
 
     # Nothing is stopped here. A process that is still running is a defect
@@ -128,6 +134,11 @@ test_all() {
         exit 1
     fi
     echo "none"
+
+    if ((failed)); then
+        echo "tests failed (see the cargo test output above)" >&2
+        exit 1
+    fi
 }
 
 case "${1:-all}" in

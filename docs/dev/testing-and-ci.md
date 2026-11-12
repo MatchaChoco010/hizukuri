@@ -32,7 +32,7 @@
 ```sh
 tools/ci.sh           # 全部
 tools/ci.sh lint      # cargo fmt --check と、cargo clippy -- -D warnings
-tools/ci.sh test      # cargo test --workspace と、プロセスが残っていないことの確認
+tools/ci.sh test      # cargo test --workspace（失敗しても、すべてのテストを最後まで回す）と、プロセスが残っていないことの確認
 
 nix develop --command tools/ci.sh           # devShell の中で。CI と同じ検査
 ```
