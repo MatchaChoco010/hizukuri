@@ -9,6 +9,8 @@ publish.workspace = true
 vulkan.workspace = true
 vulkan-alloc.workspace = true
 naga.workspace = true
+spirv-tools.workspace = true
+rspirv.workspace = true
 rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]

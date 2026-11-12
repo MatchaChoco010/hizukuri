@@ -75,7 +75,7 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | KMS の scanout | `prototype/compositor/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイスと、Rust のレンダラー、スクリプトの描画のそれぞれをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する（tiled の modifier だけを出す場合は、スクリプトの描画を包んで作る）。模擬のデバイスの上の自己診断（`PatternRenderer`） | 要る |
 | headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。どの場面も、2 回走る。比較の相手として明示した Rust の実装（`--renderer rust --wm rust`）と、スクリプトの描画（描くだけのプロジェクトで、配置は fallback） | 要る |
 | スクリプトの層 | `prototype/compositor/tests/script.rs` | 2 つのレンダラーの画素の比較（Rust のレンダラーは、明示して選ぶ）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し | 要る |
-| スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み | 要る |
+| スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み。`gfx-core` のテストの多くは、shader を、源の入口と、SPIR-V の入口（naga が書いた SPIR-V）の両方で作って、同じ結果になることを確かめる。SPIR-V の入口の、添字の切り詰めと、拒むべき module と、1 語ずつ書き換えた module（`spirv_input.rs`。全 bit を試す版は `--ignored`） | 要る |
 | 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。スクリプトの描画（`real_clients.rs` は、描くだけのプロジェクト）。popup と grab、selection、fractional-scale、dmabuf | 要る |
 
 実行バイナリを起動するテスト（`prototype/compositor/tests/common/mod.rs` の `Session`）は、`--wm` か `--script` を指定しない限り、

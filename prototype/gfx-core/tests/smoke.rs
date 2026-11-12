@@ -1,5 +1,9 @@
 use proto_gfx_core::*;
 
+mod common;
+
+through_both_entries!(triangle_smoke, glsl_fragment_shader);
+
 /// Checks an 8-bit UNORM pixel written from a float colour. Vulkan converts
 /// a float `f` to unsigned normalized fixed-point by taking either of the two
 /// code values closest to `f × 255`: rounding to nearest is recommended, not
@@ -15,13 +19,13 @@ fn assert_unorm8(actual: &[u8], expected: [u8; 4]) {
     }
 }
 
-#[test]
 fn triangle_smoke() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
     eprintln!("device: {} / {}", gpu.device_name(), gpu.driver_name());
     eprintln!("{}", gpu.heap_info());
-    let vs = gpu
-        .create_shader(&ShaderSource {
+    let vs = common::create_shader(
+        &mut gpu,
+        &ShaderSource {
             stage: ShaderStage::Vertex,
             language: ShaderLanguage::Wgsl,
             entry: "main",
@@ -30,10 +34,12 @@ fn triangle_smoke() {
                 var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
                 return vec4(p[i], 0.0, 1.0);
             }"#,
-        })
-        .unwrap();
-    let fs = gpu
-        .create_shader(&ShaderSource {
+        },
+    )
+    .unwrap();
+    let fs = common::create_shader(
+        &mut gpu,
+        &ShaderSource {
             stage: ShaderStage::Fragment,
             language: ShaderLanguage::Wgsl,
             entry: "main",
@@ -41,8 +47,9 @@ fn triangle_smoke() {
             struct Push { color: vec4<f32> }
             var<immediate> push: Push;
             @fragment fn main() -> @location(0) vec4<f32> { return push.color; }"#,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     let pipeline = gpu
         .create_render_pipeline(&RenderPipelineDesc {
             vertex: vs,
@@ -85,11 +92,11 @@ fn triangle_smoke() {
 
 /// The compiler is behind a trait and takes a language tag: a GLSL fragment
 /// shader goes through the same reflection and checks as WGSL.
-#[test]
 fn glsl_fragment_shader() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
-    let vs = gpu
-        .create_shader(&ShaderSource {
+    let vs = common::create_shader(
+        &mut gpu,
+        &ShaderSource {
             stage: ShaderStage::Vertex,
             language: ShaderLanguage::Wgsl,
             entry: "main",
@@ -102,10 +109,12 @@ fn glsl_fragment_shader() {
                 out.uv = p[i] * 0.5 + 0.5;
                 return out;
             }"#,
-        })
-        .unwrap();
-    let fs = gpu
-        .create_shader(&ShaderSource {
+        },
+    )
+    .unwrap();
+    let fs = common::create_shader(
+        &mut gpu,
+        &ShaderSource {
             stage: ShaderStage::Fragment,
             language: ShaderLanguage::Glsl,
             entry: "main",
@@ -118,8 +127,9 @@ fn glsl_fragment_shader() {
             void main() {
                 color = texture(sampler2D(tex, smp), uv) * pc.gain;
             }"#,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     let reflection = gpu.shader_reflection(fs).unwrap();
     assert_eq!(reflection.push_size, 16);
     assert_eq!(reflection.bindings.len(), 2);

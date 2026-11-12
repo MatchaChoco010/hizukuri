@@ -25,7 +25,8 @@ use crate::format::{Format, FormatCaps, NumClass};
 use crate::handle::{Handle, Kind, Pool};
 use crate::record::{BindTable, PassState};
 use crate::shader::{
-    BindingKind, MAX_BINDINGS, NagaCompiler, Reflection, ShaderCompiler, ShaderSource, ShaderStage,
+    BindingKind, CompiledShader, MAX_BINDINGS, NagaCompiler, Reflection, ShaderCompiler,
+    ShaderSource, ShaderStage,
 };
 
 static NEXT_EPOCH: AtomicU32 = AtomicU32::new(1);
@@ -33,6 +34,8 @@ static NEXT_EPOCH: AtomicU32 = AtomicU32::new(1);
 pub(crate) const FRAMES_IN_FLIGHT: usize = 2;
 /// Longest shader source accepted, in bytes.
 pub const MAX_SHADER_SOURCE_BYTES: usize = 256 << 10;
+/// Largest SPIR-V module accepted, in bytes.
+pub const MAX_SPIRV_BYTES: usize = 1 << 20;
 /// Stack of the thread the shader compiler runs on. Only touched pages are
 /// committed.
 const COMPILER_STACK_BYTES: usize = 1 << 30;
@@ -925,6 +928,48 @@ impl Gpu {
     // ----- shaders ----------------------------------------------------------
 
     pub fn create_shader(&mut self, source: &ShaderSource<'_>) -> Result<Handle> {
+        self.check_shader_capacity()?;
+        if source.source.len() > MAX_SHADER_SOURCE_BYTES {
+            bail!(
+                ShaderCompile,
+                "shader source is {} bytes; the limit is {MAX_SHADER_SOURCE_BYTES}",
+                source.source.len()
+            );
+        }
+        let compiler = &*self.compiler;
+        let compiled = run_shader_tool("the shader compiler", || compiler.compile(source))?;
+        self.insert_shader(compiled, source.stage)
+    }
+
+    /// Creates a shader from a SPIR-V module (the bytes of a `.spv` file).
+    ///
+    /// The module is not trusted: it is validated, its indices are clamped,
+    /// and it is checked against what the API supports before the device
+    /// sees it (`spirv_input`). The reflection comes from the module itself.
+    /// `entry` names its one entry point, which must be of `stage`.
+    pub fn create_shader_spirv(
+        &mut self,
+        stage: ShaderStage,
+        entry: &str,
+        spirv: &[u8],
+    ) -> Result<Handle> {
+        self.check_shader_capacity()?;
+        if spirv.len() > MAX_SPIRV_BYTES {
+            bail!(
+                ShaderCompile,
+                "the SPIR-V module is {} bytes; the limit is {MAX_SPIRV_BYTES}",
+                spirv.len()
+            );
+        }
+        let words = crate::spirv_input::words_from_bytes(spirv)
+            .map_err(|message| GfxError::new(ErrorCode::ShaderCompile, message))?;
+        let compiled = run_shader_tool("the SPIR-V checks", || {
+            crate::spirv_input::accept_spirv(&words, stage, entry)
+        })?;
+        self.insert_shader(compiled, stage)
+    }
+
+    fn check_shader_capacity(&self) -> Result<()> {
         self.alive()?;
         if self.shaders.live() >= self.shaders.capacity() {
             bail!(
@@ -933,48 +978,14 @@ impl Gpu {
                 self.shaders.capacity()
             );
         }
-        if source.source.len() > MAX_SHADER_SOURCE_BYTES {
-            bail!(
-                ShaderCompile,
-                "shader source is {} bytes; the limit is {MAX_SHADER_SOURCE_BYTES}",
-                source.source.len()
-            );
-        }
-        // The compiler is third-party code fed with script input.
-        //
-        // - A panic in it must not take the process down: it is caught.
-        // - naga recurses over expressions, and a long chain such as
-        //   `1.0 + 1.0 + ...` overflows a normal stack, which aborts the
-        //   process and cannot be caught. Compiling on a thread with a very
-        //   large stack, together with the source size limit, keeps the inputs
-        //   measured so far away from that. It is a mitigation, not a proof.
-        let compiler = &*self.compiler;
-        let compiled = std::thread::scope(|scope| {
-            std::thread::Builder::new()
-                .name("shader-compiler".into())
-                .stack_size(COMPILER_STACK_BYTES)
-                .spawn_scoped(scope, || compiler.compile(source))
-                .map_err(|e| -> Box<dyn std::any::Any + Send> {
-                    Box::new(format!("cannot start the compiler thread: {e}"))
-                })
-                .and_then(|thread| thread.join())
-        })
-        .map_err(|panic| {
-            let detail = panic
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| panic.downcast_ref::<&str>().copied())
-                .unwrap_or("unknown panic");
-            GfxError::new(
-                ErrorCode::ShaderCompile,
-                format!("the shader compiler panicked: {detail}"),
-            )
-        })?
-        .map_err(|message| GfxError::new(ErrorCode::ShaderCompile, message))?;
+        Ok(())
+    }
+
+    fn insert_shader(&mut self, compiled: CompiledShader, stage: ShaderStage) -> Result<Handle> {
         let entry = std::ffi::CString::new(compiled.entry).map_err(|_| {
             GfxError::new(ErrorCode::ShaderCompile, "entry point name contains NUL")
         })?;
-        if compiled.reflection.stage != source.stage {
+        if compiled.reflection.stage != stage {
             bail!(
                 ShaderCompile,
                 "the compiler returned a shader of another stage"
@@ -2199,6 +2210,42 @@ fn blend_op(op: BlendOp) -> vk::BlendOp {
         BlendOp::Min => vk::BlendOp::MIN,
         BlendOp::Max => vk::BlendOp::MAX,
     }
+}
+
+/// Runs a shader compiler or the SPIR-V checks on script input.
+///
+/// - A panic must not take the process down: it is caught.
+/// - These recurse over expressions, and a long chain such as
+///   `1.0 + 1.0 + ...` overflows a normal stack, which aborts the process and
+///   cannot be caught. Running on a thread with a very large stack, together
+///   with the input size limits, keeps the inputs measured so far away from
+///   that. It is a mitigation, not a proof.
+fn run_shader_tool(
+    what: &str,
+    f: impl FnOnce() -> std::result::Result<CompiledShader, String> + Send,
+) -> Result<CompiledShader> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("shader-compiler".into())
+            .stack_size(COMPILER_STACK_BYTES)
+            .spawn_scoped(scope, f)
+            .map_err(|e| -> Box<dyn std::any::Any + Send> {
+                Box::new(format!("cannot start the compiler thread: {e}"))
+            })
+            .and_then(|thread| thread.join())
+    })
+    .map_err(|panic| {
+        let detail = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown panic");
+        GfxError::new(
+            ErrorCode::ShaderCompile,
+            format!("{what} panicked: {detail}"),
+        )
+    })?
+    .map_err(|message| GfxError::new(ErrorCode::ShaderCompile, message))
 }
 
 /// Builds the mapping from the `set 0 / binding N` declarations of one stage

@@ -7,6 +7,10 @@
 
 use proto_gfx_core::*;
 
+mod common;
+
+through_both_entries!(validation_layer_sees_misuse_when_checks_are_off);
+
 const SHADER: &str = r#"
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> {
@@ -17,7 +21,6 @@ const SHADER: &str = r#"
 }
 "#;
 
-#[test]
 fn validation_layer_sees_misuse_when_checks_are_off() {
     let config = GpuConfig::for_tests();
     if !config.validation {
@@ -33,12 +36,15 @@ fn validation_layer_sees_misuse_when_checks_are_off() {
         return;
     }
     let shader = |gpu: &mut Gpu, stage, entry| {
-        gpu.create_shader(&ShaderSource {
-            stage,
-            language: ShaderLanguage::Wgsl,
-            source: SHADER,
-            entry,
-        })
+        common::create_shader(
+            gpu,
+            &ShaderSource {
+                stage,
+                language: ShaderLanguage::Wgsl,
+                source: SHADER,
+                entry,
+            },
+        )
         .unwrap()
     };
     let vs = shader(&mut gpu, ShaderStage::Vertex, "vs");

@@ -19,7 +19,7 @@
 | `prototype/layout` | Rust で書いたウィンドウの配置。単純なフローティング。`--wm rust` のときだけ使う | なし |
 | `prototype/wl` | Wayland のサーバー側。Smithay の型を外へ出さない | Smithay |
 | `prototype/backend` | バックエンドの trait、headless の実装、KMS の実装（模擬の DRM デバイスを含む） | `proto-render`、`calloop`、`drm`、Smithay（session、udev、libinput） |
-| `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込み | `vulkan-rs`、`naga` |
+| `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込み。SPIR-V で渡された shader の検証と検査 | `vulkan-rs`、`naga`、`spirv-tools`（SPIRV-Tools）、`rspirv` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
 | `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目（`wm`）、スクリプトの層（`script/`、`scripts/`）、誰も決めないときと、スクリプトが使えないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、自己診断（`selftest`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて |
 | `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
@@ -109,6 +109,8 @@ cargo build -j 8
   （`target/nix-<hash>/`）に入る。この文書の例の `target/debug/` は、`"$CARGO_TARGET_DIR/debug/"` に読み替える。
   devShell の中と外で、同じバイナリを使い回さない。
 - シェーダーは WGSL で書き、ビルド時に `naga` で SPIR-V にする。外部のシェーダーコンパイラーは要らない。
+- `proto-gfx-core` は、SPIRV-Tools を、crate `spirv-tools` が C++ の源からビルドして、静的にリンクする。
+  ビルドに、C++ のコンパイラーが要る（devShell には入っている）。キャッシュの無いビルドが、その分、長くなる。
 
 ## headless での起動
 
@@ -371,6 +373,7 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - `wp_color_management_v1` と、それに続く色のプロトコル。HDR の出力、10 bit 以上の scanout。
 - KMS での複数の出力、direct scanout、overlay plane、cursor plane、VRR、ティアリング。
 - damage を使った部分的な描き直し（毎回、出力の全体を描く）。
+- スクリプトから、SPIR-V の shader を渡すこと（`Gpu::create_shader_spirv` は、Rust の API にだけある）。
 - Rust のレンダラーでの、dmabuf の Vulkan への取り込み（スクリプトの描画には、ある）。
 - IME（text-input、input-method）、xwayland-satellite のための対応、タッチ、ジェスチャー。
 - data control を、信頼するクライアントにだけ見せること（`wp_security_context_v1`）。

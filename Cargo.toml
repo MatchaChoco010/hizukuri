@@ -28,7 +28,7 @@ proto-compositor = { path = "prototype/compositor" }
 proto-test-client = { path = "tools/test-client" }
 
 # Pinned to the published vulkan-rs revision. Only proto-render and
-# proto-backend may depend on these directly.
+# proto-gfx-core may depend on these directly.
 vulkan = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0", features = ["wayland"] }
 vulkan-alloc = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0" }
 
@@ -40,6 +40,12 @@ smithay = { git = "https://github.com/Smithay/smithay", rev = "8fd9fe0c74e5c13a1
 proto-gfx-core = { path = "prototype/gfx-core" }
 proto-gfx-lua = { path = "prototype/gfx-lua" }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-in", "spv-out"] }
+# What proto-gfx-core uses to check SPIR-V it is handed: SPIRV-Tools (the
+# validator and the graphics-robust-access pass, built from its C++ source
+# by the crate) and a SPIR-V reader for the checks and the reflection. Only
+# proto-gfx-core may depend on these.
+spirv-tools = { version = "0.13.3", default-features = false, features = ["use-compiled-tools"] }
+rspirv = "0.13.0"
 # The script language is not decided; Luau is the provisional choice.
 mlua = { version = "0.12.2", default-features = false }
 half = "2.7"

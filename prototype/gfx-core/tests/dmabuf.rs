@@ -7,6 +7,10 @@ use std::os::fd::AsFd;
 
 use proto_gfx_core::*;
 
+mod common;
+
+through_both_entries!(an_exported_image_is_imported_and_sampled);
+
 const WIDTH: u32 = 16;
 const HEIGHT: u32 = 8;
 
@@ -33,12 +37,15 @@ const COPY: &str = r#"
 }"#;
 
 fn shader(gpu: &mut Gpu, stage: ShaderStage, source: &str) -> Handle {
-    gpu.create_shader(&ShaderSource {
-        stage,
-        language: ShaderLanguage::Wgsl,
-        entry: "main",
-        source,
-    })
+    common::create_shader(
+        gpu,
+        &ShaderSource {
+            stage,
+            language: ShaderLanguage::Wgsl,
+            entry: "main",
+            source,
+        },
+    )
     .unwrap()
 }
 
@@ -94,7 +101,6 @@ fn without_dmabufs(gpu: &Gpu, what: &str) {
     eprintln!("skipped: {} {what}", gpu.device_name());
 }
 
-#[test]
 fn an_exported_image_is_imported_and_sampled() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
     let xrgb = u32::from_le_bytes(*b"XR24");
