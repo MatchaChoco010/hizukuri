@@ -17,6 +17,7 @@
 mod clipboard;
 mod external;
 mod features;
+mod ime;
 mod pointer;
 
 use std::collections::HashMap;
@@ -45,6 +46,7 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 pub use clipboard::{DataControlProtocol, SelectionKind};
 pub use external::{ExternalDmabuf, create_udmabuf};
 pub use features::{PopupOptions, SurfaceKind, ToplevelRequest};
+pub use ime::{ImeEvent, InputMethodMode};
 pub use pointer::ConstraintRequest;
 use xkbcommon::xkb;
 
@@ -199,6 +201,17 @@ pub struct ClientOptions {
     pub viewport: Option<Viewport>,
     /// Ask for `wp_presentation` feedback with every frame drawn.
     pub presentation_feedback: bool,
+    /// Open the window. Without it the client only binds globals (an input
+    /// method has no window of its own).
+    pub window: bool,
+    /// Make a text input (`zwp_text_input_v3`), driven by the test.
+    pub text_input: bool,
+    /// Make a text input and enable it whenever it is entered, with this
+    /// cursor rectangle (x, y, width, height), as an application with a
+    /// text field does.
+    pub text_input_enable_on_enter: Option<(i32, i32, i32, i32)>,
+    /// Be the input method of the seat (`zwp_input_method_v2`).
+    pub input_method: Option<InputMethodMode>,
 }
 
 impl Default for ClientOptions {
@@ -217,6 +230,10 @@ impl Default for ClientOptions {
             buffer_size: None,
             viewport: None,
             presentation_feedback: false,
+            window: true,
+            text_input: false,
+            text_input_enable_on_enter: None,
+            input_method: None,
         }
     }
 }
@@ -424,6 +441,29 @@ pub enum ClientEvent {
         mime_type: String,
     },
     ControlSourceCancelled,
+    /// `zwp_text_input_v3.enter`.
+    TextInputEnter,
+    TextInputLeave,
+    /// `zwp_text_input_v3.preedit_string`: the text being composed.
+    Preedit {
+        text: String,
+        cursor_begin: i32,
+        cursor_end: i32,
+    },
+    /// `zwp_text_input_v3.commit_string`: finished text.
+    CommitString {
+        text: String,
+    },
+    DeleteSurroundingText {
+        before: u32,
+        after: u32,
+    },
+    /// `zwp_text_input_v3.done`, with the number of commits the client had
+    /// sent by then.
+    TextInputDone {
+        serial: u32,
+        commits: u32,
+    },
 }
 
 #[derive(Default)]
@@ -503,6 +543,7 @@ struct State {
     clipboard: clipboard::ClipboardState,
     /// Never create a window (a clipboard manager has none).
     windowless: bool,
+    ime: ime::ImeState,
 }
 
 /// The test client. See the crate documentation.
@@ -549,6 +590,7 @@ impl TestClient {
             pointer: pointer::PointerState::default(),
             clipboard: clipboard::ClipboardState::default(),
             windowless: false,
+            ime: ime::ImeState::default(),
         };
         Ok(Self {
             connection,
@@ -748,6 +790,7 @@ impl State {
         if self.window.is_none()
             && !self.closed
             && !self.windowless
+            && self.options.window
             && let (Some(compositor), Some(wm_base), Some(_)) = (
                 &self.globals.compositor,
                 &self.globals.wm_base,
@@ -877,6 +920,7 @@ impl State {
         }
         self.advance_features(handle)?;
         self.advance_clipboard(handle);
+        self.advance_ime(handle);
         Ok(())
     }
 }
@@ -1020,7 +1064,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                         },
                     );
                 }
-                _ => {}
+                other => {
+                    state.bind_ime_global(registry, name, other, handle);
+                }
             }
         }
     }

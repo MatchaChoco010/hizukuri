@@ -27,6 +27,7 @@ use smithay::backend::allocator::Buffer as _;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
+use smithay::wayland::input_method::InputMethodSeat;
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::selection::data_device::{
@@ -101,6 +102,12 @@ impl State {
             }
             if let Some(id) = self.window_for_root(&current) {
                 return Some(id);
+            }
+            // The popup of an input method belongs to the window whose
+            // text input it serves.
+            if crate::ime::is_input_popup(self, &current) {
+                current = self.input_popup_parent()?;
+                continue;
             }
             let popup = self.popups.iter().find(|p| p.wl_surface() == &current)?;
             current = popup.get_parent_surface()?;
@@ -295,6 +302,8 @@ impl SeatHandler for State {
         let client = focused.and_then(|s| self.display_handle.get_client(s.id()).ok());
         set_data_device_focus(&self.display_handle, seat, client.clone());
         set_primary_focus(&self.display_handle, seat, client);
+        // Smithay deactivated the input method on the way.
+        self.ime_focus_moved();
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
@@ -592,15 +601,30 @@ impl XdgShellHandler for State {
             return;
         };
         if let Some(keyboard) = seat.get_keyboard() {
-            if keyboard.is_grabbed()
-                && !(keyboard.has_grab(serial)
-                    || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
-            {
-                grab.ungrab(PopupUngrabStrategy::All);
-                return;
+            // An input method that grabbed the keyboard keeps it: the menu
+            // gets the focus, and the keys the input method does not use
+            // come back to it through the virtual keyboard. Replacing that
+            // grab would leave the input method without keys, and Smithay
+            // offers no way to give it back afterwards.
+            let input_method_grab = seat.input_method().keyboard_grabbed()
+                && keyboard.is_grabbed()
+                && (self.menu_grab.is_some()
+                    || !(keyboard.has_grab(serial)
+                        || keyboard.has_grab(grab.previous_serial().unwrap_or(serial))));
+            if input_method_grab {
+                self.menu_grab = Some(grab.clone());
+                self.set_keyboard_focus_surface(grab.current_grab());
+            } else {
+                if keyboard.is_grabbed()
+                    && !(keyboard.has_grab(serial)
+                        || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
+                {
+                    grab.ungrab(PopupUngrabStrategy::All);
+                    return;
+                }
+                keyboard.set_focus(self, grab.current_grab(), serial);
+                keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
             }
-            keyboard.set_focus(self, grab.current_grab(), serial);
-            keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
         }
         if let Some(pointer) = seat.get_pointer() {
             if pointer.is_grabbed()

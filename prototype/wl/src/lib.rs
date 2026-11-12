@@ -26,6 +26,7 @@
 mod buffer;
 mod constraints;
 mod handlers;
+mod ime;
 mod state;
 mod surface;
 
@@ -264,6 +265,39 @@ pub struct PopupRequest {
     pub may_resize: (bool, bool),
 }
 
+/// What is going on with input methods (`zwp_input_method_v2`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputMethodStatus {
+    /// A client is the input method of the seat.
+    pub bound: bool,
+    /// The text input with the keyboard focus is enabled, and the input
+    /// method was told so (`activate`).
+    pub active: bool,
+    /// The input method grabbed the keyboard: keys go to it first.
+    pub keyboard_grab: bool,
+    /// The popup surface of the input method, if it made one.
+    pub popup: Option<InputPopupStatus>,
+}
+
+/// The popup of an input method (the candidate window).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputPopupStatus {
+    pub surface: SurfaceId,
+    /// Whether it is shown: the input method is active and a text input
+    /// has the focus.
+    pub shown: bool,
+    /// The window it is shown with.
+    pub window: Option<WindowId>,
+    /// Where its top left corner is, relative to the window geometry.
+    pub position: Option<(i32, i32)>,
+    /// The cursor rectangle the application reported (x, y, width, height),
+    /// relative to its surface.
+    pub cursor_rectangle: (i32, i32, i32, i32),
+    /// The cursor rectangle as the input method was last told it, relative
+    /// to the popup surface.
+    pub sent_rectangle: Option<(i32, i32, i32, i32)>,
+}
+
 /// Memory layout of pixels in a `wl_shm` buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShmFormat {
@@ -499,6 +533,9 @@ pub enum SurfaceRole {
     Cursor,
     /// The surface a client attached to a drag.
     DragIcon,
+    /// The popup of an input method (the candidate window), shown with the
+    /// window whose text input has the focus.
+    InputPopup,
 }
 
 /// One surface of a window, as the scene needs it to draw and hit test.
@@ -1041,6 +1078,12 @@ impl WlServer {
     /// The pointer leaving the surface turns its constraint off by itself.
     pub fn set_pointer_constraint_active(&mut self, surface: SurfaceId, active: bool) -> bool {
         self.state.set_pointer_constraint_active(surface, active)
+    }
+
+    /// What is going on with input methods: whether there is one, whether
+    /// it is active and holds the keyboard, and where its popup is.
+    pub fn input_method_status(&self) -> InputMethodStatus {
+        self.state.input_method_status()
     }
 
     /// The cursor requested by the client under the pointer.

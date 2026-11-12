@@ -15,8 +15,8 @@ use proto_color::{AlphaMode, CompositeSpace, DecodeTransform, ImageDescription, 
 use proto_compositor::control::Request;
 use proto_render::{CompositeImage, EncodedImage};
 use proto_test_client::{
-    ClientEvent, ClientOptions, ConstraintRequest, ExternalDmabuf, Pattern, PixelLayout,
-    PopupOptions, SurfaceKind, TestClient, Transform, create_udmabuf,
+    ClientEvent, ClientOptions, ConstraintRequest, ExternalDmabuf, InputMethodMode, Pattern,
+    PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform, create_udmabuf,
 };
 use serde_json::{Value, json};
 
@@ -34,6 +34,7 @@ script_tests!(
     imported_dmabufs_are_shown_upright,
     frames_are_drawn_only_when_something_changed,
     the_icon_of_a_drag_is_drawn_by_the_script,
+    the_popup_of_an_input_method_is_drawn_by_the_cursor,
     a_transformed_window_is_drawn_and_hit_where_the_script_put_it,
     a_press_holds_the_pointer_on_a_transformed_window,
     popups_follow_the_transform_of_their_window,
@@ -902,6 +903,92 @@ fn the_icon_of_a_drag_is_drawn_by_the_script(device: Device) {
     });
     let (encoded, _) = session.screenshot("dropped");
     assert_rgb(&encoded, 198, 138, GREEN, 1, "the target, without the icon");
+    session.assert_script_healthy();
+    session.assert_renderer_clean();
+    session.quit();
+}
+
+/// The candidate window of an input method is a surface of the window
+/// whose text field has the focus, placed by the core below the cursor
+/// the application reported, and drawn by the script with the window. It
+/// hangs out of the window, and is gone when the field is no longer
+/// enabled.
+fn the_popup_of_an_input_method_is_drawn_by_the_cursor(device: Device) {
+    const CANDIDATES: [u8; 4] = [240, 220, 40, 255];
+    const BACKGROUND: [u8; 4] = [0x20, 0x20, 0x20, 255];
+    let mut session = Session::start("input-popup", device, &["--output-size", "320x240"]);
+    let mut ime = session.client(ClientOptions {
+        window: false,
+        input_method: Some(InputMethodMode::Manual),
+        ..Default::default()
+    });
+    let (mut app, _) = session.mapped_client(ClientOptions {
+        text_input: true,
+        ..options("field", 160, 80, BLUE)
+    });
+    move_window(&mut session, &mut app, "field", 20, 20);
+    session.wait(&mut [&mut app, &mut ime], "an input method", |s| {
+        s["input_method"]["bound"] == true
+    });
+    let deadline = std::time::Instant::now() + common::TIMEOUT;
+    while !app.text_input_entered() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the field never got the text input"
+        );
+        app.pump(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
+    }
+    // The cursor is near the bottom of the window.
+    app.text_input_enable(Some((30, 60, 2, 16))).unwrap();
+    session.wait(&mut [&mut app, &mut ime], "active", |s| {
+        s["input_method"]["active"] == true
+    });
+    ime.ime_show_popup(60, 24, CANDIDATES).unwrap();
+    let state = session.wait(&mut [&mut app, &mut ime], "the popup is drawn", |s| {
+        window(s, "field").is_some_and(|w| {
+            w["surfaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["role"] == "input-popup" && n["has_contents"] == true)
+        })
+    });
+    assert_eq!(state["input_method"]["popup"]["position"], json!([30, 76]));
+
+    // The window spans 20..180 x 20..100; the popup 50..110 x 96..120.
+    let (encoded, _) = session.screenshot("candidates");
+    assert_rgb(
+        &encoded,
+        80,
+        108,
+        CANDIDATES,
+        1,
+        "the popup below the window",
+    );
+    assert_rgb(&encoded, 80, 98, CANDIDATES, 1, "the popup over the window");
+    assert_rgb(&encoded, 40, 98, BLUE, 1, "the window beside the popup");
+    assert_rgb(&encoded, 80, 125, BACKGROUND, 1, "below the popup");
+
+    app.text_input_disable().unwrap();
+    session.wait(&mut [&mut app, &mut ime], "the popup is hidden", |s| {
+        window(s, "field").is_some_and(|w| {
+            !w["surfaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["role"] == "input-popup")
+        })
+    });
+    let (encoded, _) = session.screenshot("hidden");
+    assert_rgb(
+        &encoded,
+        80,
+        108,
+        BACKGROUND,
+        1,
+        "no popup once the field is disabled",
+    );
     session.assert_script_healthy();
     session.assert_renderer_clean();
     session.quit();
