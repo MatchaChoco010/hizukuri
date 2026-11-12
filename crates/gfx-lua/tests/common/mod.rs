@@ -124,6 +124,18 @@ pub fn assert_close(actual: [f32; 4], expected: [f32; 4], tolerance: f32, what: 
     }
 }
 
+/// How far an 8-bit UNORM channel written from a float may be from the
+/// round-to-nearest code value. Vulkan converts a float `f` to unsigned
+/// normalized fixed-point by taking either of the two code values closest to
+/// `f × 255`: rounding to nearest is recommended, not required, and only a
+/// product that is exactly an integer must come out unchanged. `0.5` (127.5)
+/// may be written as 127 or 128.
+pub const UNORM8_CONVERSION: u8 = 1;
+
+pub fn close8(actual: [u8; 4], expected: [u8; 4], tolerance: u8) -> bool {
+    (0..4).all(|c| actual[c].abs_diff(expected[c]) <= tolerance)
+}
+
 pub fn assert_close8(actual: [u8; 4], expected: [u8; 4], tolerance: u8, what: &str) {
     for c in 0..4 {
         assert!(

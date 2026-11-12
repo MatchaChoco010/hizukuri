@@ -1,5 +1,20 @@
 use gfx_core::*;
 
+/// Checks an 8-bit UNORM pixel written from a float colour. Vulkan converts
+/// a float `f` to unsigned normalized fixed-point by taking either of the two
+/// code values closest to `f × 255`: rounding to nearest is recommended, not
+/// required, and only a product that is exactly an integer must come out
+/// unchanged. So a channel may be one code value away from `expected` (the
+/// round-to-nearest value); `0.5` (127.5) may be written as 127 or 128.
+fn assert_unorm8(actual: &[u8], expected: [u8; 4]) {
+    for c in 0..4 {
+        assert!(
+            actual[c].abs_diff(expected[c]) <= 1,
+            "channel {c}: got {actual:?}, expected {expected:?} (give or take 1)"
+        );
+    }
+}
+
 #[test]
 fn triangle_smoke() {
     let mut gpu = Gpu::new(GpuConfig::for_tests()).expect("gpu");
@@ -64,7 +79,7 @@ fn triangle_smoke() {
     gpu.end_pass().unwrap();
     gpu.end_frame().unwrap();
     let pixels = gpu.read_image(target).unwrap();
-    assert_eq!(&pixels[..4], &[255, 128, 64, 255]);
+    assert_unorm8(&pixels[..4], [255, 128, 64, 255]);
     assert_eq!(validation_error_count(), 0, "{:?}", validation_messages());
 }
 
@@ -167,6 +182,7 @@ fn glsl_fragment_shader() {
     gpu.end_pass().unwrap();
     gpu.end_frame().unwrap();
     let pixels = gpu.read_image(target).unwrap();
-    assert_eq!(&pixels[..4], &[255, 100, 50, 255]);
+    // 200/255 × 0.5 × 255 is 100 only up to float rounding, so 99 to 101.
+    assert_unorm8(&pixels[..4], [255, 100, 50, 255]);
     assert_eq!(validation_error_count(), 0, "{:?}", validation_messages());
 }
