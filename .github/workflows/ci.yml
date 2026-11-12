@@ -10,7 +10,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [develop, release, main]
+    branches: [develop, release, main, "release-candidate/**"]
 
 permissions:
   contents: read
@@ -31,8 +31,9 @@ env:
 
 jobs:
   # Decides whether anything other than documentation changed. The jobs
-  # below are skipped for documentation-only changes; `result` still
-  # reports, so it can be the one required check.
+  # below are skipped for documentation-only changes, except on a release
+  # candidate branch, where everything runs (tools/ci-changes.sh); `result`
+  # still reports, so it can be the one required check.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -46,32 +47,11 @@ jobs:
       - id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
-        run: |
-          if [ "$EVENT_NAME" = pull_request ]; then
-            range="$PR_BASE...HEAD"
-          else
-            range="$PUSH_BEFORE..HEAD"
-          fi
-          # When the range cannot be resolved (first push of a branch,
-          # forced push), run everything.
-          if ! files="$(git diff --name-only "$range" --)"; then
-            echo "cannot diff $range; running all checks"
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          code=false
-          while IFS= read -r file; do
-            case "$file" in
-              "" | docs/* | *.md) ;;
-              *)
-                code=true
-                echo "not documentation: $file"
-                ;;
-            esac
-          done <<< "$files"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
+          PUSH_CREATED: ${{ github.event.created }}
+        run: tools/ci-changes.sh
 
   # `tools/ci.sh lint` and `tools/ci.sh test`, side by side: the run takes as
   # long as the slower of the two.
@@ -182,7 +162,7 @@ jobs:
 
   # The one check to require on the branch: it passes when both parts of
   # `check` passed, or were skipped for a documentation-only change, and
-  # fails otherwise.
+  # fails otherwise. On a release candidate branch, a skipped `check` fails.
   result:
     needs: [changes, check]
     if: always()
@@ -192,7 +172,11 @@ jobs:
       - env:
           CHANGES: ${{ needs.changes.result }}
           CHECK: ${{ needs.check.result }}
+          REF: ${{ github.ref }}
         run: |
           echo "changes: $CHANGES, check: $CHECK"
           test "$CHANGES" = success
-          test "$CHECK" = success || test "$CHECK" = skipped
+          case "$REF" in
+            refs/heads/release-candidate/*) test "$CHECK" = success ;;
+            *) test "$CHECK" = success || test "$CHECK" = skipped ;;
+          esac

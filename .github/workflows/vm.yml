@@ -7,12 +7,12 @@
 # Every action is pinned to a commit; the comment after it names the release.
 name: VM
 
+# A push of documentation only skips the session, except on a release
+# candidate branch: the `changes` job decides that (tools/ci-changes.sh), not
+# a paths filter on the trigger, which would apply to every branch alike.
 on:
   push:
-    branches: [develop, release]
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
+    branches: [develop, release, "release-candidate/**"]
   schedule:
     # Every night (UTC), so that a change in what the runners provide shows
     # up without a push.
@@ -36,7 +36,29 @@ env:
   HIZUKURI_VM_MEMORY: 6G
 
 jobs:
+  # Decides whether anything other than documentation changed. Schedules,
+  # manual runs and release candidate branches always run the session.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_CREATED: ${{ github.event.created }}
+        run: tools/ci-changes.sh
+
   session:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
