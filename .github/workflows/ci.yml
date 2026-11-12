@@ -1,0 +1,198 @@
+# Runs `tools/ci.sh` on lavapipe, inside the Nix dev shell that flake.lock
+# pins. See docs/dev/nix-environment.md and docs/dev/testing-and-ci.md.
+#
+# Nothing here needs a GPU, a display, a secret or an account: the runner
+# only has to fetch the repository and its public dependencies.
+#
+# Every action is pinned to a commit; the comment after it names the release.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request replaces the run that is still going.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Standard runners have 4 CPUs.
+  CARGO_BUILD_JOBS: "4"
+  # Smaller and faster builds, and a smaller cache. Neither changes what is
+  # checked.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  # Decides whether anything other than documentation changed. The jobs
+  # below are skipped for documentation-only changes; `result` still
+  # reports, so it can be the one required check.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then
+            range="$PR_BASE...HEAD"
+          else
+            range="$PUSH_BEFORE..HEAD"
+          fi
+          # When the range cannot be resolved (first push of a branch,
+          # forced push), run everything.
+          if ! files="$(git diff --name-only "$range" --)"; then
+            echo "cannot diff $range; running all checks"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r file; do
+            case "$file" in
+              "" | docs/* | *.md) ;;
+              *)
+                code=true
+                echo "not documentation: $file"
+                ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # `tools/ci.sh lint` and `tools/ci.sh test`, side by side: the run takes as
+  # long as the slower of the two.
+  check:
+    name: check (${{ matrix.part }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    # A run without any cache builds every dependency.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [lint, test]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      # Keeps /nix between runs. Everything in it also comes from
+      # cache.nixos.org and static.rust-lang.org, so a miss only costs time.
+      # Both parts read the same cache; one of them saves it, and only on
+      # main, so pull requests cannot fill the cache.
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml') }}
+          save: ${{ github.event_name == 'push' && matrix.part == 'test' }}
+
+      - name: Fetch the dev shell
+        run: nix develop .#ci --command true
+
+      # Evaluates every output of the flake: the dev shells, and the guest of
+      # the verification VM (tools/vm/guest.nix). Nothing is built.
+      - name: Check the flake
+        if: matrix.part == 'lint'
+        run: nix flake check
+
+      - name: Show the Vulkan driver
+        if: matrix.part == 'test'
+        run: nix develop .#ci --command vulkaninfo --summary
+
+      # lavapipe exports dma-bufs through /dev/udmabuf, and the tests of the
+      # dma-buf paths need that. The device belongs to a group the runner's
+      # user is not in. Where it cannot be used, those tests are left out,
+      # and the summary of the job says so.
+      - name: Make /dev/udmabuf usable, or leave its tests out
+        if: matrix.part == 'test'
+        run: |
+          if [ -e /dev/udmabuf ]; then
+            sudo chmod a+rw /dev/udmabuf || true
+          fi
+          if [ -r /dev/udmabuf ] && [ -w /dev/udmabuf ]; then
+            echo "/dev/udmabuf is usable; the dma-buf tests run"
+            exit 0
+          fi
+          message="This runner has no usable /dev/udmabuf, so the tests that need it (dma-bufs on lavapipe) were left out."
+          echo "HIZUKURI_TEST_SKIP_UDMABUF=1" >> "$GITHUB_ENV"
+          echo "::warning title=dma-buf tests left out::$message"
+          {
+            echo "### dma-buf tests left out"
+            echo
+            echo "$message"
+            echo
+            echo "\`HIZUKURI_TEST_SKIP_UDMABUF=1\` was set for this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The cargo registry, the git dependencies (Smithay, vulkan-rs) and the
+      # build results. The two parts build different things, so each has its
+      # own cache. The target directory is named after the libraries of the
+      # dev shell, so flake.lock is part of the key.
+      - id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ matrix.part }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.part }}-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}-
+
+      - name: Run the checks
+        run: nix develop .#ci --command tools/ci.sh "$PART"
+        env:
+          PART: ${{ matrix.part }}
+
+      - if: github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+      # Screenshots and logs of the tests.
+      - if: failure() && matrix.part == 'test'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-output
+          path: target/*/test-output/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The one check to require on the branch: it passes when both parts of
+  # `check` passed, or were skipped for a documentation-only change, and
+  # fails otherwise.
+  result:
+    needs: [changes, check]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          CHECK: ${{ needs.check.result }}
+        run: |
+          echo "changes: $CHANGES, check: $CHECK"
+          test "$CHANGES" = success
+          test "$CHECK" = success || test "$CHECK" = skipped
