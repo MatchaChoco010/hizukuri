@@ -9,7 +9,7 @@ use proto_gfx_core::*;
 
 mod common;
 
-through_both_entries!(validation_layer_sees_misuse_when_checks_are_off);
+use common::{ShaderLanguage, ShaderSource};
 
 const SHADER: &str = r#"
 @group(0) @binding(0) var tex: texture_2d<f32>;
@@ -21,6 +21,7 @@ const SHADER: &str = r#"
 }
 "#;
 
+#[test]
 fn validation_layer_sees_misuse_when_checks_are_off() {
     let config = GpuConfig::for_tests();
     if !config.validation {

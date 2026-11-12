@@ -1,39 +1,24 @@
 //! Shaders a script names (`gfx.create_shader({ shader = ..., entry = ... })`):
 //! the host's loader gives their SPIR-V, which goes through the GPU API's
-//! SPIR-V entry point.
+//! SPIR-V checks.
 
 mod common;
 
 use std::rc::Rc;
 
 use common::{host_with, patient};
-use proto_gfx_core::{NagaCompiler, ShaderCompiler, ShaderLanguage, ShaderSource, ShaderStage};
 use proto_gfx_lua::{HostOptions, ShaderLoader};
-
-/// SPIR-V for the loader, written here by naga. naga's compiler writes
-/// SPIR-V 1.3 and the API takes 1.4 and later; for a shader that uses no
-/// resource, the module is the same in 1.4, so only the version changes.
-fn spirv(stage: ShaderStage, source: &str) -> Vec<u8> {
-    let mut words = NagaCompiler
-        .compile(&ShaderSource {
-            stage,
-            language: ShaderLanguage::Wgsl,
-            source,
-            entry: "main",
-        })
-        .unwrap()
-        .spirv;
-    words[1] = 0x0001_0400;
-    words.iter().flat_map(|w| w.to_le_bytes()).collect()
-}
-
-const FRAGMENT: &str = "@fragment fn main() -> @location(0) vec4<f32> { return vec4(1.0); }";
 
 fn with_loader() -> HostOptions {
     HostOptions {
         shader_loader: Some(ShaderLoader(Rc::new(|name: &str, entry: &str| {
             match (name, entry) {
-                ("shaders/plain.slang", "main") => Ok(spirv(ShaderStage::Fragment, FRAGMENT)),
+                // The fragment shader of the triangle example.
+                ("shaders/plain.slang", entry) => {
+                    (proto_gfx_lua::shaders::examples().0)("shaders/triangle.slang", entry)
+                }
+                // Bytes that are not a module, as from a damaged file.
+                ("shaders/broken.slang", "main") => Ok(b"#version 450\nvoid main() {}\n".to_vec()),
                 _ => Err(format!("no shader {name} with entry point `{entry}`")),
             }
         }))),
@@ -47,16 +32,18 @@ fn a_named_shader_is_created_from_its_spirv() {
     host.load(
         "named",
         r#"
-        local shader = gfx.create_shader({ stage = "fragment", shader = "shaders/plain.slang", entry = "main" })
+        local shader = gfx.create_shader({ stage = "fragment", shader = "shaders/plain.slang", entry = "fs" })
         assert(type(shader) == "number")
         local ok, err = pcall(gfx.create_shader, { stage = "fragment", shader = "shaders/other.slang", entry = "main" })
         assert(not ok and string.find(tostring(err), "no shader shaders/other.slang", 1, true), tostring(err))
         -- The module is fragment; asking for a vertex shader is refused by the
         -- SPIR-V checks.
-        ok, err = pcall(gfx.create_shader, { stage = "vertex", shader = "shaders/plain.slang", entry = "main" })
+        ok, err = pcall(gfx.create_shader, { stage = "vertex", shader = "shaders/plain.slang", entry = "fs" })
         assert(not ok and string.find(tostring(err), "vertex", 1, true), tostring(err))
+        ok, err = pcall(gfx.create_shader, { stage = "fragment", shader = "shaders/broken.slang", entry = "main" })
+        assert(not ok and string.find(tostring(err), "ShaderCompile", 1, true), tostring(err))
         ok, err = pcall(gfx.create_shader, { stage = "fragment", shader = "shaders/plain.slang", source = "x" })
-        assert(not ok and string.find(tostring(err), "not both", 1, true), tostring(err))
+        assert(not ok and string.find(tostring(err), "not accepted", 1, true), tostring(err))
         "#,
     )
     .unwrap();

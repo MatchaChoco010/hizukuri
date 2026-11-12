@@ -50,7 +50,7 @@ Wayland のサーバー側（Smithay）と、KMS のバックエンドが使う�
   devShell の外でビルドするなら、同じ版の `slangc` を用意する。見つからなければ、ビルドは、その旨を書いて失敗する。
 - C++ のコンパイラーが要る。`proto-gfx-core` が使う SPIRV-Tools（crate `spirv-tools`）は、C++ の源からビルドされる。
 - スクリプトは、shader を Slang の源の名前で指す（[スクリプトの層](../prototype/script-layer.md#project-の-shader)）。
-  源を文字列で渡す経路（WGSL と GLSL。実行時に `proto-gfx-core` が `naga` で SPIR-V にする）も、いまは残っている。
+  ランタイムは、shader をコンパイルしない。
 - スクリプト言語は、決まっていない。いまは、仮の言語として Luau を使っている。`mlua` が、Luau をソースからビルドする。
   システムのライブラリは、要らない。
 

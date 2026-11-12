@@ -133,7 +133,7 @@ pub struct HostOptions {
     /// own global table.
     pub sandbox: bool,
     /// Where shaders named by the script come from. Without one, a script
-    /// can only give shader source.
+    /// cannot create shaders.
     pub shader_loader: Option<ShaderLoader>,
 }
 

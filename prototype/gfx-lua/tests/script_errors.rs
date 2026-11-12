@@ -91,8 +91,9 @@ fn exceptions_and_type_errors() {
         function handle_is_table() gfx.destroy({}) end
         function handle_is_fraction() gfx.destroy(1.5) end
         function handle_is_huge() gfx.destroy(1e300) end
-        function shader_no_source() gfx.create_shader({ stage = "vertex" }) end
-        function shader_bad_stage() gfx.create_shader({ stage = "geometry", source = "" }) end
+        function shader_no_name() gfx.create_shader({ stage = "vertex" }) end
+        function shader_bad_stage() gfx.create_shader({ stage = "geometry", shader = "shaders/triangle.slang" }) end
+        function shader_source() gfx.create_shader({ stage = "fragment", source = "fn main() {}" }) end
         function pass_no_table() gfx.begin_pass(nil) end
         function pass_bad_load() gfx.begin_pass({ color = { { image = 0, load = "maybe" } } }) end
         function push_table() gfx.push(0, {}) end
@@ -126,8 +127,9 @@ fn exceptions_and_type_errors() {
         "buffer_bad_field",
         "buffer_bad_usage",
         "buffer_no_usage",
-        "shader_no_source",
+        "shader_no_name",
         "shader_bad_stage",
+        "shader_source",
         "pass_bad_load",
         "push_table",
     ] {
@@ -208,7 +210,7 @@ fn scripts_can_catch_gpu_errors() {
             table.insert(caught, tostring(err))
             ok, err = pcall(gfx.write_buffer, target, 0, "abcd")
             table.insert(caught, tostring(err))
-            ok, err = pcall(gfx.create_shader, { stage = "fragment", source = "fn main( {" })
+            ok, err = pcall(gfx.create_shader, { stage = "fragment", shader = "shaders/missing.slang" })
             table.insert(caught, tostring(err))
             gfx.begin_pass({ color = { { image = target, load = "clear", clear = { 0, 0, 0, 1 } } } })
             ok, err = pcall(gfx.draw, 3)

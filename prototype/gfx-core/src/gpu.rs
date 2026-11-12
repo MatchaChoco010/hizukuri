@@ -24,19 +24,14 @@ use crate::error::{ErrorCode, GfxError, Result, bail};
 use crate::format::{Format, FormatCaps, NumClass};
 use crate::handle::{Handle, Kind, Pool};
 use crate::record::{BindTable, PassState};
-use crate::shader::{
-    BindingKind, CompiledShader, MAX_BINDINGS, NagaCompiler, Reflection, ShaderCompiler,
-    ShaderSource, ShaderStage,
-};
+use crate::shader::{BindingKind, CompiledShader, MAX_BINDINGS, Reflection, ShaderStage};
 
 static NEXT_EPOCH: AtomicU32 = AtomicU32::new(1);
 
 pub(crate) const FRAMES_IN_FLIGHT: usize = 2;
-/// Longest shader source accepted, in bytes.
-pub const MAX_SHADER_SOURCE_BYTES: usize = 256 << 10;
 /// Largest SPIR-V module accepted, in bytes.
 pub const MAX_SPIRV_BYTES: usize = 1 << 20;
-/// Stack of the thread the shader compiler runs on. Only touched pages are
+/// Stack of the thread the SPIR-V checks run on. Only touched pages are
 /// committed.
 const COMPILER_STACK_BYTES: usize = 1 << 30;
 pub(crate) const MAX_VERTEX_BUFFERS: usize = 8;
@@ -195,7 +190,6 @@ pub struct ImageInfo {
 /// A device plus everything a script created on it.
 pub struct Gpu {
     pub(crate) ctx: Option<DeviceCtx>,
-    compiler: Box<dyn ShaderCompiler + Send + Sync>,
     pub(crate) config: GpuConfig,
     pub(crate) checks: bool,
     /// Why the device is unusable, if it is.
@@ -239,15 +233,7 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    /// Creates a device using the naga shader compiler.
     pub fn new(config: GpuConfig) -> Result<Self> {
-        Self::with_compiler(config, Box::new(NagaCompiler))
-    }
-
-    pub fn with_compiler(
-        config: GpuConfig,
-        compiler: Box<dyn ShaderCompiler + Send + Sync>,
-    ) -> Result<Self> {
         let limits = config.limits;
         let mut ctx = DeviceCtx::create(
             config.validation,
@@ -284,7 +270,6 @@ impl Gpu {
             slots: Pool::new(Kind::Slot, epoch, ctx.resource_heap.slots),
             samplers: Pool::new(Kind::Sampler, epoch, ctx.sampler_heap.slots),
             ctx: Some(ctx),
-            compiler,
             config,
             checks: true,
             lost: None,
@@ -927,20 +912,6 @@ impl Gpu {
 
     // ----- shaders ----------------------------------------------------------
 
-    pub fn create_shader(&mut self, source: &ShaderSource<'_>) -> Result<Handle> {
-        self.check_shader_capacity()?;
-        if source.source.len() > MAX_SHADER_SOURCE_BYTES {
-            bail!(
-                ShaderCompile,
-                "shader source is {} bytes; the limit is {MAX_SHADER_SOURCE_BYTES}",
-                source.source.len()
-            );
-        }
-        let compiler = &*self.compiler;
-        let compiled = run_shader_tool("the shader compiler", || compiler.compile(source))?;
-        self.insert_shader(compiled, source.stage)
-    }
-
     /// Creates a shader from a SPIR-V module (the bytes of a `.spv` file).
     ///
     /// The module is not trusted: it is validated, its indices are clamped,
@@ -988,7 +959,7 @@ impl Gpu {
         if compiled.reflection.stage != stage {
             bail!(
                 ShaderCompile,
-                "the compiler returned a shader of another stage"
+                "the SPIR-V checks returned a shader of another stage"
             );
         }
         self.shaders
@@ -1541,7 +1512,7 @@ impl Gpu {
                 );
             }
         }
-        // SAFETY: the shader was produced by the compiler and its interface is
+        // SAFETY: the shader passed the SPIR-V checks and its interface is
         // fully mapped to the descriptor heap by `stage_mappings`.
         let pipeline = unsafe {
             let ctx = self.ctx();
@@ -2212,25 +2183,25 @@ fn blend_op(op: BlendOp) -> vk::BlendOp {
     }
 }
 
-/// Runs a shader compiler or the SPIR-V checks on script input.
+/// Runs the SPIR-V checks on script input.
 ///
 /// - A panic must not take the process down: it is caught.
-/// - These recurse over expressions, and a long chain such as
-///   `1.0 + 1.0 + ...` overflows a normal stack, which aborts the process and
-///   cannot be caught. Running on a thread with a very large stack, together
-///   with the input size limits, keeps the inputs measured so far away from
-///   that. It is a mitigation, not a proof.
+/// - The checks recurse over the module, and a deeply nested one could
+///   overflow a normal stack, which aborts the process and cannot be caught.
+///   Running on a thread with a very large stack, together with the size
+///   limit, keeps the inputs measured so far away from that. It is a
+///   mitigation, not a proof.
 fn run_shader_tool(
     what: &str,
     f: impl FnOnce() -> std::result::Result<CompiledShader, String> + Send,
 ) -> Result<CompiledShader> {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .name("shader-compiler".into())
+            .name("spirv-checks".into())
             .stack_size(COMPILER_STACK_BYTES)
             .spawn_scoped(scope, f)
             .map_err(|e| -> Box<dyn std::any::Any + Send> {
-                Box::new(format!("cannot start the compiler thread: {e}"))
+                Box::new(format!("cannot start the checking thread: {e}"))
             })
             .and_then(|thread| thread.join())
     })

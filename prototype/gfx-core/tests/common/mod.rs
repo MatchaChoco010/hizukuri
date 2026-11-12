@@ -1,76 +1,42 @@
-//! Shared by the tests of `proto-gfx-core`: creating a shader through either
-//! of the API's two entry points, so that one test body checks both.
-//!
-//! - [`Entry::Source`]: `Gpu::create_shader` with the WGSL or GLSL source.
-//! - [`Entry::Spirv`]: naga turns the source into SPIR-V here, in the test,
-//!   with none of the API's checks and no bounds checks, and the module goes
-//!   to `Gpu::create_shader_spirv`. Whatever the API rejects or clamps, the
-//!   SPIR-V entry point did.
+//! Shared by the tests of `proto-gfx-core`: shaders that a test gives as
+//! short WGSL or GLSL text. naga turns the text into SPIR-V here, in the
+//! test, with none of the API's checks and no bounds checks, and the module
+//! goes to `Gpu::create_shader_spirv`. Whatever is refused or clamped, the
+//! API did.
 
 #![allow(dead_code)]
-
-use std::cell::Cell;
 
 use proto_gfx_core::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Entry {
-    Source,
-    Spirv,
+pub enum ShaderLanguage {
+    Wgsl,
+    Glsl,
 }
 
-thread_local! {
-    static ENTRY: Cell<Entry> = const { Cell::new(Entry::Source) };
+/// A shader as a test writes it.
+pub struct ShaderSource<'a> {
+    pub stage: ShaderStage,
+    pub language: ShaderLanguage,
+    pub source: &'a str,
+    /// Entry point name. GLSL always uses `main`.
+    pub entry: &'a str,
 }
 
-/// The entry point the current test uses.
-pub fn entry() -> Entry {
-    ENTRY.with(Cell::get)
-}
-
-/// Runs `body` with shaders created through `entry`.
-pub fn run(entry: Entry, body: fn()) {
-    ENTRY.with(|e| e.set(entry));
-    body();
-}
-
-/// Defines, for each named function, a module with two tests: `source` and
-/// `spirv`, which run the function through each entry point.
-#[macro_export]
-macro_rules! through_both_entries {
-    ($($name:ident),* $(,)?) => {
-        $(
-            mod $name {
-                #[test]
-                fn source() {
-                    super::common::run(super::common::Entry::Source, super::$name);
-                }
-                #[test]
-                fn spirv() {
-                    super::common::run(super::common::Entry::Spirv, super::$name);
-                }
-            }
-        )*
-    };
-}
-
-/// Creates a shader through the entry point of the current test.
+/// Writes the SPIR-V of `source` and creates the shader from it. What naga
+/// refuses comes back as a `ShaderCompile` error, as the build tool's would
+/// stop the shader before the API sees it.
 pub fn create_shader(gpu: &mut Gpu, source: &ShaderSource<'_>) -> Result<Handle> {
-    match entry() {
-        Entry::Source => gpu.create_shader(source),
-        Entry::Spirv => {
-            let spirv = naga_spirv(source)
-                .map_err(|message| GfxError::new(ErrorCode::ShaderCompile, message))?;
-            gpu.create_shader_spirv(source.stage, source.entry, &spirv)
-        }
-    }
+    let spirv =
+        naga_spirv(source).map_err(|message| GfxError::new(ErrorCode::ShaderCompile, message))?;
+    gpu.create_shader_spirv(source.stage, source.entry, &spirv)
 }
 
 /// WGSL or GLSL to SPIR-V with naga alone. When the module has no entry point
 /// of `source.entry` and `source.stage`, its first entry point is written
 /// instead, so that the API sees, and has to refuse, a module that does not
 /// match what it is asked for. naga runs on a large stack and its panics are
-/// caught, as in `Gpu::create_shader`.
+/// caught.
 pub fn naga_spirv(source: &ShaderSource<'_>) -> std::result::Result<Vec<u8>, String> {
     let owned = (
         source.stage,

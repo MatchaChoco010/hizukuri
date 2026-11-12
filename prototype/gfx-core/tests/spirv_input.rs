@@ -10,6 +10,8 @@ use spirv_tools::assembler::Assembler;
 
 mod common;
 
+use common::{ShaderLanguage, ShaderSource};
+
 fn wgsl_spirv(stage: ShaderStage, source: &str, entry: &str) -> Vec<u8> {
     common::naga_spirv(&ShaderSource {
         stage,
