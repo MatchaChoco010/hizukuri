@@ -211,29 +211,37 @@ workflow は、3 つある。
 実際の GPU のドライバーの上で、hizukuri に要るものが、どこまで動くかを調べる。**何も判定しない。**
 調べた結果を、ジョブの要約と、artifact（14 日）に残す。調べる step が失敗しても、ジョブは、先へ進む。
 
-- 契機は、手動（`workflow_dispatch`）だけである。入力の `gpu` で、`amd`、`nvidia`、`both` を選ぶ。
+- 契機は、手動（`workflow_dispatch`）だけである。
 - runner は、[RunsOn](https://runs-on.com) が、ジョブごとに起動して、終わると消す、AWS のインスタンスである。
-  ジョブの `runs-on` のラベルで、インスタンスの種類と image を指定している。秘密の値は、使わない。
+  ジョブの `runs-on` のラベルで、インスタンスの種類、image、ディスクの大きさを指定している。秘密の値は、使わない。
+- ジョブは、`nvidia` の 1 つである。インスタンスは `g4dn.xlarge`（NVIDIA T4）、image は `ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている）。
+- 入力の `nvidia_driver` に、NVIDIA のドライバーの版（`download.nvidia.com` にあるもの）を入れると、image のドライバーを、その版に入れ替えてから調べる。
+  空なら、image のドライバーのまま調べる。
 - キャッシュは、使わない。step ごとの時間が、何も無い状態から始めた機械での時間になる。
-- 準備のうち、システムを変えるもの（パッケージの導入、kernel の module の読み込み、`/dev/dri/` のノードの権限）は、workflow の step が行う。
-  インスタンスは、そのジョブのためだけにある。`tools/gpu-report.sh` は、システムを変えない。
+- 準備のうち、システムを変えるもの（パッケージの導入、ドライバーの入れ替え、kernel の module の読み込み、`/dev/dri/` のノードの権限）は、
+  workflow の step が行う。インスタンスは、そのジョブのためだけにある。`tools/gpu-report.sh` は、システムを変えない。
 
-| ジョブ | インスタンスと image | 調べること |
+devShell は、NVIDIA のドライバーを持たない。ドライバーは、インスタンスの kernel の module と、版が合っている必要がある。
+そこで、インスタンスに入っている NVIDIA のライブラリだけを、1 つのディレクトリに集め、devShell の中で、`LD_LIBRARY_PATH` をそこに向ける。
+ドライバーの manifest は GLX のライブラリ（`libGLX_nvidia.so.0`）を指していて、これは X11 のライブラリを要る。次の 2 通りを、順に試す。
+
+| 方法 | `VK_DRIVER_FILES` | 足すライブラリ |
 | --- | --- | --- |
-| `amd` | `g4ad.xlarge`（AMD Radeon Pro V520）、`ubuntu24-full-x64` | 下の表 |
-| `nvidia` | `g4dn.xlarge`（NVIDIA T4）、`ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている） | ドライバーの版（`nvidia-smi`）、`/dev/dri/` のノード、`drm_info`、`tools/gpu-report.sh`（image の loader で。次に、devShell の中で、image の NVIDIA のライブラリだけを dynamic linker に見せて）。ビルドとテストは、しない |
+| EGL | ドライバーの manifest の、ライブラリの名前を `libEGL_nvidia.so.0` に替えたもの | なし |
+| GLX | ドライバーの manifest | `flake.lock` の nixpkgs の `libxext` と `libx11` |
 
-`amd` のジョブの step:
+どちらかで、Vulkan のデバイスが見えたら、その方法で、後の step（ビルド、自己診断、テスト）を回す。見えなければ、それらの step は、飛ばす。
 
 | step | 内容 |
 | --- | --- |
-| Load amdgpu | `linux-modules-extra` と `linux-firmware` を入れて、kernel の `amdgpu` を読み込む。kernel のログのうち、GPU に関わる行を残す |
+| Describe the image's NVIDIA driver | image のドライバーの版（`nvidia-smi`）と、その入り方（パッケージか、NVIDIA の installer か） |
+| Replace the NVIDIA driver | 入力の `nvidia_driver` があるときだけ。古いドライバーを外し、NVIDIA の installer で、指定の版を入れる |
 | Load vkms | 仮想の KMS のドライバー（vkms）を読み込む |
-| Describe the Vulkan driver | devShell の中で、`VK_DRIVER_FILES` を、devShell の Mesa の RADV の manifest に向けて、`tools/gpu-report.sh` |
-| Describe the KMS devices | `hizukuri kms-info --summary` と、`kms-info --anonymize`。別の step で、`drm_info` |
-| Self test on the GPU's own display | amdgpu の card で、`hizukuri kms-selftest` |
-| Self test on vkms | RADV で描いて、vkms に出す `kms-selftest`。`--scanout cpu` と `--scanout dmabuf` の 2 回。seat は、libseat の `noop` を使う |
-| Run the tests on the GPU | `VK_DRIVER_FILES` を RADV に向け、`HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test` |
+| Describe the Vulkan driver, outside the dev shell | image の loader と `vulkaninfo` で、`tools/gpu-report.sh` |
+| Describe the Vulkan driver, inside the dev shell | 上の 2 通りの方法で、それぞれ、`tools/gpu-report.sh` |
+| Describe the KMS devices | `drm_info` と、`hizukuri kms-info --summary`、`kms-info --anonymize` |
+| Self test on vkms | GPU で描いて、vkms に出す `hizukuri kms-selftest`。`--scanout cpu` と `--scanout dmabuf` の 2 回。seat は、libseat の `noop` を使う |
+| Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test` |
 
 ### 共通のこと
 
