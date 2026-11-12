@@ -11,7 +11,7 @@ use std::os::unix::net::UnixStream;
 use proto_backend::headless::{HeadlessBackend, HeadlessConfig, HeadlessOutputConfig};
 use proto_compositor::compositor::{Compositor, CompositorOptions};
 use proto_compositor::control::Request;
-use proto_compositor::scene::FlatScene;
+use proto_compositor::scene::NullScene;
 use proto_test_client::{ClientEvent, ClientOptions, PopupOptions, SurfaceKind, TestClient};
 use serde_json::Value;
 
@@ -43,7 +43,7 @@ impl Fixture {
             ..Default::default()
         };
         let backend = HeadlessBackend::new(&config, None).unwrap();
-        let compositor = Compositor::new(options, backend, Box::new(FlatScene::new(None))).unwrap();
+        let compositor = Compositor::new(options, backend, Box::new(NullScene::new())).unwrap();
         Self {
             compositor,
             clients: Vec::new(),

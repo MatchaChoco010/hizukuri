@@ -1,10 +1,10 @@
 //! The compositor core.
 //!
-//! [`Compositor`] owns the Wayland server, the layout, the scene and the
-//! backend, and moves information between them:
+//! [`Compositor`] owns the Wayland server, the window manager, the scene
+//! and the backend, and moves information between them:
 //!
 //! ```text
-//! clients ── proto-wl ──▶ events ──▶ layout (logical placement)
+//! clients ── proto-wl ──▶ events ──▶ window manager (logical placement)
 //!                                          │
 //!                                          ▼
 //!                     scene (visual state, drawing, hit testing)
@@ -33,8 +33,9 @@ use proto_backend::{AxisSource, Backend, BackendError, BackendEvent, InputEvent,
 use proto_color::{
     AlphaMode, CompositeSpace, DecodeTransform, EncodeTransform, ImageDescription, Primaries,
 };
-use proto_layout::{Layout, Point, Rect, Size};
+use proto_layout::{Point, Rect, Size};
 
+use crate::fallback;
 use crate::wm::{Modifiers, WindowManager, WmRequest};
 use proto_wl::{
     CursorState, OutputConfig, ServerConfig, SurfaceId, SurfaceRole, WlError, WlEvent, WlServer,
@@ -149,15 +150,14 @@ fn to_layout(id: WlWindowId) -> LayoutWindowId {
 }
 
 impl<B: Backend> Compositor<B> {
-    /// Creates the core with the floating layout written in Rust. `scene`
-    /// draws and hit tests; see [`crate::scene::FlatScene`] for the one used
-    /// for verification.
+    /// Creates the core with the fallback's window management
+    /// ([`fallback::Windows`]). `scene` draws and hit tests.
     pub fn new(
         options: CompositorOptions,
         backend: B,
         scene: Box<dyn Scene>,
     ) -> Result<Self, CompositorError> {
-        Self::with_window_manager(options, backend, scene, Box::new(Layout::new()))
+        Self::with_window_manager(options, backend, scene, Box::new(fallback::Windows::new()))
     }
 
     /// Creates the core. `scene` draws and hit tests; `wm` places windows

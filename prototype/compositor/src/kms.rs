@@ -15,13 +15,16 @@ use proto_backend::kms::session::{self, OpenedSession};
 use proto_backend::{Backend, BackendHost};
 use proto_color::{CompositeSpace, ImageDescription};
 use proto_compositor::safety::{TakeoverRequest, Watchdog};
-use proto_compositor::selftest::SelfTest;
+use proto_compositor::selftest::{PatternRenderer, SelfTest};
 use proto_render::{DeviceSelector, RenderError, Renderer};
 use serde_json::json;
 
 pub use proto_backend::kms::session::RealKmsBackend;
 
-use crate::{check_real_hardware, create_renderer, desktop_session_present, insert_common_sources};
+use crate::{
+    check_real_hardware, create_renderer, desktop_session_present, gpu_config,
+    insert_common_sources,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ScanoutArg {
@@ -100,12 +103,10 @@ pub fn parse_mode(text: &str) -> Result<ModeRequest, String> {
     })
 }
 
-/// What the caller wants from the renderer.
+/// What the caller wants from the Rust renderer.
 pub struct RendererRequest {
     pub selector: DeviceSelector,
     pub validation: bool,
-    /// Run without a renderer.
-    pub disabled: bool,
 }
 
 /// A started KMS backend with what belongs to it.
@@ -115,17 +116,15 @@ pub struct Started {
     pub watchdog: Option<Watchdog>,
 }
 
-/// Creates the renderer for a KMS device. With `auto` that is the GPU the
-/// device belongs to; when Vulkan has no such device (a software
-/// rasterizer only), any device will do and frames are copied on the CPU.
-/// Returns the renderer and whether it runs on the KMS device's GPU.
+/// Creates the Rust renderer (`--renderer rust`) for a KMS device. With
+/// `auto` that is the GPU the device belongs to; when Vulkan has no such
+/// device (a software rasterizer only), any device will do and frames are
+/// copied on the CPU. Returns the renderer and whether it runs on the KMS
+/// device's GPU.
 pub fn pick_renderer(
     request: &RendererRequest,
     device_number: Option<(u32, u32)>,
-) -> Result<(Option<Renderer>, bool), String> {
-    if request.disabled {
-        return Ok((None, false));
-    }
+) -> Result<(Renderer, bool), String> {
     let renderer = match (&request.selector, device_number) {
         (DeviceSelector::Auto, Some((major, minor))) => {
             match create_renderer(DeviceSelector::DrmNode { major, minor }, request.validation) {
@@ -146,7 +145,7 @@ pub fn pick_renderer(
     };
     let on_kms_device =
         device_number.is_some() && renderer.device_info().drm_primary == device_number;
-    Ok((Some(renderer), on_kms_device))
+    Ok((renderer, on_kms_device))
 }
 
 fn start_watchdog(seconds: f64) -> Option<Watchdog> {
@@ -434,7 +433,7 @@ pub struct SelftestArgs {
     #[arg(long)]
     pub vulkan_validation: bool,
 
-    /// Run without a renderer: black frames, timing only.
+    /// Run without drawing the pattern: black frames, timing only.
     #[arg(long)]
     pub no_renderer: bool,
 
@@ -446,7 +445,7 @@ pub struct SelftestArgs {
 
 struct SelftestApp {
     backend: RealKmsBackend,
-    renderer: Option<Renderer>,
+    renderer: Option<PatternRenderer>,
     test: SelfTest,
     signal: LoopSignal,
 }
@@ -496,25 +495,29 @@ pub fn selftest(args: SelftestArgs, signals: Signals) -> Result<(), String> {
         Err(error) => tracing::warn!("could not read the device resources: {error}"),
     }
 
-    let request = RendererRequest {
-        selector: args
-            .vulkan_device
-            .parse()
-            .expect("device selectors always parse"),
-        validation: args.vulkan_validation,
-        disabled: args.no_renderer,
+    // The pattern is drawn on the display's GPU when Vulkan has it (`auto`),
+    // else on any device, and frames are then copied on the CPU.
+    let mut renderer = match args.no_renderer {
+        true => None,
+        false => Some(PatternRenderer::new(gpu_config(
+            &args.vulkan_device,
+            args.vulkan_validation,
+            device_number,
+        ))?),
     };
-    let (mut renderer, on_kms_device) = pick_renderer(&request, device_number)?;
+    let on_kms_device = renderer
+        .as_ref()
+        .is_some_and(|r| device_number.is_some() && r.device().drm_primary == device_number);
     let renderer_info = renderer.as_ref().map(|r| {
-        let info = r.device_info();
+        let device = r.device();
         json!({
-            "device": info.name,
-            "kind": info.kind.as_str(),
-            "driver": info.driver_name,
-            "driver_info": info.driver_info,
-            "drm_primary": info.drm_primary,
+            "device": device.name,
+            "kind": if device.is_cpu { "cpu" } else { "gpu" },
+            "driver": device.driver,
+            "driver_info": serde_json::Value::Null,
+            "drm_primary": device.drm_primary,
             "on_kms_device": on_kms_device,
-            "scanout_modifiers": r.scanout_modifiers(),
+            "scanout_modifiers": proto_render::TargetProvider::scanout_modifiers(r),
         })
     });
 
@@ -533,7 +536,7 @@ pub fn selftest(args: SelftestArgs, signals: Signals) -> Result<(), String> {
         .start(
             &handle,
             config,
-            proto_render::targets_of(renderer.as_mut()),
+            renderer.as_mut().and_then(PatternRenderer::targets),
             on_kms_device,
         )
         .map_err(|e| format!("failed to start the KMS backend: {e}"))?;
@@ -558,7 +561,8 @@ pub fn selftest(args: SelftestArgs, signals: Signals) -> Result<(), String> {
     let loop_result = event_loop.run(None, &mut app, |_| {});
     // The validation counters must be read before the renderer is used for
     // the shutdown.
-    let validation_errors = app.renderer.as_ref().and_then(|r| r.validation_errors());
+    let validation_errors = (app.renderer.is_some() && args.vulkan_validation)
+        .then(proto_gfx_core::validation_error_count);
 
     let context = json!({
         "started_at_unix": started
@@ -586,7 +590,7 @@ pub fn selftest(args: SelftestArgs, signals: Signals) -> Result<(), String> {
     // Release the display before anything else can go wrong.
     Backend::shutdown(
         &mut app.backend,
-        proto_render::targets_of(app.renderer.as_mut()),
+        app.renderer.as_mut().and_then(PatternRenderer::targets),
     );
 
     write(

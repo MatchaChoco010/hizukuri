@@ -20,7 +20,7 @@ mod common;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use common::{Device, Session, TIMEOUT, options, real_client_wanted as wanted};
+use common::{Device, Drawing, Gpu, Session, TIMEOUT, options, real_client_wanted as wanted};
 use proto_compositor::control::Request;
 use proto_test_client::{ClientEvent, SurfaceKind};
 use serde_json::Value;
@@ -29,11 +29,13 @@ const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
 /// The device these tests run on: one is enough, they are about protocols.
+/// The script draws; the fallback places the windows.
 fn device() -> Device {
-    if Device::Gpu.enabled() {
-        Device::Gpu
+    let hardware = Device::new(Gpu::Hardware, Drawing::Script);
+    if hardware.enabled() {
+        hardware
     } else {
-        Device::Lavapipe
+        Device::new(Gpu::Lavapipe, Drawing::Script)
     }
 }
 

@@ -313,7 +313,7 @@ pdf の場所、項目の数、ページ数を伝える。迷った点（項目�
 ```sh
 # scenes/tiles.sh
 source "$HZ_LIB"
-hz_start --renderer script --wm script --output-size 1920x1080 --output-scale 2 --background 30405c
+hz_start --output-size 1920x1080 --output-scale 2 --background 30405c
 shell="$(hz_script shell <<'SH'
 #!/bin/sh
 printf 'foot\r\n\r\n$ '
@@ -330,7 +330,7 @@ hz_ctl quit >/dev/null
 
 | 関数 | 内容 |
 | --- | --- |
-| `hz_start [指定...]` | compositor を、headless で起動する。描画は、lavapipe |
+| `hz_start [指定...]` | compositor を、headless で起動する。既定では、組み込みのスクリプトが、lavapipe で描き、ウィンドウをタイルに並べる |
 | `hz_client [指定...]` | 検証用のクライアント（`proto-test-client`）を出す |
 | `hz_app CMD...` | 実際のアプリを、その中で起動する |
 | `hz_script NAME` | 標準入力を、実行できるファイルにして、パスを返す（端末の中の shell の代わりに使う） |

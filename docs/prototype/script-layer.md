@@ -1,8 +1,8 @@
 # スクリプトの層
 
-検証用の compositor は、描画と、ウィンドウ管理を、スクリプトで書ける。`--renderer script --wm script` で起動すると、
+検証用の compositor は、描画と、ウィンドウ管理を、スクリプトで書ける。既定（`--renderer script --wm script`）では、
 Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`）は使われず、スクリプトが、色の変換を含む描画、
-当たり判定、ウィンドウの配置を受け持つ。
+当たり判定、ウィンドウの配置を受け持つ。スクリプトが決めないところは、コアの fallback が受け持つ。
 
 **スクリプト言語は、決まっていない。** いまは、検証のために Luau を使っている。言語に依存する部分は、
 `prototype/gfx-lua` と、`prototype/compositor/src/script/` の中の値の受け渡しに限ってある。
@@ -28,7 +28,7 @@ Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`�
                         ├────────────────────────────────────────────────────────────┤
   prototype/compositor  │ Compositor: Scene と WindowManager の 2 つの継ぎ目の上で動く  │
                         │ （入力、focus の適用、描く時機、frame callback、制御口）       │
-                        │ fallback/: スクリプトが使えないときの、最小の描画と配置       │
+                        │ fallback/: 最小の描画、ウィンドウの表と、その決まり          │
                         └───────┬───────────────────────────────┬────────────────────┘
                      proto-wl（プロトコル）              proto-backend（headless、KMS）
 ```
@@ -37,6 +37,9 @@ Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`�
 - VM は 1 つである。描画とウィンドウ管理は、同じ VM の中の、同じスクリプトである。
 - バックエンドは、誰が描くかを知らない。出力の画像を作る口（`TargetProvider`）を、Rust のレンダラーと
   スクリプトの側の両方が実装している。headless と KMS（CPU コピーと dma-buf）は、どちらにもつながる。
+- スクリプトの側の出力の画像は、`proto-gfx-core` の上に作り、`OutputImages`（`prototype/compositor/src/targets.rs`）が持つ。
+  画面に出さない描画先には 2 枚、scanout の描画先には、dma-buf として書き出す 1 枚である。
+  `kms-selftest` のパターンの描画（`PatternRenderer`）も、同じものを使う。
 - スクリプトの描画は、Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
 
 ## スクリプトの置き場所と、切り替え
@@ -44,11 +47,21 @@ Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`�
 - 組み込みのプロジェクトは、`prototype/compositor/scripts/` にあり、バイナリに埋め込まれる。入口は `main.luau` である。
 - `--script DIR` で、別のプロジェクト（`main.luau` のあるディレクトリ）を使う。プロジェクトに無いモジュールは、
   組み込みのものを使う。`hz.include("session")` の 1 行で、組み込みの動作から始めて、変えたい関数だけを置き換えられる。
-- `--renderer script` で、描画をスクリプトに任せる。`--wm script` で、ウィンドウ管理も任せる（`--renderer script` が要る）。
-  `--wm rust` のままなら、配置は `proto-layout` が決め、スクリプトは描くだけである。
+- `--renderer` と `--wm` の既定は、どちらも `script` である。描画も、ウィンドウ管理も、スクリプトに任せる。
+  `--wm rust` を付けると、配置は `proto-layout` が決め、スクリプトは描くだけである。
+  `--renderer rust --wm rust` は、スクリプトの描画と比べるための、Rust の実装である。
+  `--wm script` には、`--renderer script` が要る。
+- ウィンドウ管理の関数（`window_opened`、`window_changed`、`window_closed`、`focus_changed`、`outputs_changed`、
+  `key`、`pointer_button`）を定義しないプロジェクトでは、fallback の決まり（[下](#fallback-のウィンドウ管理)）で、
+  ウィンドウが置かれ、focus が与えられる。
+- `hz.manages_windows()` は、この session が、ウィンドウ管理をスクリプトに任せているか（`--wm script` か）を返す。
+  組み込みのプロジェクトは、これが真のときに、ウィンドウをタイルに並べる。
+- 描くだけのプロジェクトが、`prototype/compositor/projects/draw-only/` にある。`main.luau` は `hz.include("session")` の 1 行で、
+  `session.luau` は、組み込みの session から、タイルを除いたもの（組み込みの描画だけで、ウィンドウ管理の関数を定義しない）である。
+  ウィンドウは、コアの fallback が置く。テスト、`tools/vm-check.py`、VM の中の `hzk` が使う。
 
 ```sh
-target/debug/proto-compositor --backend headless --socket hz --renderer script --wm script --dmabuf gpu
+target/debug/proto-compositor --backend headless --socket hz --dmabuf gpu
 
 # ウィンドウを傾ける（window の id と、2D の変換 a b c d tx ty）
 proto-ctl --socket "$RT/hz.control" script-call set_transform 3 '[0.94, -0.34, 0.34, 0.94, 80, 40]'
@@ -65,7 +78,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   作業用の色空間は、名前（`bt2020`、`srgb`、`display-p3`、`adobe-rgb`）か、色度の表で選ぶ。
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。
-- タイル（`tile.luau`）: 最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
+- タイル（`tile.luau`）: `--wm script` のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
   logo+Q で閉じる。キーの割り当ても、スクリプトの中にある。
 
 ## コアがスクリプトに見せる口
@@ -107,6 +120,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.cursor()` | 描くべきカーソル。組み込みの矢印のテクスチャ、またはクライアントの表面 |
 | `hz.drag_icon()` | drag 中のアイコンの表面 |
 | `hz.background()`、`hz.time()` | 背景色、起動からの秒数 |
+| `hz.manages_windows()` | この session が、ウィンドウ管理をスクリプトに任せているか（`--wm script` か）。読み込みの途中でも使える |
 | `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号、alpha の扱い） |
 | `hz.encode_transform(working, output)` | 作業用の値を、出力の符号の値にする変換 |
 | `hz.decode_color(r, g, b, a, working)` | 1 色を CPU で変換する（背景色に使う） |
@@ -140,7 +154,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.debug_composite(image, working)` | 検証用に、合成用のバッファを差し出す（画面の取り込みで EXR に書かれる） |
 | `hz.log(text)` | ログ |
 
-ウィンドウ管理の関数は、`--wm script` のときだけ使える（それ以外では、エラーが返る）。
+ウィンドウ管理の関数（`hz.place`、`hz.configure`、`hz.focus`、`hz.raise`、`hz.restack`、`hz.close`）は、
+`--wm script` のときだけ使える（それ以外では、エラーが返る）。位置、大きさ、focus、重なりの順は、fallback のウィンドウの表に書く。
 存在しないウィンドウや、負の大きさも、エラーで返る。
 
 ### GPU の API（`gfx`）
@@ -176,8 +191,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | フレームを描く時機 | バックエンドの page flip と、session の状態に結び付いている。止まったスクリプトが、描く時機まで止めてはいけない |
 | フレームの完了を、クライアントへ知らせること（frame callback、presentation feedback） | スクリプトが描けない間も、クライアントは、次のフレームを描いてよい時機を知らされる必要がある |
 | configure を送ること、focus を適用すること | 何を求めるかは、スクリプトが決める。送る手順は、コアが受け持つ |
-| ウィンドウの表（位置、大きさ、focus、重なりの順）と、その既定の値 | スクリプトが何も言わないとき、失敗したとき、fallback の間にも、新しいウィンドウに居場所と focus があるように |
-| fallback（`prototype/compositor/src/fallback/`）: スクリプトが使えないときの、最小の描画、新しいウィンドウの配置、当たり判定 | スクリプトが壊れても、画面を出し、入力を届け続けるため。色の変換も、変形も、装飾もしない。コンポジターの機能ではない（下の「故障したときの動き」） |
+| ウィンドウの表（位置、configure で求める大きさ、focus、重なりの順）。fallback の表（`fallback::Windows`）で、スクリプトのウィンドウ管理は、これを書き換える | スクリプトが何も言わないとき、失敗したとき、fallback の間にも、新しいウィンドウに居場所と focus があるように |
+| fallback（`prototype/compositor/src/fallback/`）: スクリプトが使えないときの、最小の描画（`draw.rs`）と当たり判定（`hit_test.rs`）。誰も決めないときの、ウィンドウの表の決まり（`windows.rs`、`placement.rs`） | スクリプトが壊れても、画面を出し、入力を届け続けるため。色の変換も、変形も、装飾もしない。コンポジターの機能ではない（下の「故障したときの動き」） |
 | 入力の配り方と、緊急用のキー | ボタンを押している間の行き先、スクリプトが使ったキーの「離す」を渡さないこと。緊急用のキーは、スクリプトの `key` より先に、コアが見る |
 | 色の変換の数値（`proto-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
@@ -223,7 +238,9 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   クライアントには、configure も focus の変化も届かない。
 - 状態の引き継ぎは、スクリプトの仕事である。コアは、値を預かって渡すだけで、中身を知らない。
   組み込みのプロジェクトは、タイルの順番、作業用の色空間、ウィンドウの変換を引き継ぐ。
+  引き継いだ順番に無いウィンドウは、画面の上で、左から右の順に並べる。
 - スクリプトが外されている間に読み直すと、`unload` は呼ばれない（壊れたスクリプトの値を、信じない）。
+  組み込みのプロジェクトは、そのとき、すべてのウィンドウを、画面の上の左から右の順に並べ直す。
 - `script_reload` に `path` を付けると、別のプロジェクトに切り替わる。
 - ファイルの変更を見て自動で読み直すことと、shader だけの差し替えは、未実装である。
 
@@ -254,6 +271,31 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
   または毎回、時間の上限まで走ると、セッションが使えなくなるためである。
 - **スクリプトを外す**と、描画、当たり判定、新しいウィンドウの配置は、fallback になる。ウィンドウは、その場所に残る。
   新しいウィンドウは、ずらして置かれて focus を得る。クリックで focus を移せて、閉じられる。
+
+### fallback のウィンドウ管理
+
+ウィンドウの表は、fallback のもの（`proto_compositor::fallback::Windows`）である。誰も決めないところには、次の決まりが当てはまる。
+決まりは、`proto-layout` のフローティングの配置と同じである。
+
+- 新しいウィンドウは、最初の出力の、次のずらした位置に置く（32 論理画素ずつ、8 か所。その後は、最初に戻る）。
+  いちばん上に置き、focus を与える。
+- focus を与えたウィンドウは、いちばん上に出る。
+- focus のあるウィンドウが閉じたら、残ったうちの、いちばん上のウィンドウに focus を移す。
+- 出力が無くなったら、その出力のウィンドウは、残った最初の出力へ、出力の原点からの位置を保って移る。
+  出力が 1 つも残らなければ、どの出力にも属さない。
+- 動かしたウィンドウは、左上の角の下にある出力に属する。
+- 大きさは、求めない（クライアントが決める）。スクリプトが `hz.configure` で決めた大きさは、そのまま求める。
+
+`fallback::Windows` は、それだけで `WindowManager` である（単独で使うとき、`state` の `window_manager` は `fallback`）。使われるのは、次のときである。
+
+| とき | 内容 |
+| --- | --- |
+| `Compositor::new` と、`--no-renderer` | 既定のウィンドウ管理として、上の決まりで、すべてを決める |
+| `--wm script` | スクリプトのウィンドウ管理が書き換える表として。スクリプトが動いている間は、配置、重なりの順、focus をスクリプトが決め、上の決まりは、スクリプトが決めないところ（ウィンドウ管理の関数を定義しない、関数が失敗した）にだけ当てはまる |
+| スクリプトを外したとき（`script.mode` が `fallback`） | 上の決まりに加えて、focus のあるウィンドウを、いつもいちばん上に保つ |
+
+- 無くなった出力のウィンドウを、残った最初の出力へ移すことは、スクリプトが動いている間にも行う。スクリプトには、そのあとで `outputs_changed` が届く。
+- スクリプトが壊れても、どのウィンドウにも手が届くようにするための決まりである。
 
 ### 描画が失敗したとき
 

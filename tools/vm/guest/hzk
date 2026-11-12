@@ -4,12 +4,12 @@
 # Starts the compositor as a DRM/KMS session, opens a few applications in it,
 # and cleans up when the compositor ends.
 #
-#   hzk [venus|lavapipe|script] [--seconds N] [--mode WxH] [--no-apps]
+#   hzk [lavapipe|script] [--seconds N] [--mode WxH] [--no-apps]
 #       [--reset-scripts]
 #
-#   lavapipe  render on the CPU, copy frames into dumb buffers (the default)
-#   venus     render on the virtio-gpu, scan out dma-bufs. Needs a VM that
-#             was started with HIZUKURI_VM_GPU=venus.
+#   lavapipe  the built-in renderer draws on the CPU, frames are copied into
+#             dumb buffers, and the core's fallback places the windows (the
+#             draw-only project in ~/hzk-draw-only). The default.
 #   script    drawing and window management by the scripts in ~/hzk-scripts,
 #             rendered on the CPU. Edit the files and press Ctrl+Alt+Shift+R
 #             to load them again.
@@ -17,8 +17,8 @@
 #   --reset-scripts  with `script`: start again from the scripts as they were
 #                    sent (the edited ones are kept in ~/hzk-scripts.bak)
 #
-# The binaries and the scripts are sent by tools/vm/try-hizukuri, to ~/bin
-# and ~/hzk-scripts.orig.
+# The binaries and the scripts are sent by tools/vm/try-hizukuri, to ~/bin,
+# ~/hzk-scripts.orig and ~/hzk-draw-only.
 set -euo pipefail
 
 path="lavapipe"
@@ -29,7 +29,7 @@ reset_scripts=0
 scripts="$HOME/hzk-scripts"
 while (($#)); do
     case "$1" in
-        venus | lavapipe | script) path="$1" ;;
+        lavapipe | script) path="$1" ;;
         --seconds) seconds="$2"; shift ;;
         --mode) mode="$2"; shift ;;
         --no-apps) apps=0 ;;
@@ -59,8 +59,16 @@ log="$HOME/hzk.log"
 
 # A background that differs from the terminals' own, so that windows stand out.
 args=(--backend kms --socket "$socket" --exit-after "$seconds" --background 30405c)
-[[ "$path" == "lavapipe" || "$path" == "script" ]] && args+=(--vulkan-device cpu)
+args+=(--vulkan-device cpu)
 [[ -n "$mode" ]] && args+=(--kms-mode "$mode")
+
+if [[ "$path" == "lavapipe" ]]; then
+    if [[ ! -d "$HOME/hzk-draw-only" ]]; then
+        echo "hzk: $HOME/hzk-draw-only is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+        exit 1
+    fi
+    args+=(--script "$HOME/hzk-draw-only")
+fi
 
 if [[ "$path" == "script" ]]; then
     # The scripts are files, so that they can be edited while the session
@@ -74,7 +82,7 @@ if [[ "$path" == "script" ]]; then
         mv "$scripts" "$scripts.bak"
     fi
     [[ -d "$scripts" ]] || cp -r "$scripts.orig" "$scripts"
-    args+=(--renderer script --wm script --script "$scripts")
+    args+=(--script "$scripts")
 fi
 
 cat <<TEXT

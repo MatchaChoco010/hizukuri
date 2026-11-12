@@ -15,7 +15,7 @@ use proto_backend::{
 use proto_color::ImageDescription;
 use proto_compositor::compositor::{Compositor, CompositorOptions};
 use proto_compositor::control::Request;
-use proto_compositor::scene::FlatScene;
+use proto_compositor::scene::NullScene;
 use proto_render::{OutputFormat, TargetId, Targets};
 use proto_test_client::{ClientEvent, ClientOptions, TestClient};
 use serde_json::Value;
@@ -126,7 +126,7 @@ impl Fixture {
         let mut compositor = Compositor::new(
             CompositorOptions::default(),
             backend,
-            Box::new(FlatScene::new(None)),
+            Box::new(NullScene::new()),
         )
         .unwrap();
         let (server_end, client_end) = UnixStream::pair().unwrap();

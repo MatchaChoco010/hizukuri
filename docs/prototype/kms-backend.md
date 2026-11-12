@@ -23,7 +23,8 @@ prototype/backend/src/kms/
 prototype/compositor/src/
   kms.rs         `--backend kms` の起動、`kms-info`、`kms-selftest`
   safety.rs      仮想マシンの中かどうかの判定、起動の条件、watchdog
-  selftest.rs    自己診断の本体（バックエンドに対して generic）
+  selftest.rs    自己診断の本体（バックエンドに対して generic）と、テストパターンを描く PatternRenderer
+  targets.rs     出力の画像（proto-gfx-core の上）。スクリプトの描画と、PatternRenderer が使う
   timing.rs      1 フレームにかかった時間の記録
 ```
 
@@ -117,6 +118,15 @@ proto-compositor kms-selftest --output Virtual-1 --seconds 10 --report DIR
 `kms-selftest` は、決めた出力 1 つだけに対して、モード設定、テストパターンの表示、page flip の時機の計測を行い、
 指定した秒数で自分で終わる。結果を、`--report` のディレクトリに書く。
 
+- テストパターンは、`PatternRenderer`（`proto_compositor::selftest::PatternRenderer`）が、`proto-gfx-core` の検査つきの GPU の API の上で、
+  直接描く。スクリプトも、Rust のレンダラーも使わない。
+- 診断の道具であって、コンポジターの描画ではない。パターンの符号の値を、色の変換をせずに、そのまま出力の画像に書く。
+- スクリプトの描画と同じく、Vulkan 1.4 と `VK_EXT_descriptor_heap` が要る。
+- デバイスは、`--vulkan-device auto|gpu|cpu|<名前>` で選ぶ。選び方は、compositor のスクリプトの描画と同じである
+  （`cpu` と `lavapipe` は llvmpipe。`auto` は、画面を出している GPU を、Vulkan がそれを持っていれば選ぶ）。
+- `--scanout` で、scanout の経路を選ぶ（`--kms-scanout` と同じ値）。
+- `--no-renderer` では、パターンを描かずに、黒いフレームを出し、時機だけを測る。
+
 | ファイル | 内容 |
 | --- | --- |
 | `report.json` | 項目ごとの結果、flip の間隔の統計、フレームの時間、使ったデバイスとレンダラー |
@@ -160,10 +170,14 @@ tools/vm/vm test tools/vm-check.py --only lavapipe --skip-build     # ビルド�
 tools/vm/vm test tools/vm-check.py --out artifacts/vm-check/run1    # 記録を残す場所を決める
 ```
 
-`venus` と `lavapipe` の部は、同じ項目を検査する: 仮想コンソールからの起動、レンダラーと scanout の経路、モード、
+`lavapipe` の部は、次の項目を検査する: 仮想コンソールからの起動、レンダラーと scanout の経路、モード、
 背景とウィンドウの画素（VNC から読む）、libinput 経由のポインター・クリック・キー、VT の切り替えと復帰、
 実際のアプリ（foot、weston-terminal）、フレームの時間、終了用のキー、自動終了、制御口からの終了、SIGHUP、
-dmabuf を送るクライアントと popup と selection、自己診断。
+dmabuf を送るクライアントと popup と selection、スクリプトの層、自己診断。
+
+- compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目のほかは、
+  描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）で動かし、ウィンドウを、項目が置いた場所に保つ。
+- 自己診断の項目は、`kms-selftest` を動かす。パターンは、`proto-gfx-core` で描く。
 
 - FAIL が 1 つも無ければ、終了コードは 0 である。
 - 原因を切り分けるための記録（compositor のログ、制御口から取った状態、画面の PNG、クライアントの出力、

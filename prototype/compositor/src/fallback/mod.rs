@@ -15,6 +15,10 @@
 //! - [`placement`]: where a new window goes when nobody else decides (a
 //!   cascade on the first output).
 //! - [`hit_test`]: which surface is at a point, for windows drawn flat.
+//! - [`windows`]: the table of windows (position, configured size, stacking,
+//!   focus) and the rules applied where nobody else decides. It is a
+//!   window manager by itself, and the table the script's window
+//!   management edits.
 //!
 //! None of this is a feature of a compositor. A compositor built on
 //! hizukuri does its drawing and window management in the script layer;
@@ -23,7 +27,9 @@
 pub mod draw;
 pub mod hit_test;
 pub mod placement;
+pub mod windows;
 
 pub use draw::{Drawer, MARKER_COLOR, MARKER_HEIGHT};
 pub use hit_test::{hit_test, locate};
 pub use placement::Cascade;
+pub use windows::Windows;
