@@ -208,11 +208,11 @@ nix develop --command tools/vm/try-hizukuri [--gtk] [--skip-build]
 
 `try-hizukuri` は、次を行う。devShell の中で実行する。
 
-1. 検証用の compositor をビルドする（`hizukuri` と `hizukuri-test-client`）。`--skip-build` で、省く。
+1. 検証用の compositor をビルドする（`proto-compositor` と `proto-test-client`）。`--skip-build` で、省く。
 2. VM を起動する（`--gtk` なら、ウィンドウに出す。表示が違う VM が動いていれば、止めて起動し直す）。
-3. バイナリ（`hizukuri`、`hizukuri-ctl`、`hizukuri-test-client`）を、ゲストの `~/bin/` へ送る。
+3. バイナリ（`proto-compositor`、`proto-ctl`、`proto-test-client`）を、ゲストの `~/bin/` へ送る。
    送ったバイナリが、ゲストで起動しなければ、その旨を出して止まる。
-4. 組み込みのプロジェクト（`crates/hizukuri/scripts/`）を、ゲストの `~/hzk-scripts.orig/` へ送る。
+4. 組み込みのプロジェクト（`prototype/compositor/scripts/`）を、ゲストの `~/hzk-scripts.orig/` へ送る。
 
 ゲストは、起動のたびに最初の状態に戻る。VM を起動し直したら、`try-hizukuri` で、送り直す。
 
@@ -241,7 +241,7 @@ VT の上の session から実行する。コンソールにログインして�
 
 - アプリを足すには、`hzk` が開いた端末の中で、`foot &` と打つ。
   外からは、`tools/vm/vm ssh 'WAYLAND_DISPLAY=hizukuri-0 XDG_RUNTIME_DIR=/run/user/1000 foot' &` とする。
-- 制御口は、`tools/vm/vm ssh '~/bin/hizukuri-ctl --socket /run/user/1000/hizukuri-0.control state'` のように使う。
+- 制御口は、`tools/vm/vm ssh '~/bin/proto-ctl --socket /run/user/1000/hizukuri-0.control state'` のように使う。
 - ログは、ゲストの `~/hzk.log` にある。
 
 ### スクリプトの層を触る（`hzk script`）
@@ -271,7 +271,7 @@ VT の上の session から実行する。コンソールにログインして�
 
 | 場所 | 内容 |
 | --- | --- |
-| `~/hzk-scripts.orig/` | `crates/hizukuri/scripts/` の写し。`tools/vm/try-hizukuri` が、毎回置き換える |
+| `~/hzk-scripts.orig/` | `prototype/compositor/scripts/` の写し。`tools/vm/try-hizukuri` が、毎回置き換える |
 | `~/hzk-scripts/` | `hzk script` が使うもの。無ければ、上の写しから作る。**ゲストで書き換えるのは、ここである** |
 | `~/hzk-scripts.bak/` | `hzk script --reset-scripts` が、書き換えたものを退避する場所 |
 
@@ -287,14 +287,14 @@ tools/vm/vm tty-run -- hzk --seconds 120
 tools/vm/vm tty-run -- hzk script --seconds 120
 
 # compositor を、直接起動する
-tools/vm/vm tty-run -- /home/hizukuri/bin/hizukuri --backend kms --vulkan-device cpu --exit-after 60
+tools/vm/vm tty-run -- /home/hizukuri/bin/proto-compositor --backend kms --vulkan-device cpu --exit-after 60
 
 tools/vm/vm screendump frame.png               # 画面を取り込む
 tools/vm/vm pixels 100,100 640,400             # 画素の値を見る
 tools/vm/vm move 640 400 && tools/vm/vm click  # 入力を送る
 tools/vm/vm type 'hello'
 tools/vm/vm key ctrl-alt-f2                    # VT の切り替えを、compositor に処理させる
-tools/vm/vm ssh '~/bin/hizukuri-ctl --socket /run/user/1000/hizukuri-0.control state'
+tools/vm/vm ssh '~/bin/proto-ctl --socket /run/user/1000/hizukuri-0.control state'
 tools/vm/vm tty-log                            # ログを読む
 tools/vm/vm tty-stop                           # 止める
 tools/vm/vm stop
@@ -334,7 +334,7 @@ VM を動かす機械に GPU があれば、ゲストに、その GPU で描く 
 | | Venus | lavapipe |
 | --- | --- | --- |
 | `VK_EXT_descriptor_heap` | 無い。virglrenderer が、この拡張をゲストへ通す必要があり、1.3.0 は通さない | ある |
-| 描けるもの | Rust のレンダラー（`hizukuri-render`） | Rust のレンダラーと、スクリプトの描画（`gfx-core`） |
+| 描けるもの | Rust のレンダラー（`proto-render`） | Rust のレンダラーと、スクリプトの描画（`proto-gfx-core`） |
 | scanout | Vulkan で確保した `DRM_FORMAT_MOD_LINEAR` の画像を、dma-buf として取り出して、flip する | dumb buffer へ、CPU で写す |
 
 - scanout する画像は、`DRM_FORMAT_MOD_LINEAR` で確保し、`drmModeAddFB2` に、modifier を付けない。
@@ -393,7 +393,7 @@ watchdog が、固まった compositor を終わらせることを、確かめ�
 
 ```sh
 tools/vm/vm ssh vkms-load                              # ロードして、デバイスの場所を表示する
-tools/vm/vm ssh '~/bin/hizukuri kms-info --summary'    # デバイスと、connector の名前を見る
+tools/vm/vm ssh '~/bin/proto-compositor kms-info --summary'    # デバイスと、connector の名前を見る
 ```
 
 - **VT も seat も、要らない。** `video` グループの利用者が、デバイスを直接開いて、DRM master になれる。
@@ -407,9 +407,9 @@ tools/vm/vm ssh '~/bin/hizukuri kms-info --summary'    # デバイスと、conne
 `cardN` と `Virtual-N` には、上の 2 つのコマンドが出した名前を入れる。
 
 ```sh
-tools/vm/vm ssh 'XDG_RUNTIME_DIR=/run/user/1000 LIBSEAT_BACKEND=noop ~/bin/hizukuri --backend kms \
+tools/vm/vm ssh 'XDG_RUNTIME_DIR=/run/user/1000 LIBSEAT_BACKEND=noop ~/bin/proto-compositor --backend kms \
     --kms-device /dev/dri/cardN --vulkan-device cpu --exit-after 30'
-tools/vm/vm ssh 'XDG_RUNTIME_DIR=/run/user/1000 LIBSEAT_BACKEND=noop ~/bin/hizukuri kms-selftest \
+tools/vm/vm ssh 'XDG_RUNTIME_DIR=/run/user/1000 LIBSEAT_BACKEND=noop ~/bin/proto-compositor kms-selftest \
     --device /dev/dri/cardN --output Virtual-N --seconds 5 --report /tmp/report --vulkan-device cpu --scanout cpu'
 ```
 
@@ -488,8 +488,8 @@ vm-check: <数> passed, <数> failed, <数> skipped. Evidence: <出力のディ�
 | --- | --- |
 | `summary.txt`、`results.json` | 全部の項目と、その内容。部ごとの時間 |
 | `guest.txt` | ゲストの kernel、NixOS の版、構成の store のパス、Vulkan のデバイス |
-| `kms-info.json`、`kms-summary.txt` | ゲストの DRM のデバイスの記述（`hizukuri kms-info`） |
-| `<部>/hizukuri-<段階>.log` | compositor のログ。失敗した項目のものは、`hizukuri-fail-<項目>.log` |
+| `kms-info.json`、`kms-summary.txt` | ゲストの DRM のデバイスの記述（`proto-compositor kms-info`） |
+| `<部>/proto-compositor-<段階>.log` | compositor のログ。失敗した項目のものは、`proto-compositor-fail-<項目>.log` |
 | `<部>/state-<段階>.json` | compositor の状態（制御口の `state`） |
 | `<部>/screen-<段階>.png` | 取り込んだ画面 |
 | `<部>/selftest*/` | `kms-selftest` の報告 |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a real wl_shm application (weston-terminal) inside a headless
-# hizukuri, clicks and types into it through the control socket, and
+# proto-compositor, clicks and types into it through the control socket, and
 # captures the screen. This is a look-at-it check, not an automated test:
 # open the PNGs it writes.
 #
@@ -20,19 +20,19 @@ ICD="${3:-}"
 BIN="${CARGO_TARGET_DIR:-target}/debug"
 
 command -v weston-terminal > /dev/null || { echo "weston-terminal is not installed" >&2; exit 1; }
-cargo build -j "${CARGO_BUILD_JOBS:-8}" -p hizukuri || exit 1
+cargo build -j "${CARGO_BUILD_JOBS:-8}" -p proto-compositor || exit 1
 
 # Unix socket paths are short, so the runtime directory must be too.
 RT="${XDG_RUNTIME_DIR:-/tmp}/hzk-app-$$"
 rm -rf "$RT"; mkdir -m 700 "$RT"
 mkdir -p "$OUT"
-ctl() { timeout 15 "$BIN/hizukuri-ctl" --socket "$RT/hizukuri-app.control" "$@"; }
+ctl() { timeout 15 "$BIN/proto-ctl" --socket "$RT/hizukuri-app.control" "$@"; }
 EXTRA=(); [ -n "$ICD" ] && EXTRA+=(--vulkan-icd "$ICD")
 
 # A stand-in for the shell: prints known text, then echoes what is typed.
 cat > "$RT/fake-shell.sh" <<'SHELL'
 #!/bin/sh
-printf 'hizukuri headless: weston-terminal\r\n'
+printf 'proto-compositor headless: weston-terminal\r\n'
 printf '\033[31mred \033[32mgreen \033[34mblue \033[0mdefault\r\n'
 printf 'typed: '
 exec cat
@@ -67,14 +67,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"${ISOLATED[@]}" timeout -k 2 60 "$BIN/hizukuri" \
+"${ISOLATED[@]}" timeout -k 2 60 "$BIN/proto-compositor" \
     --backend headless --socket hizukuri-app --output-size 1024x640 --exit-after 45 \
-    --vulkan-device "$DEVICE" "${EXTRA[@]}" > "$OUT/hizukuri.log" 2>&1 &
+    --vulkan-device "$DEVICE" "${EXTRA[@]}" > "$OUT/proto-compositor.log" 2>&1 &
 SERVER=$!
 for _ in $(seq 50); do [ -S "$RT/hizukuri-app.control" ] && break; sleep 0.1; done
 if ! ctl ping > /dev/null; then
     echo "the compositor did not start:" >&2
-    cat "$OUT/hizukuri.log" >&2
+    cat "$OUT/proto-compositor.log" >&2
     wait $SERVER
     rm -rf "$RT"
     exit 1
@@ -117,7 +117,7 @@ for window in state["windows"]:
 PY
 
 ctl quit > /dev/null
-wait $SERVER; echo "hizukuri exit status: $?"
+wait $SERVER; echo "proto-compositor exit status: $?"
 wait $APP; echo "weston-terminal exit status: $?"
 rm -f "$RT/fake-shell.sh"
 if rmdir "$RT"; then echo "runtime directory removed"; else echo "left in $RT:"; ls -la "$RT"; fi

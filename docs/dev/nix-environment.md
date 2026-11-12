@@ -38,7 +38,7 @@ nix develop --command cargo build
   場所は、環境変数 `CARGO_TARGET_DIR` に入っている（[`target/` を分ける理由](#target-を分ける理由)）。
 
 ```sh
-"$CARGO_TARGET_DIR/debug/hizukuri" --backend headless --exit-after 60 ...
+"$CARGO_TARGET_DIR/debug/proto-compositor" --backend headless --exit-after 60 ...
 ```
 
 ### 検査を走らせる
@@ -58,7 +58,7 @@ devShell の中の Vulkan の loader には、nixpkgs の Mesa の lavapipe だ�
 - 手で起動するときに、lavapipe を明示するには、`--vulkan-icd` に manifest を渡す。場所は、環境変数に入っている。
 
 ```sh
-"$CARGO_TARGET_DIR/debug/hizukuri" --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" ...
+"$CARGO_TARGET_DIR/debug/proto-compositor" --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" ...
 ```
 
 - nixpkgs の Mesa の、ほかのドライバーも loader に見せるには、shell の中で、`VK_DRIVER_FILES` を、manifest のディレクトリに向ける。
@@ -195,7 +195,7 @@ nixpkgs の既定の `libdisplay-info` は、0.4 である。Rust の `libdispla
 
 ### テストが、lavapipe の manifest を探す場所
 
-テストは、lavapipe の manifest を、`hizukuri_render::find_icd_manifest` で探す。
+テストは、lavapipe の manifest を、`proto_render::find_icd_manifest` で探す。
 この関数は、環境変数 `HIZUKURI_ICD_DIRS` を先に見て、その後に、システムの場所を見る。
 devShell は、`HIZUKURI_ICD_DIRS` を、nixpkgs の Mesa の `icd.d` に向けている。
 devShell の中のテストは、システムに Mesa があっても、nixpkgs の lavapipe を使う。

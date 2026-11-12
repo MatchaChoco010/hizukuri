@@ -152,10 +152,10 @@
           VK_IMPLICIT_LAYER_PATH = "${pkgs.emptyDirectory}";
 
           # The lavapipe manifest, for choosing it by hand:
-          #   hizukuri --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE"
+          #   proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE"
           HIZUKURI_ICD_LAVAPIPE = lavapipeIcd;
           # Where the tests look for the lavapipe manifest
-          # (hizukuri_render::find_icd_manifest), ahead of the system
+          # (proto_render::find_icd_manifest), ahead of the system
           # directories. Without it they would find a Mesa installed on the
           # system. The directory holds every driver of the nixpkgs Mesa.
           HIZUKURI_ICD_DIRS = mesaIcdDir;

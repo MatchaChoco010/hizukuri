@@ -1,36 +1,36 @@
 # スクリプトの層
 
 検証用の compositor は、描画と、ウィンドウ管理を、スクリプトで書ける。`--renderer script --wm script` で起動すると、
-Rust のレンダラー（`hizukuri-render`）とレイアウト（`hizukuri-layout`）は使われず、スクリプトが、色の変換を含む描画、
+Rust のレンダラー（`proto-render`）とレイアウト（`proto-layout`）は使われず、スクリプトが、色の変換を含む描画、
 当たり判定、ウィンドウの配置を受け持つ。
 
 **スクリプト言語は、決まっていない。** いまは、検証のために Luau を使っている。言語に依存する部分は、
-`crates/gfx-lua` と、`crates/hizukuri/src/script/` の中の値の受け渡しに限ってある。
+`prototype/gfx-lua` と、`prototype/compositor/src/script/` の中の値の受け渡しに限ってある。
 
 ## 形
 
 ```text
-                    ┌──────────────── スクリプトの層（Luau。仮） ────────────────┐
-                    │ main.luau → session.luau                                   │
-                    │   render.luau  描画（2 pass）、当たり判定、変形             │
-                    │   color.luau   伝達関数の WGSL        affine.luau  2D の変換 │
-                    │   tile.luau    タイルの配置とキー操作                        │
-                    └───────▲───────────────────────────────▲────────────────────┘
-                     gfx.*（GPU）                      hz.*（compositor のコア）
-                    ┌───────┴───────────────────────────────┴────────────────────┐
-  crates/gfx-lua    │ ScriptHost: VM、時間の上限、メモリの上限                     │
-  crates/gfx-core   │ Gpu: 検査つきの GPU の API、dmabuf の取り込みと書き出し       │
-                    ├────────────────────────────────────────────────────────────┤
-  crates/hizukuri   │ script/mod.rs    ScriptRuntime、ScriptScene（Scene の実装）  │
-   src/script/      │ script/api.rs    hz の表                                     │
-                    │ script/wm.rs     ScriptWm（WindowManager の実装）            │
-                    │ script/dmabuf.rs クライアントの dmabuf をテクスチャにする     │
-                    │ script/fallback.rs 組み込みの fallback（Rust で書いた描画）   │
-                    ├────────────────────────────────────────────────────────────┤
-  crates/hizukuri   │ Compositor: Scene と WindowManager の 2 つの継ぎ目の上で動く  │
-                    │ （入力、focus の適用、描く時機、frame callback、制御口）       │
-                    └───────┬───────────────────────────────┬────────────────────┘
-              hizukuri-wl（プロトコル）            hizukuri-backend（headless、KMS）
+                        ┌──────────────── スクリプトの層（Luau。仮） ────────────────┐
+                        │ main.luau → session.luau                                   │
+                        │   render.luau  描画（2 pass）、当たり判定、変形             │
+                        │   color.luau   伝達関数の WGSL        affine.luau  2D の変換 │
+                        │   tile.luau    タイルの配置とキー操作                        │
+                        └───────▲───────────────────────────────▲────────────────────┘
+                         gfx.*（GPU）                      hz.*（compositor のコア）
+                        ┌───────┴───────────────────────────────┴────────────────────┐
+  prototype/gfx-lua     │ ScriptHost: VM、時間の上限、メモリの上限                     │
+  prototype/gfx-core    │ Gpu: 検査つきの GPU の API、dmabuf の取り込みと書き出し       │
+                        ├────────────────────────────────────────────────────────────┤
+  prototype/compositor  │ script/mod.rs    ScriptRuntime、ScriptScene（Scene の実装）  │
+    src/script/         │ script/api.rs    hz の表                                     │
+                        │ script/wm.rs     ScriptWm（WindowManager の実装）            │
+                        │ script/dmabuf.rs クライアントの dmabuf をテクスチャにする     │
+                        │ script/fallback.rs 組み込みの fallback（Rust で書いた描画）   │
+                        ├────────────────────────────────────────────────────────────┤
+  prototype/compositor  │ Compositor: Scene と WindowManager の 2 つの継ぎ目の上で動く  │
+                        │ （入力、focus の適用、描く時機、frame callback、制御口）       │
+                        └───────┬───────────────────────────────┬────────────────────┘
+                     proto-wl（プロトコル）              proto-backend（headless、KMS）
 ```
 
 - 描くもの（`Scene`）と、ウィンドウを管理するもの（`WindowManager`）の、スクリプトの側の実装が、`ScriptScene` と `ScriptWm` である。
@@ -41,22 +41,22 @@ Rust のレンダラー（`hizukuri-render`）とレイアウト（`hizukuri-lay
 
 ## スクリプトの置き場所と、切り替え
 
-- 組み込みのプロジェクトは、`crates/hizukuri/scripts/` にあり、バイナリに埋め込まれる。入口は `main.luau` である。
+- 組み込みのプロジェクトは、`prototype/compositor/scripts/` にあり、バイナリに埋め込まれる。入口は `main.luau` である。
 - `--script DIR` で、別のプロジェクト（`main.luau` のあるディレクトリ）を使う。プロジェクトに無いモジュールは、
   組み込みのものを使う。`hz.include("session")` の 1 行で、組み込みの動作から始めて、変えたい関数だけを置き換えられる。
 - `--renderer script` で、描画をスクリプトに任せる。`--wm script` で、ウィンドウ管理も任せる（`--renderer script` が要る）。
-  `--wm rust` のままなら、配置は `hizukuri-layout` が決め、スクリプトは描くだけである。
+  `--wm rust` のままなら、配置は `proto-layout` が決め、スクリプトは描くだけである。
 
 ```sh
-target/debug/hizukuri --backend headless --socket hz --renderer script --wm script --dmabuf gpu
+target/debug/proto-compositor --backend headless --socket hz --renderer script --wm script --dmabuf gpu
 
 # ウィンドウを傾ける（window の id と、2D の変換 a b c d tx ty）
-hizukuri-ctl --socket "$RT/hz.control" script-call set_transform 3 '[0.94, -0.34, 0.34, 0.94, 80, 40]'
+proto-ctl --socket "$RT/hz.control" script-call set_transform 3 '[0.94, -0.34, 0.34, 0.94, 80, 40]'
 # 作業用の色空間
-hizukuri-ctl --socket "$RT/hz.control" script-call set_working_space '"display-p3"'
+proto-ctl --socket "$RT/hz.control" script-call set_working_space '"display-p3"'
 # 読み直し、fallback
-hizukuri-ctl --socket "$RT/hz.control" script-reload
-hizukuri-ctl --socket "$RT/hz.control" script-mode safe
+proto-ctl --socket "$RT/hz.control" script-reload
+proto-ctl --socket "$RT/hz.control" script-mode safe
 ```
 
 組み込みのプロジェクト:
@@ -124,7 +124,7 @@ hizukuri-ctl --socket "$RT/hz.control" script-mode safe
 | `generation`、`serial` | 画像を作り直した回数、内容が更新された回数 |
 | `kind` | `shm`（画素を複写したもの）か `dmabuf`（取り込んだもの） |
 
-色の変換の数値（原色の行列、伝達関数の番号と定数）は、コア（`hizukuri-color`）が出す。当てはめる shader は、スクリプトの側にある。
+色の変換の数値（原色の行列、伝達関数の番号と定数）は、コア（`proto-color`）が出す。当てはめる shader は、スクリプトの側にある。
 
 ### スクリプトがコアに求めるもの
 
@@ -145,7 +145,7 @@ hizukuri-ctl --socket "$RT/hz.control" script-mode safe
 
 ### GPU の API（`gfx`）
 
-`gfx` は、Vulkan の概念を見せつつ、すべての呼び出しを検査する API である（`crates/gfx-core`）。
+`gfx` は、Vulkan の概念を見せつつ、すべての呼び出しを検査する API である（`prototype/gfx-core`）。
 誤った使い方は、プロセスを落とさずに、エラーの値で返る。
 
 | | 内容 |
@@ -165,7 +165,7 @@ hizukuri-ctl --socket "$RT/hz.control" script-mode safe
 - 記録の呼び出しは、引数と状態を検査してから記録する。エラーを返した呼び出しは、何も記録していない。
 - depth と stencil、MSAA、mip、テクスチャの配列と 3D、cube、indirect draw、query は、未実装である。
 
-関数の一覧は、`crates/gfx-lua/src/api.rs` にある。
+関数の一覧は、`prototype/gfx-lua/src/api.rs` にある。
 
 ## コアに残っているもの
 
@@ -178,9 +178,9 @@ hizukuri-ctl --socket "$RT/hz.control" script-mode safe
 | configure を送ること、focus を適用すること | 何を求めるかは、スクリプトが決める。送る手順は、コアが受け持つ |
 | ウィンドウの表（位置、大きさ、focus、重なりの順）と、その既定の値 | スクリプトが何も言わないとき、失敗したとき、fallback の間にも、新しいウィンドウに居場所と focus があるように |
 | 入力の配り方と、緊急用のキー | ボタンを押している間の行き先、スクリプトが使ったキーの「離す」を渡さないこと。緊急用のキーは、スクリプトの `key` より先に、コアが見る |
-| 色の変換の数値（`hizukuri-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
+| 色の変換の数値（`proto-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
-| popup の位置（positioner の計算）、popup の grab、drag and drop | `hizukuri-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く |
+| popup の位置（positioner の計算）、popup の grab、drag and drop | `proto-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く |
 
 - カーソルを描くのは、スクリプトである。どのカーソルを描くか（組み込みの矢印、クライアントの表面、隠す）は、
   コアが決めて、テクスチャとして渡す。
@@ -232,7 +232,7 @@ hizukuri-ctl --socket "$RT/hz.control" script-mode safe
 スクリプトの故障で、compositor は落ちず、クライアントは切断されない。
 
 時間の上限は、VM の interrupt（ループの折り返しと、関数の呼び出しと戻りのたびに呼ばれる）で見る。
-interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れている（`crates/gfx-lua/src/interrupt.rs`）。
+interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れている（`prototype/gfx-lua/src/interrupt.rs`）。
 `mlua` の interrupt は、Rust の関数がエラーを返した後に、実行中のスクリプトの関数の stack を広げる。
 失敗する呼び出しを `pcall` で受けながら繰り返すスクリプトでは、失敗の数に対して、時間が 2 乗で増える。
 
@@ -266,18 +266,18 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 - どちらでも、失敗したフレームは、画面に出ない。出力の画像を 2 枚持ち、スクリプトには、表示していないほうを渡す。
   成功したときだけ、入れ替える。
 - 緊急用のキー: Ctrl+Alt+Shift+R で読み直し、Ctrl+Alt+Shift+F で fallback に切り替える。スクリプトより先に、コアが見る。
-- Rust のレンダラー（`hizukuri-render`）への、実行中の切り替えは、無い（別の Vulkan のデバイスを持つため）。
+- Rust のレンダラー（`proto-render`）への、実行中の切り替えは、無い（別の Vulkan のデバイスを持つため）。
 - 制御口の `state` の `script` に、モード（`running`、`hold`、`safe`）、失敗の回数と直近の内容、読み直しの回数、
   呼び出しごとの時間、dmabuf の取り込みの統計が出る。
 
 ## 未実装のもの
 
 - クライアントからの要求（最大化、全画面、最小化、移動、大きさの変更）を、スクリプトが受け取ること
-  （`hizukuri-wl` は、出来事として出している。[プロトコルの層](protocol-layer.md#ウィンドウ)）。
-- popup の位置を、変形に合わせて決めること（`hizukuri-wl` には、置き直す口がある。
+  （`proto-wl` は、出来事として出している。[プロトコルの層](protocol-layer.md#ウィンドウ)）。
+- popup の位置を、変形に合わせて決めること（`proto-wl` には、置き直す口がある。
   [プロトコルの層](protocol-layer.md#popup)）。いまは、変形していないウィンドウの位置で、出力の中に収める。
 - damage を使って、描く範囲を狭めること。
 - タイルが、複数の出力を使うこと。
 - 画面に、エラーの内容を表示すること。
 - クライアントの dmabuf について、commit を受けたところで、最大 100 ms、描き終わりを待つ処理が残っている
-  （`hizukuri-wl` が、描き終わるまで commit を保留するので、この待ちは起きない）。
+  （`proto-wl` が、描き終わるまで commit を保留するので、この待ちは起きない）。

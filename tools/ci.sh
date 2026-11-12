@@ -18,8 +18,9 @@
 #                             do the same on every machine. A listed device
 #                             that is missing is a failure.
 #   HIZUKURI_TEST_REAL_CLIENTS  the real applications the tests use (see
-#                             crates/hizukuri/tests/common/mod.rs). A listed
-#                             application that is missing is a failure.
+#                             prototype/compositor/tests/common/mod.rs).
+#                             A listed application that is missing is a
+#                             failure.
 #   HIZUKURI_TEST_SKIP_UDMABUF  set to 1 to leave out the tests that need
 #                             /dev/udmabuf (dma-bufs without a GPU). Without
 #                             it they fail when the device cannot be opened.
@@ -48,7 +49,7 @@ lint() {
 # those processes start in turn. It is how this script recognizes what it
 # left behind: by what the process carries, not by what it is called. The
 # machine may be running other programs with the very same names
-# (hizukuri, wl-paste, terminals).
+# (proto-compositor, wl-paste, terminals).
 export HIZUKURI_TEST_RUN="ci-$$-$(date +%s%N)"
 
 # Fills LEFTOVER with "pid command line" of the processes of this run that
@@ -101,10 +102,10 @@ test_all() {
     echo "== cargo test"
     cargo test --workspace
 
-    # The tests of the script GPU API (gfx-core, gfx-lua) run in-process, on
-    # one device per run: on lavapipe, unless gpu is listed. When both are
-    # listed, the run above used the hardware device; run them once more on
-    # lavapipe, like the compositor tests do for themselves.
+    # The tests of the script GPU API (proto-gfx-core, proto-gfx-lua) run
+    # in-process, on one device per run: on lavapipe, unless gpu is listed.
+    # When both are listed, the run above used the hardware device; run them
+    # once more on lavapipe, like the compositor tests do for themselves.
     local devices="${HIZUKURI_TEST_DEVICES:-lavapipe}"
     if [[ ",$devices," == *",lavapipe,"* && ",$devices," == *",gpu,"* ]]; then
         local lavapipe
@@ -113,8 +114,8 @@ test_all() {
             echo "the lavapipe ICD manifest was not found" >&2
             exit 1
         fi
-        echo "== cargo test (gfx-core, gfx-lua on lavapipe: $lavapipe)"
-        VK_DRIVER_FILES="$lavapipe" cargo test -p gfx-core -p gfx-lua
+        echo "== cargo test (proto-gfx-core, proto-gfx-lua on lavapipe: $lavapipe)"
+        VK_DRIVER_FILES="$lavapipe" cargo test -p proto-gfx-core -p proto-gfx-lua
     fi
 
     # Nothing is stopped here. A process that is still running is a defect

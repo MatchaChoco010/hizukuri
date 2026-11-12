@@ -1,0 +1,16 @@
+[package]
+name = "proto-gfx-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+vulkan.workspace = true
+vulkan-alloc.workspace = true
+naga.workspace = true
+rustix = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+half.workspace = true
+rustix = { version = "1", features = ["fs"] }

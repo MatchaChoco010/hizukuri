@@ -300,7 +300,7 @@ jobs:
       # built here.
       - name: Build the compositor
         shell: nix develop .#ci --command bash -euo pipefail {0}
-        run: cargo build --profile test -p hizukuri
+        run: cargo build --profile test -p proto-compositor
 
       # Drawn on the GPU, shown on vkms: frames are read back and copied
       # into dumb buffers. Handing the GPU's images to vkms as dma-bufs is
@@ -311,21 +311,21 @@ jobs:
         shell: nix develop .#ci --command bash -euo pipefail {0}
         run: |
           source "$RUNNER_TEMP/nvidia/settings.sh"
-          hizukuri="$CARGO_TARGET_DIR/debug/hizukuri"
+          compositor="$CARGO_TARGET_DIR/debug/proto-compositor"
           export LIBSEAT_BACKEND=noop
           XDG_RUNTIME_DIR="$(mktemp -d /tmp/hzk-XXXXXX)"
           export XDG_RUNTIME_DIR
           trap 'rm -rf "$XDG_RUNTIME_DIR"' EXIT
-          connector="$("$hizukuri" kms-info --device "${VKMS_CARD:?no vkms card was found}" \
+          connector="$("$compositor" kms-info --device "${VKMS_CARD:?no vkms card was found}" \
             | jq -r '[.connectors[] | select(.connected) | .name][0] // empty')"
           echo "card $VKMS_CARD, connector ${connector:-none}"
-          "$hizukuri" kms-selftest --device "$VKMS_CARD" --output "${connector:?no connected connector}" \
+          "$compositor" kms-selftest --device "$VKMS_CARD" --output "${connector:?no connected connector}" \
             --seconds 5 --report "$OUT/selftest-vkms" --mode 1920x1080 \
             --vulkan-device gpu --scanout cpu 2>&1 \
             | tee "$OUT/selftest-vkms.log"
           summary="$OUT/selftest-vkms/summary.txt"
-          if ! [ -f "$summary" ] || [ "$(head -n 1 "$summary")" != "hizukuri kms-selftest: PASSED" ]; then
-            echo "::error title=Self test failed::hizukuri kms-selftest on vkms did not pass; see $summary."
+          if ! [ -f "$summary" ] || [ "$(head -n 1 "$summary")" != "proto-compositor kms-selftest: PASSED" ]; then
+            echo "::error title=Self test failed::proto-compositor kms-selftest on vkms did not pass; see $summary."
             exit 1
           fi
 

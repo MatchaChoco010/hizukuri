@@ -41,8 +41,8 @@ while (($#)); do
 done
 
 bin="$HOME/bin"
-[[ -x "$bin/hizukuri" ]] || {
-    echo "hzk: $bin/hizukuri is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+[[ -x "$bin/proto-compositor" ]] || {
+    echo "hzk: $bin/proto-compositor is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
     exit 1
 }
 if [[ -z "${XDG_VTNR:-}" ]]; then
@@ -54,7 +54,7 @@ fi
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 socket="hizukuri-0"
 control="$XDG_RUNTIME_DIR/$socket.control"
-ctl=("$bin/hizukuri-ctl" --socket "$control")
+ctl=("$bin/proto-ctl" --socket "$control")
 log="$HOME/hzk.log"
 
 # A background that differs from the terminals' own, so that windows stand out.
@@ -78,7 +78,7 @@ if [[ "$path" == "script" ]]; then
 fi
 
 cat <<TEXT
-hizukuri ($path) starts now and ends by itself after $seconds s.
+proto-compositor ($path) starts now and ends by itself after $seconds s.
 
   Ctrl+Alt+Backspace   quit
   Ctrl+Alt+F2          switch to another console; Ctrl+Alt+F${XDG_VTNR} comes back
@@ -99,19 +99,19 @@ The scripts in $scripts draw the screen and tile the windows.
 Try: in a terminal, change "T.gap = 8" in $scripts/tile.luau
 (vim and nano are installed), then press Ctrl+Alt+Shift+R.
 When a script fails, the fallback takes over and the session stays usable.
-What failed:  ~/bin/hizukuri-ctl --socket $control state | grep -A8 last_failures
+What failed:  ~/bin/proto-ctl --socket $control state | grep -A8 last_failures
 TEXT
 else
     cat <<TEXT
 Windows cannot be moved with the mouse. From outside the VM:
-  tools/vm/vm ssh '~/bin/hizukuri-ctl --socket $control state'
-  tools/vm/vm ssh '~/bin/hizukuri-ctl --socket $control move-window ID X Y'
+  tools/vm/vm ssh '~/bin/proto-ctl --socket $control state'
+  tools/vm/vm ssh '~/bin/proto-ctl --socket $control move-window ID X Y'
 TEXT
 fi
 echo "The log is in $log."
 sleep 2
 
-"$bin/hizukuri" "${args[@]}" >"$log" 2>&1 &
+"$bin/proto-compositor" "${args[@]}" >"$log" 2>&1 &
 compositor=$!
 client_pids=()
 cleanup() {
@@ -128,7 +128,7 @@ for _ in $(seq 100); do
 done
 if ! "${ctl[@]}" ping >/dev/null 2>&1; then
     wait "$compositor" || true
-    echo "hzk: hizukuri did not start. The end of $log:" >&2
+    echo "hzk: proto-compositor did not start. The end of $log:" >&2
     tail -n 8 "$log" >&2
     exit 1
 fi
@@ -176,5 +176,5 @@ status=0
 wait "$compositor" || status=$?
 cleanup
 trap - EXIT
-echo "hzk: hizukuri ended with status $status (log: $log)"
+echo "hzk: proto-compositor ended with status $status (log: $log)"
 exit "$status"
