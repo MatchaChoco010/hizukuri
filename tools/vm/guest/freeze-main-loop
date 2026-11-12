@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Runs inside the guest. Makes a process look hung: with gdb, lets only one
+# of its threads run and keeps all the others (the main loop among them)
+# stopped. Used to test a watchdog thread, which must then end the process.
+#
+#   freeze-main-loop PID THREAD SECONDS
+#
+# PID is the process id (the caller knows which process it started; nothing
+# is looked up by name), THREAD the name of the one thread that keeps
+# running. Waits until the process ends or SECONDS pass (then gdb detaches
+# and the process continues). Prints `gone` or `alive`, and the milliseconds
+# that took.
+set -euo pipefail
+
+(($# == 3)) || { echo "usage: freeze-main-loop PID THREAD SECONDS" >&2; exit 2; }
+pid="$1" thread="$2" seconds="$3"
+
+[[ "$pid" =~ ^[0-9]+$ ]] || { echo "freeze-main-loop: not a process id: $pid" >&2; exit 2; }
+[[ -d "/proc/$pid" ]] || { echo "freeze-main-loop: no process with id $pid" >&2; exit 1; }
+number="$(sudo gdb -q -batch -p "$pid" -ex 'info threads' 2>/dev/null \
+    | grep "\"$thread\"" | sed -E 's/^[* ]*([0-9]+) .*/\1/' | head -n 1)"
+[[ -n "$number" ]] || { echo "freeze-main-loop: process $pid has no thread named $thread" >&2; exit 1; }
+
+commands="$(mktemp)"
+trap 'rm -f "$commands"' EXIT
+cat >"$commands" <<GDB
+set pagination off
+attach $pid
+handle SIGABRT nostop noprint pass
+thread $number
+set scheduler-locking on
+continue
+GDB
+
+start="$(date +%s%N)"
+sudo timeout "$seconds" gdb -q -batch -x "$commands" >/dev/null 2>&1 || true
+end="$(date +%s%N)"
+# An aborted process stays around while its core dump is written.
+for _ in $(seq 100); do
+    kill -0 "$pid" 2>/dev/null || break
+    grep -qs '^State:.*Z' "/proc/$pid/status" && break
+    sleep 0.1
+done
+if kill -0 "$pid" 2>/dev/null && ! grep -qs '^State:.*Z' "/proc/$pid/status"; then
+    echo alive
+else
+    echo gone
+fi
+echo $(((end - start) / 1000000))

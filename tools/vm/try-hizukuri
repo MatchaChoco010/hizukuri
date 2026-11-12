@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Gets the compositor into the verification VM, ready to be started by hand:
+# builds it, makes sure the VM runs, and sends the binaries and the built-in
+# scripts to the guest.
+#
+#   tools/vm/try-hizukuri          VM without a window (SSH and QMP)
+#   tools/vm/try-hizukuri --gtk    VM in a window
+#
+# Run it in the Nix development shell (`nix develop`): the guest has the
+# libraries of that shell, and a binary built against other libraries does
+# not start there.
+#
+# Then, in the guest: log in as hizukuri / hizukuri and run `hzk`.
+# See docs/dev/vm-environment.md.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+vm="$here/vm"
+
+display="headless"
+build=1
+for arg in "$@"; do
+    case "$arg" in
+        --gtk) display="gtk" ;;
+        --skip-build) build=0 ;;
+        -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "try-hizukuri: unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
+
+target="${CARGO_TARGET_DIR:-$root/target}/debug"
+if ((build)); then
+    (cd "$root" && cargo build -j "${CARGO_BUILD_JOBS:-8}" -p hizukuri -p hizukuri-test-client)
+fi
+for name in hizukuri hizukuri-ctl hizukuri-test-client; do
+    [[ -x "$target/$name" ]] || { echo "try-hizukuri: $target/$name is missing" >&2; exit 1; }
+done
+
+status="$("$vm" status)"
+# The display cannot be changed while the VM runs: restart it if it differs.
+if [[ "$status" == *"state: running"* && "$status" != *"display: $display"* ]]; then
+    "$vm" stop
+    status="state: stopped"
+fi
+if [[ "$status" != *"state: running"* ]]; then
+    if [[ "$display" == "gtk" ]]; then
+        "$vm" start --gtk
+    else
+        "$vm" start
+    fi
+fi
+"$vm" wait-ssh
+"$vm" ssh 'mkdir -p ~/bin'
+"$vm" push "$target/hizukuri" "$target/hizukuri-ctl" "$target/hizukuri-test-client" bin/
+if ! "$vm" ssh '~/bin/hizukuri --version' >/dev/null 2>&1; then
+    echo "try-hizukuri: the binary does not start in the guest. Build it in the Nix" >&2
+    echo "              development shell: nix develop --command tools/vm/try-hizukuri" >&2
+    exit 1
+fi
+# The built-in scripts as files, for `hzk script`. This copy is replaced
+# every time; the one that is edited in the guest (~/hzk-scripts) is made from
+# it by `hzk script` and is left alone here.
+"$vm" ssh 'rm -rf ~/hzk-scripts.orig && mkdir -p ~/hzk-scripts.orig'
+"$vm" push "$root/crates/hizukuri/scripts/" hzk-scripts.orig/
+
+cat <<TEXT
+
+The VM runs ($display) and has the binaries. In the guest:
+  1. log in on the console: user hizukuri, password hizukuri
+  2. run:  hzk            (CPU rendering, copied into dumb buffers)
+     or:   hzk script     (drawing and tiling by the scripts in ~/hzk-scripts,
+                           which can be edited and reloaded while it runs)
+     or:   hzk venus      (in a VM started with HIZUKURI_VM_GPU=venus)
+  3. Ctrl+Alt+Backspace quits. \`hzk --help\` lists the options.
+Stop the VM with: tools/vm/vm stop
+TEXT
+if [[ "$display" == "headless" ]]; then
+    echo "Without a window, the same thing: tools/vm/vm tty-run -- hzk"
+fi

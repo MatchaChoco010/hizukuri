@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# Runs inside the guest, from a login on a virtual terminal (the console of
+# a VM shown in a window, or `tools/vm/vm tty-run`).
+# Starts the compositor as a DRM/KMS session, opens a few applications in it,
+# and cleans up when the compositor ends.
+#
+#   hzk [venus|lavapipe|script] [--seconds N] [--mode WxH] [--no-apps]
+#       [--reset-scripts]
+#
+#   lavapipe  render on the CPU, copy frames into dumb buffers (the default)
+#   venus     render on the virtio-gpu, scan out dma-bufs. Needs a VM that
+#             was started with HIZUKURI_VM_GPU=venus.
+#   script    drawing and window management by the scripts in ~/hzk-scripts,
+#             rendered on the CPU. Edit the files and press Ctrl+Alt+Shift+R
+#             to load them again.
+#
+#   --reset-scripts  with `script`: start again from the scripts as they were
+#                    sent (the edited ones are kept in ~/hzk-scripts.bak)
+#
+# The binaries and the scripts are sent by tools/vm/try-hizukuri, to ~/bin
+# and ~/hzk-scripts.orig.
+set -euo pipefail
+
+path="lavapipe"
+seconds=600
+mode=""
+apps=1
+reset_scripts=0
+scripts="$HOME/hzk-scripts"
+while (($#)); do
+    case "$1" in
+        venus | lavapipe | script) path="$1" ;;
+        --seconds) seconds="$2"; shift ;;
+        --mode) mode="$2"; shift ;;
+        --no-apps) apps=0 ;;
+        --reset-scripts) reset_scripts=1 ;;
+        -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "hzk: unknown argument: $1 (try --help)" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+bin="$HOME/bin"
+[[ -x "$bin/hizukuri" ]] || {
+    echo "hzk: $bin/hizukuri is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+    exit 1
+}
+if [[ -z "${XDG_VTNR:-}" ]]; then
+    echo "hzk: this is not a session on a virtual terminal (an SSH login has no seat)." >&2
+    echo "     Log in on the VM's console, or from outside use: tools/vm/vm tty-run -- hzk" >&2
+    exit 1
+fi
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+socket="hizukuri-0"
+control="$XDG_RUNTIME_DIR/$socket.control"
+ctl=("$bin/hizukuri-ctl" --socket "$control")
+log="$HOME/hzk.log"
+
+# A background that differs from the terminals' own, so that windows stand out.
+args=(--backend kms --socket "$socket" --exit-after "$seconds" --background 30405c)
+[[ "$path" == "lavapipe" || "$path" == "script" ]] && args+=(--vulkan-device cpu)
+[[ -n "$mode" ]] && args+=(--kms-mode "$mode")
+
+if [[ "$path" == "script" ]]; then
+    # The scripts are files, so that they can be edited while the session
+    # runs. The copy that was sent stays untouched next to them.
+    if [[ ! -d "$scripts.orig" ]]; then
+        echo "hzk: $scripts.orig is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+        exit 1
+    fi
+    if ((reset_scripts)) && [[ -d "$scripts" ]]; then
+        rm -rf "$scripts.bak"
+        mv "$scripts" "$scripts.bak"
+    fi
+    [[ -d "$scripts" ]] || cp -r "$scripts.orig" "$scripts"
+    args+=(--renderer script --wm script --script "$scripts")
+fi
+
+cat <<TEXT
+hizukuri ($path) starts now and ends by itself after $seconds s.
+
+  Ctrl+Alt+Backspace   quit
+  Ctrl+Alt+F2          switch to another console; Ctrl+Alt+F${XDG_VTNR} comes back
+  click a window       give it the keyboard focus
+
+TEXT
+if [[ "$path" == "script" ]]; then
+    cat <<TEXT
+The scripts in $scripts draw the screen and tile the windows.
+
+  logo+H, logo+L               focus the window to the left, to the right
+  logo+shift+H, logo+shift+L   swap the focused window with its neighbour
+  logo+Q                       close the focused window
+  Ctrl+Alt+Shift+R             load the scripts again (after editing them)
+  Ctrl+Alt+Shift+F             leave the scripts: the built-in fallback draws,
+                               with a bar along the top edge
+
+Try: in a terminal, change "T.gap = 8" in $scripts/tile.luau
+(vim and nano are installed), then press Ctrl+Alt+Shift+R.
+When a script fails, the fallback takes over and the session stays usable.
+What failed:  ~/bin/hizukuri-ctl --socket $control state | grep -A8 last_failures
+TEXT
+else
+    cat <<TEXT
+Windows cannot be moved with the mouse. From outside the VM:
+  tools/vm/vm ssh '~/bin/hizukuri-ctl --socket $control state'
+  tools/vm/vm ssh '~/bin/hizukuri-ctl --socket $control move-window ID X Y'
+TEXT
+fi
+echo "The log is in $log."
+sleep 2
+
+"$bin/hizukuri" "${args[@]}" >"$log" 2>&1 &
+compositor=$!
+client_pids=()
+cleanup() {
+    for pid in "${client_pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+}
+trap cleanup EXIT
+
+for _ in $(seq 100); do
+    "${ctl[@]}" ping >/dev/null 2>&1 && break
+    kill -0 "$compositor" 2>/dev/null || break
+    sleep 0.1
+done
+if ! "${ctl[@]}" ping >/dev/null 2>&1; then
+    wait "$compositor" || true
+    echo "hzk: hizukuri did not start. The end of $log:" >&2
+    tail -n 8 "$log" >&2
+    exit 1
+fi
+
+window_ids() {
+    "${ctl[@]}" state | python3 -c '
+import json, sys
+print(" ".join(str(w["id"]) for w in json.load(sys.stdin)["windows"]))'
+}
+
+# Starts one client and puts its window at X Y once it is there.
+open_at() {
+    local x="$1" y="$2" before id
+    shift 2
+    before=" $(window_ids) "
+    env -u DISPLAY WAYLAND_DISPLAY="$socket" "$@" >/dev/null 2>&1 &
+    client_pids+=($!)
+    for _ in $(seq 50); do
+        for id in $(window_ids); do
+            if [[ "$before" != *" $id "* ]]; then
+                # With the script layer, the tiling script places the window.
+                [[ "$path" == "script" ]] || "${ctl[@]}" move-window "$id" "$x" "$y" >/dev/null
+                return 0
+            fi
+        done
+        sleep 0.1
+    done
+    echo "hzk: no window appeared for: $*" >>"$log"
+}
+
+if ((apps)) && [[ "$path" == "script" ]]; then
+    command -v foot >/dev/null && open_at 0 0 foot
+    command -v weston-terminal >/dev/null && open_at 0 0 weston-terminal
+    command -v alacritty >/dev/null && open_at 0 0 alacritty
+elif ((apps)); then
+    # Laid out for the default 1280x800 mode: two small terminals on the left,
+    # a larger one on the right.
+    command -v foot >/dev/null && open_at 20 20 foot --window-size-pixels=430x300
+    command -v foot >/dev/null && open_at 20 360 foot --window-size-pixels=430x300 \
+        sh -c 'echo "second foot: click here, then type"; exec bash'
+    command -v weston-terminal >/dev/null && open_at 465 100 weston-terminal
+fi
+
+status=0
+wait "$compositor" || status=$?
+cleanup
+trap - EXIT
+echo "hzk: hizukuri ended with status $status (log: $log)"
+exit "$status"
