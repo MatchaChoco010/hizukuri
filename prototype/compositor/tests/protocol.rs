@@ -197,12 +197,12 @@ fn window_is_configured_mapped_and_described() {
     assert_eq!(surface["role"], "toplevel");
     assert_eq!(surface["size"], serde_json::json!([320, 240]));
     assert_eq!(surface["buffer_size"], serde_json::json!([320, 240]));
-    // No color protocol yet: BT.709 primaries, gamma 2.2, premultiplied.
+    // No image description set: BT.709 primaries, gamma 2.2, premultiplied.
     assert_eq!(surface["image_description"]["name"], "srgb-gamma22");
     assert_eq!(surface["alpha_mode"], "premultiplied-electrical");
     assert_eq!(
         surface["decode_pipeline"],
-        "unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(80/80) | premultiply"
+        "unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(79.8/79.8) | premultiply"
     );
 
     assert_eq!(state["focus"]["window"], window);
@@ -211,7 +211,7 @@ fn window_is_configured_mapped_and_described() {
     assert_eq!(state["gpu"], Value::Null);
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
-        "luminance:x(80/80) | primaries:bt2020->srgb | clip[0,1] | inverse-eotf:gamma22"
+        "luminance:x(79.8/79.8) | primaries:bt2020->srgb | clip[0,1] | inverse-eotf:gamma22"
     );
 }
 
@@ -783,7 +783,7 @@ fn surface_color_override_changes_the_decode_pipeline() {
     assert_eq!(node["alpha_mode"], "straight");
     assert_eq!(
         node["decode_pipeline"],
-        "eotf:srgb-piecewise | primaries:display-p3->bt2020 | luminance:x(80/80) | premultiply"
+        "eotf:srgb-piecewise | primaries:display-p3->bt2020 | luminance:x(79.8/79.8) | premultiply"
     );
     let refused = f.compositor.control(&Request::SetSurfaceColor {
         surface,

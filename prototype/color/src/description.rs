@@ -5,10 +5,11 @@ use crate::transfer::TransferFunction;
 
 /// Luminances of the primary color volume, in cd/m².
 ///
-/// `max` is the luminance of the maximum linear value (1.0 after
-/// [`TransferFunction::decode`]). `reference` is the luminance of the
-/// reference white ("SDR white"); all content is anchored to it when
-/// compositing.
+/// `min` is the luminance of the linear value 0.0 after
+/// [`TransferFunction::decode`] (the black level) and `max` that of 1.0
+/// (for PQ, `min + 10000` whatever `max` says). `reference` is the
+/// luminance of the reference white ("SDR white"); all content is anchored
+/// to it when compositing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Luminance {
     pub min: f32,
@@ -41,16 +42,32 @@ impl Luminance {
         reference: 203.0,
     };
 
+    /// Default of color-management-v1 for HLG (a 1000 cd/m² display):
+    /// 0.005 / 1000 / 203 cd/m².
+    pub const HLG: Luminance = Luminance {
+        min: 0.005,
+        max: 1000.0,
+        reference: 203.0,
+    };
+
     /// The default luminances that color-management-v1 associates with a
     /// transfer function.
-    ///
-    /// The protocol gives BT.1886 its own defaults. This crate does not
-    /// distinguish BT.1886 from a plain 2.4 power function, so the protocol
-    /// layer has to pass [`Luminance::BT1886`] explicitly for it.
-    pub fn default_for(transfer: TransferFunction) -> Luminance {
+    pub const fn default_for(transfer: TransferFunction) -> Luminance {
         match transfer {
             TransferFunction::Pq => Luminance::PQ,
+            TransferFunction::Hlg => Luminance::HLG,
+            TransferFunction::Bt1886 => Luminance::BT1886,
             _ => Luminance::SDR,
+        }
+    }
+
+    /// The luminance of the decoded value 1.0 above the black level: the
+    /// swing of the transfer function. `max - min`, except for PQ, whose
+    /// swing is always 10000 cd/m².
+    pub fn swing(&self, transfer: TransferFunction) -> f64 {
+        match transfer {
+            TransferFunction::Pq => 10000.0,
+            _ => self.max as f64 - self.min as f64,
         }
     }
 }
@@ -85,10 +102,7 @@ impl ImageDescription {
     /// Builds a description with the default luminances of the transfer
     /// function and no mastering information.
     pub const fn new(primaries: Primaries, transfer: TransferFunction) -> Self {
-        let luminance = match transfer {
-            TransferFunction::Pq => Luminance::PQ,
-            _ => Luminance::SDR,
-        };
+        let luminance = Luminance::default_for(transfer);
         Self {
             primaries,
             transfer,
@@ -204,7 +218,8 @@ impl AlphaMode {
             .expect("every alpha mode is named")
     }
 
-    /// Identifier of this mode in the shaders (`shaders/color.glsl`).
+    /// Identifier of this mode in the shaders
+    /// (`prototype/compositor/scripts/render.luau`).
     pub fn shader_id(&self) -> u32 {
         match self {
             AlphaMode::PremultipliedElectrical => 0,
@@ -227,6 +242,25 @@ mod tests {
             Luminance::SDR
         );
         assert_eq!(Luminance::default_for(TransferFunction::Pq), Luminance::PQ);
+        assert_eq!(
+            Luminance::default_for(TransferFunction::Bt1886),
+            Luminance::BT1886
+        );
+        assert_eq!(
+            Luminance::default_for(TransferFunction::Hlg),
+            Luminance::HLG
+        );
+    }
+
+    #[test]
+    fn pq_swings_10000_above_its_black() {
+        let pq = Luminance {
+            min: 0.1,
+            max: 1.0,
+            reference: 203.0,
+        };
+        assert_eq!(pq.swing(TransferFunction::Pq), 10000.0);
+        assert!((Luminance::SDR.swing(TransferFunction::Gamma22) - 79.8).abs() < 1e-5);
     }
 
     #[test]

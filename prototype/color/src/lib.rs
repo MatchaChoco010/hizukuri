@@ -23,7 +23,7 @@ mod transfer;
 pub use description::{AlphaMode, ImageDescription, Luminance, MasteringDisplay};
 pub use math::Mat3;
 pub use pipeline::{
-    CompositeSpace, DecodeTransform, EncodeTransform, ToneMapping, blend_over, quantize_unorm,
+    CompositeSpace, DecodeTransform, EncodeTransform, Ootf, ToneMapping, blend_over, quantize_unorm,
 };
 pub use primaries::{Chromaticity, Primaries};
 pub use transfer::TransferFunction;

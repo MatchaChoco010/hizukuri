@@ -17,8 +17,9 @@ use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shm::with_buffer_contents;
 use smithay::wayland::viewporter::ViewportCachedState;
 
+use crate::color::SurfaceColor;
 use crate::{
-    BufferContents, BufferKind, BufferSource, BufferTransform, BufferUpdate,
+    BufferContents, BufferKind, BufferSource, BufferTransform, BufferUpdate, ColorSource,
     DEFAULT_SURFACE_IMAGE_DESCRIPTION, DamageRect, DmabufContents, DmabufPlane, ShmFormat,
     SurfaceId, SurfaceNode, SurfaceRole,
 };
@@ -54,8 +55,13 @@ pub(crate) struct SurfaceState {
     pub generation: u64,
     /// What the client marked as changed since the contents were last taken.
     pub damage: Vec<DamageRect>,
-    pub image_description: ImageDescription,
-    pub alpha_mode: AlphaMode,
+    /// What the control interface said the values mean
+    /// ([`crate::WlServer::set_surface_color`]). Wins over what the client
+    /// said through color-management-v1.
+    pub color_override: Option<(ImageDescription, AlphaMode)>,
+    /// Whether a `wp_color_management_surface_v1` exists for the surface
+    /// (there may be only one).
+    pub color_managed: bool,
     /// The transform the contents that were last handed out had.
     taken_transform: BufferTransform,
     warned_transform: bool,
@@ -70,8 +76,8 @@ impl SurfaceState {
             pending: None,
             generation: 0,
             damage: Vec::new(),
-            image_description: DEFAULT_SURFACE_IMAGE_DESCRIPTION,
-            alpha_mode: AlphaMode::PremultipliedElectrical,
+            color_override: None,
+            color_managed: false,
             taken_transform: BufferTransform::Normal,
             warned_transform: false,
         }
@@ -440,8 +446,29 @@ pub(crate) fn collect_tree(
             } else {
                 root_role
             };
+            let protocol = states
+                .cached_state
+                .get::<SurfaceColor>()
+                .current()
+                .description;
             let node = with_surface_state(states, |state| {
                 let geometry = surface_geometry(states, state);
+                let (image_description, alpha_mode, color_source) =
+                    match (state.color_override, protocol) {
+                        (Some((description, alpha)), _) => {
+                            (description, alpha, ColorSource::Control)
+                        }
+                        (None, Some((description, intent))) => (
+                            description,
+                            AlphaMode::PremultipliedElectrical,
+                            ColorSource::Protocol(intent),
+                        ),
+                        (None, None) => (
+                            DEFAULT_SURFACE_IMAGE_DESCRIPTION,
+                            AlphaMode::PremultipliedElectrical,
+                            ColorSource::Default,
+                        ),
+                    };
                 SurfaceNode {
                     surface: state.id,
                     role,
@@ -452,8 +479,9 @@ pub(crate) fn collect_tree(
                     transform: geometry.transform,
                     source: geometry.source,
                     buffer_scale: geometry.buffer_scale,
-                    image_description: state.image_description,
-                    alpha_mode: state.alpha_mode,
+                    image_description,
+                    alpha_mode,
+                    color_source,
                     generation: state.generation,
                 }
             });

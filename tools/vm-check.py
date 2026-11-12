@@ -65,6 +65,7 @@ The exit status is 0 when nothing failed.
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -1184,6 +1185,83 @@ class Run:
         wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
         return "; ".join(notes)
 
+    def check_color_management(self):
+        """color-management-v1 on a KMS session, with real clients:
+        wayland-info reads what is advertised and the output's image
+        description, Mesa's Vulkan WSI (vkcube) binds the manager for its
+        swapchain, and the test client sets BT.2100 PQ on its window. Every
+        client logs its protocol traffic (WAYLAND_DEBUG), which is kept."""
+        self.start("--exit-after", "120")
+        env = (f"env -u DISPLAY XDG_RUNTIME_DIR={self.runtime} WAYLAND_DISPLAY={SOCKET} "
+               f"WAYLAND_DEBUG=1")
+        notes = []
+
+        # 1. wayland-info: the advertisement, and the output's description
+        # through get_output, get_image_description and get_information.
+        if not guest("command -v wayland-info || true").strip():
+            raise Failed("wayland-info is not installed in the guest")
+        status = guest(f"{env} timeout 10 wayland-info -i wp_color_manager_v1 "
+                       f"> {GUEST_DIR}/wayland-info.txt 2> {GUEST_DIR}/wayland-info-debug.txt; "
+                       f"echo $?").strip()
+        text = self.fetch(f"{GUEST_DIR}/wayland-info.txt", "color-wayland-info.txt")
+        debug = self.fetch(f"{GUEST_DIR}/wayland-info-debug.txt",
+                           "color-wayland-info-debug.txt")
+        if status != "0" or "wl_display#1.error" in debug:
+            raise Failed(f"wayland-info failed ({status}): {debug.strip()[-300:]}")
+        for wanted in ("perceptual", "parametric", "set_luminances", "st2084_pq", "hlg",
+                       "bt2020", "display_p3", "tf_named: gamma22"):
+            if wanted not in text:
+                raise Failed(f"wayland-info does not list {wanted!r}: {text.strip()[-400:]}")
+        notes.append("wayland-info lists the features and the output's description")
+
+        # 2. vkcube: Mesa's WSI binds the manager (version 1) and makes a
+        # color management surface for its sRGB swapchain.
+        if guest("command -v vkcube || true").strip():
+            before = {w["id"] for w in self.state()["windows"]}
+            cube_pid = spawn(f"{env} vkcube --wsi wayland", "color-vkcube.log")
+            try:
+                window = wait_for("vkcube's window", lambda: next(
+                    (w for w in self.state()["windows"] if w["id"] not in before
+                     and w["mapped"] and w["surfaces"] and w["surfaces"][0]["has_contents"]),
+                    None), seconds=20)
+                log = self.fetch(f"{GUEST_DIR}/color-vkcube.log", "color-vkcube.log")
+                if "wl_display#1.error" in log:
+                    raise Failed("vkcube was sent a protocol error")
+                bound = re.search(r'bind\(\d+, "wp_color_manager_v1", (\d+)', log)
+                if not bound:
+                    raise Failed("vkcube did not bind wp_color_manager_v1")
+                made = ".get_surface(" in log
+                notes.append(f"vkcube binds version {bound.group(1)}"
+                             + (" and makes a color surface" if made else
+                                ", makes no color surface"))
+                self.ctl("close-window", str(window["id"]))
+            finally:
+                stop_spawned(cube_pid)
+        else:
+            notes.append("vkcube is not installed")
+
+        # 3. The test client: BT.2100 PQ set through the protocol reaches
+        # the compositor's description of the surface.
+        spawn(f"{env} {GUEST_BIN}/proto-test-client --socket {self.runtime}/{SOCKET} "
+              f"--title hzk-pq --size 200x120 --duration 60 "
+              f"--image-description tf=st2084_pq,primaries=bt2020 --color-info",
+              "color-client.log")
+        window = wait_for("the PQ window", lambda: next(
+            (w for w in self.state()["windows"] if w["title"] == "hzk-pq" and w["mapped"]
+             and w["surfaces"][0].get("color_source") == "protocol"), None), seconds=15)
+        description = window["surfaces"][0]["image_description"]
+        if description.get("name") != "bt2020-pq":
+            raise Failed(f"the window is described as {description}")
+        log = self.fetch(f"{GUEST_DIR}/color-client.log", "color-client.log")
+        if "wl_display#1.error" in log:
+            raise Failed("the test client was sent a protocol error")
+        notes.append("the test client's window is BT.2100 PQ")
+        vm("screendump", os.path.join(self.out, "screen-color.png"), check=False)
+
+        self.ctl("quit")
+        wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
+        return "; ".join(notes)
+
     def run(self):
         self.stop()
         if self.item("start", self.check_start):
@@ -1217,6 +1295,8 @@ class Run:
         self.item("protocols", self.check_protocols)
         self.stop()
         self.item("input-protocols", self.check_input_protocols)
+        self.stop()
+        self.item("color-management", self.check_color_management)
         self.stop()
         self.item("script-layer", self.check_script_layer)
         self.stop()

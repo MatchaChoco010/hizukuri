@@ -275,8 +275,8 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 `decode_pipeline` と `encode_pipeline` は、どの変換をどの順でかけるかを表す文字列である。
 
 ```text
-unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(80/80) | premultiply
-luminance:x(80/80) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise
+unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(79.8/79.8) | premultiply
+luminance:x(79.8/79.8) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise
 ```
 
 取り込んだ画像の形式:

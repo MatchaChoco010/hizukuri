@@ -115,6 +115,12 @@ enum Command {
         #[arg(long)]
         alpha_mode: Option<String>,
     },
+    /// Change the image description an output is driven with (preset
+    /// name). Headless only.
+    SetOutputImageDescription {
+        output: String,
+        image_description: String,
+    },
     /// Call a global function of the script. Each argument is JSON
     /// (`3`, `"text"`, `[1, 0, 0, 1, 20, 30]`, `null`).
     ScriptCall { function: String, args: Vec<String> },
@@ -194,6 +200,13 @@ fn main() -> ExitCode {
             surface,
             image_description,
             alpha_mode,
+        },
+        Command::SetOutputImageDescription {
+            output,
+            image_description,
+        } => Request::SetOutputImageDescription {
+            output,
+            image_description,
         },
         Command::ScriptCall { function, args } => {
             let parsed: Result<Vec<serde_json::Value>, _> =

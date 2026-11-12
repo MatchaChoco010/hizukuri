@@ -228,6 +228,9 @@ impl CompositorHandler for State {
             // New contents or a new hotspot for the cursor image.
             self.push_event(WlEvent::CursorChanged);
         }
+        // A surface that became part of a window (a subsurface, a popup)
+        // now prefers what the window's output does.
+        self.refresh_color_feedback();
     }
 
     fn destroyed(&mut self, surface: &WlSurface) {

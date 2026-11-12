@@ -225,6 +225,29 @@ impl Backend for HeadlessBackend {
         "headless"
     }
 
+    /// The render target keeps the description it was made with; what is
+    /// encoded follows the output's [`OutputInfo`].
+    fn set_output_image_description(
+        &mut self,
+        output: OutputId,
+        description: ImageDescription,
+    ) -> Result<(), BackendError> {
+        let mut shared = self.shared.borrow_mut();
+        let Some(o) = shared.outputs.iter_mut().find(|o| o.info.id == output) else {
+            return Err(BackendError::InvalidConfig(format!(
+                "unknown output {}",
+                output.0
+            )));
+        };
+        if o.info.image_description != description {
+            o.info.image_description = description;
+            o.info.supported_image_descriptions = vec![description];
+            let info = o.info.clone();
+            shared.events.push_back(BackendEvent::OutputChanged(info));
+        }
+        Ok(())
+    }
+
     fn outputs(&self) -> Vec<OutputInfo> {
         self.shared
             .borrow()

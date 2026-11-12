@@ -15,6 +15,7 @@
 //! accident.
 
 mod clipboard;
+mod color;
 mod external;
 mod features;
 mod ime;
@@ -44,6 +45,7 @@ use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 pub use clipboard::{DataControlProtocol, SelectionKind};
+pub use color::{ColorTarget, CreatorStep, ImageInfo};
 pub use external::{ExternalDmabuf, create_udmabuf};
 pub use features::{PopupOptions, SurfaceKind, ToplevelRequest};
 pub use ime::{ImeEvent, InputMethodMode};
@@ -212,6 +214,9 @@ pub struct ClientOptions {
     pub text_input_enable_on_enter: Option<(i32, i32, i32, i32)>,
     /// Be the input method of the seat (`zwp_input_method_v2`).
     pub input_method: Option<InputMethodMode>,
+    /// Bind `wp_color_manager_v1` with at most this version. `None`: do
+    /// not bind it.
+    pub color_manager_version: Option<u32>,
 }
 
 impl Default for ClientOptions {
@@ -234,6 +239,7 @@ impl Default for ClientOptions {
             text_input: false,
             text_input_enable_on_enter: None,
             input_method: None,
+            color_manager_version: None,
         }
     }
 }
@@ -464,6 +470,41 @@ pub enum ClientEvent {
         serial: u32,
         commits: u32,
     },
+    /// What `wp_color_manager_v1` advertised, as the protocol's numbers,
+    /// once `done` came.
+    ColorManagerSupport {
+        version: u32,
+        intents: Vec<u32>,
+        features: Vec<u32>,
+        transfer_functions: Vec<u32>,
+        primaries: Vec<u32>,
+    },
+    /// An image description became ready. `version` is that of the event
+    /// (1: `ready`, 2: `ready2`).
+    ImageDescriptionReady {
+        index: usize,
+        identity: u64,
+        version: u32,
+    },
+    ImageDescriptionFailed {
+        index: usize,
+        cause: u32,
+        message: String,
+    },
+    /// What `get_information` delivered, once `done` came.
+    ImageDescriptionInfo {
+        index: usize,
+        info: ImageInfo,
+    },
+    /// `wp_color_management_surface_feedback_v1.preferred_changed` (or
+    /// `preferred_changed2`).
+    PreferredChanged {
+        identity: u64,
+    },
+    /// `wp_color_management_output_v1.image_description_changed`.
+    OutputImageDescriptionChanged {
+        output: String,
+    },
 }
 
 #[derive(Default)]
@@ -541,6 +582,7 @@ struct State {
     dmabuf_feedback: features::FeedbackState,
     pointer: pointer::PointerState,
     clipboard: clipboard::ClipboardState,
+    color: color::ColorState,
     /// Never create a window (a clipboard manager has none).
     windowless: bool,
     ime: ime::ImeState,
@@ -589,6 +631,7 @@ impl TestClient {
             dmabuf_feedback: features::FeedbackState::default(),
             pointer: pointer::PointerState::default(),
             clipboard: clipboard::ClipboardState::default(),
+            color: color::ColorState::default(),
             windowless: false,
             ime: ime::ImeState::default(),
         };
@@ -1047,6 +1090,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "ext_data_control_manager_v1" => {
                     state.globals.ext_data_control_manager =
                         Some(registry.bind(name, 1, handle, ()));
+                }
+                "wp_color_manager_v1" => {
+                    if let Some(wanted) = state.options.color_manager_version {
+                        state.color.manager =
+                            Some(registry.bind(name, version.min(wanted), handle, ()));
+                    }
                 }
                 "zwlr_data_control_manager_v1" => {
                     // Version 2 has the primary selection.

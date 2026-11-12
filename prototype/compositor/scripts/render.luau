@@ -35,8 +35,8 @@ struct Push {
     ay: vec4<f32>,      // c, d, ty, quad height  (pixel = c*x + d*y + ty)
     uv_u: vec4<f32>,    // a, b, tx: u = a*s + b*t + tx over the unit square
     uv_v: vec4<f32>,    // c, d, ty: v = c*s + d*t + ty
-    m0: vec4<f32>,      // rows of the color matrix (xyz)
-    m1: vec4<f32>,
+    m0: vec4<f32>,      // rows of the color matrix (xyz); w: the luminance
+    m1: vec4<f32>,      // coefficients of the HLG OOTF (zero otherwise)
     m2: vec4<f32>,
     target_size: vec2<f32>,
     tf_param: f32,
@@ -76,6 +76,21 @@ fn to_working(linear: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(pc.m0.xyz, linear), dot(pc.m1.xyz, linear), dot(pc.m2.xyz, linear));
 }
 
+// Encoded values -> display light. HLG decodes to scene light, which its
+// OOTF turns into display light by the luminance of the scene light (the
+// system gamma is `tf_param`).
+fn decode(e: vec3<f32>) -> vec3<f32> {
+    let linear = tf_decode(e, pc.tf, pc.tf_param);
+    if pc.tf == TF_HLG {
+        let y = dot(vec3<f32>(pc.m0.w, pc.m1.w, pc.m2.w), linear);
+        if y <= 0.0 {
+            return vec3<f32>(0.0);
+        }
+        return linear * pow(y, pc.tf_param - 1.0);
+    }
+    return linear;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let texel = textureSampleLevel(u_texture, u_sampler, in.uv, 0.0);
@@ -85,12 +100,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if alpha <= 0.0 {
             premultiplied = vec3<f32>(0.0);
         } else {
-            premultiplied = to_working(tf_decode(texel.rgb / alpha, pc.tf, pc.tf_param)) * alpha;
+            premultiplied = to_working(decode(texel.rgb / alpha)) * alpha;
         }
     } else if pc.alpha_mode == ALPHA_PREMULTIPLIED_OPTICAL {
-        premultiplied = to_working(tf_decode(texel.rgb, pc.tf, pc.tf_param));
+        premultiplied = to_working(decode(texel.rgb));
     } else {
-        premultiplied = to_working(tf_decode(texel.rgb, pc.tf, pc.tf_param)) * alpha;
+        premultiplied = to_working(decode(texel.rgb)) * alpha;
     }
     return vec4<f32>(premultiplied, alpha) * pc.opacity;
 }
@@ -262,6 +277,11 @@ local function draw_quad(to_pixels, width, height, surface, opacity)
     buffer.writef32(push, 52, uv[4])
     buffer.writef32(push, 56, uv[6])
     write_matrix(push, 64, decode.matrix)
+    -- The w of the three matrix rows.
+    local ootf = decode.ootf_coefficients or { 0, 0, 0 }
+    buffer.writef32(push, 76, ootf[1])
+    buffer.writef32(push, 92, ootf[2])
+    buffer.writef32(push, 108, ootf[3])
     buffer.writef32(push, 120, decode.transfer_param)
     buffer.writef32(push, 124, opacity)
     buffer.writeu32(push, 128, decode.transfer_id)

@@ -1,6 +1,7 @@
 //! The Smithay-facing state and the operations [`crate::WlServer`] exposes.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use proto_color::{AlphaMode, ImageDescription};
@@ -47,6 +48,7 @@ use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 
+use crate::color::{ColorState, Record};
 use crate::ime::ImeState;
 use crate::surface::{collect_tree, surface_id, surface_size, take_buffer, with_surface_state};
 use crate::{
@@ -85,6 +87,8 @@ pub(crate) struct OutputEntry {
     pub output: Output,
     pub global: GlobalId,
     pub scale: f64,
+    /// The image description the output expects, as told to clients.
+    pub color: Arc<Record>,
 }
 
 pub(crate) struct State {
@@ -124,6 +128,8 @@ pub(crate) struct State {
     /// held the keyboard grab. The input method keeps the grab; the
     /// keyboard focus stays on the menu until it closes.
     pub menu_grab: Option<PopupGrab<State>>,
+    /// color-management-v1.
+    pub color: ColorState,
 
     pub events: Vec<WlEvent>,
     pub windows: Vec<Window>,
@@ -244,6 +250,7 @@ impl State {
             _virtual_keyboard_state: virtual_keyboard_state,
             ime: ImeState::new(),
             menu_grab: None,
+            color: ColorState::new(dh),
             events: Vec::new(),
             windows: Vec::new(),
             popups: Vec::new(),
@@ -300,13 +307,16 @@ impl State {
         );
         output.set_preferred(mode);
         let global = output.create_global::<State>(&self.display_handle);
+        let color = self.color.record(config.image_description);
         self.outputs.push(OutputEntry {
             id,
             output,
             global,
             scale: config.scale,
+            color,
         });
         self.announce_outputs_to_all();
+        self.refresh_color_feedback();
         id
     }
 
@@ -319,6 +329,14 @@ impl State {
             size: Size::from(config.mode_size),
             refresh: config.refresh_mhz,
         };
+        let color_changed = entry.color.description != config.image_description;
+        if color_changed {
+            // A new record: image descriptions do not change, and the
+            // identity tells clients it is another one.
+            entry.color = self.color.record(config.image_description);
+            // Before the wl_output.done that change_current_state sends.
+            self.color.output_changed(id);
+        }
         entry.output.change_current_state(
             Some(mode),
             None,
@@ -328,6 +346,9 @@ impl State {
         entry.output.set_preferred(mode);
         entry.scale = config.scale;
         self.announce_outputs_to_all();
+        if color_changed {
+            self.refresh_color_feedback();
+        }
         true
     }
 
@@ -343,6 +364,7 @@ impl State {
             outputs.retain(|output| *output != id);
         }
         self.announce_outputs_to_all();
+        self.refresh_color_feedback();
         true
     }
 
@@ -416,6 +438,16 @@ impl State {
         for surface in self.surfaces_of_window(window) {
             self.announce_outputs(&surface);
         }
+        // The main output decides the preferred image description.
+        self.refresh_color_feedback();
+    }
+
+    /// The outputs a window was said to be on, main output first.
+    pub(crate) fn window_outputs_of(&self, window: WindowId) -> &[OutputId] {
+        self.window_outputs
+            .get(&window)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Every surface of a window: its tree and the trees of its popups.
@@ -791,8 +823,7 @@ impl State {
         };
         with_states(surface, |states| {
             with_surface_state(states, |state| {
-                state.image_description = image_description;
-                state.alpha_mode = alpha_mode;
+                state.color_override = Some((image_description, alpha_mode));
             })
         })
         .is_some()
