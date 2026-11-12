@@ -11,6 +11,7 @@
 mod api;
 #[cfg(feature = "luau")]
 mod interrupt;
+pub mod shaders;
 
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;

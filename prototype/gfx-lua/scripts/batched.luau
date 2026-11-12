@@ -3,50 +3,8 @@
 -- The texture of each quad is chosen by an index that travels in the instance
 -- buffer, so the shader, not the script, decides which heap slot is read. The
 -- shader declares a fixed-size texture array; the API binds it to consecutive
--- heap slots, checks every one of them, and the shader compiler clamps the
--- index to the array.
-
-local SHADER = [[
-enable wgpu_binding_array;
-
-struct Push {
-    target_size: vec2<f32>,
-}
-var<immediate> pc: Push;
-
-struct VsOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) texture_index: u32,
-}
-
-@vertex
-fn vs(
-    @builtin(vertex_index) index: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) texture_index: u32,
-) -> VsOut {
-    var corners = array<vec2<f32>, 6>(
-        vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
-        vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
-    );
-    let corner = corners[index];
-    let pixel = rect.xy + rect.zw * corner;
-    var out: VsOut;
-    out.position = vec4(pixel / pc.target_size * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = corner;
-    out.texture_index = texture_index;
-    return out;
-}
-
-@group(0) @binding(0) var window_textures: binding_array<texture_2d<f32>, 8>;
-@group(0) @binding(1) var window_sampler: sampler;
-
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSampleLevel(window_textures[in.texture_index], window_sampler, in.uv, 0.0);
-}
-]]
+-- heap slots, checks every one of them, and clamps the index to the array
+-- when it takes in the shader.
 
 local INSTANCE_BYTES = 20
 local MAX_INSTANCES = 32768
@@ -57,8 +15,8 @@ slots = nil
 
 function init(textures)
     pipeline = gfx.create_render_pipeline({
-        vertex = gfx.create_shader({ stage = "vertex", source = SHADER, entry = "vs" }),
-        fragment = gfx.create_shader({ stage = "fragment", source = SHADER, entry = "fs" }),
+        vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/batched.slang", entry = "vs" }),
+        fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/batched.slang", entry = "fs" }),
         vertex_buffers = {
             {
                 stride = INSTANCE_BYTES,

@@ -9,14 +9,14 @@
 //! directory of the build for the built-in project. The compositor reads
 //! SPIR-V only; it never compiles.
 //!
-//! This file is also compiled into `build.rs` (`#[path]`), which builds the
-//! built-in project's shaders, so it uses nothing but `std` and
-//! `proto-slangc`.
+//! Build scripts use it for the shaders a crate carries (the compositor's
+//! built-in project, the examples of `proto-gfx-lua`), and
+//! `proto-compositor build-shaders` for any project.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use proto_slangc::{Compiler, Input};
+use crate::{Compiler, Input};
 
 /// Where a project's Slang sources are, relative to the project.
 pub const SOURCE_DIR: &str = "shaders";

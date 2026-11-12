@@ -27,27 +27,6 @@ fn software_gpu(timeout: Duration) -> Gpu {
     gpu
 }
 
-const HANG: &str = r#"
-struct Push { stop: u32 }
-var<immediate> pc: Push;
-
-@vertex
-fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    var corners = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    return vec4(corners[index], 0.0, 1.0);
-}
-
-@fragment
-fn fs() -> @location(0) vec4<f32> {
-    var spins = 0u;
-    loop {
-        if pc.stop != 0u { break; }
-        spins += 1u;
-    }
-    return vec4(f32(spins & 1u), 1.0, 0.0, 1.0);
-}
-"#;
-
 struct Scene {
     pipeline: Handle,
     target: Handle,
@@ -55,13 +34,9 @@ struct Scene {
 
 fn scene(gpu: &mut Gpu) -> Scene {
     let mut shader = |stage, entry| {
-        gpu.create_shader(&ShaderSource {
-            stage,
-            language: ShaderLanguage::Wgsl,
-            source: HANG,
-            entry,
-        })
-        .expect("shader")
+        let spirv = proto_gfx_lua::shaders::tool("shaders/hang.slang", entry);
+        gpu.create_shader_spirv(stage, entry, spirv)
+            .expect("shader")
     };
     let vertex = shader(ShaderStage::Vertex, "vs");
     let fragment = shader(ShaderStage::Fragment, "fs");

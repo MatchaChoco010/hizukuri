@@ -239,10 +239,14 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
        添字が定数か、範囲に切り詰められていることを確かめ、reflection を作る。2 の pass が、切り詰めずに成功を返す形
        （untyped pointer など）があるので、2 の結果を信頼しない。
   - SPIRV-Tools は C++ で、同じプロセスの中で動く。その中で落ちると、プロセスごと落ちる。
-- コアの shader（fallback の `prototype/compositor/shaders/fallback.slang`）と、組み込みの project の shader
-  （`prototype/compositor/scripts/shaders/`）は、Slang で書く。`proto-compositor` の `build.rs` が、`slangc` で
-  entry point ごとに SPIR-V にし、バイナリに埋め込む。実行時は、`Gpu::create_shader_spirv` で作る。Slang のコンパイラーが
-  無い機械でも、fallback と組み込みの project は描ける。
+- コアの shader（fallback の `prototype/compositor/shaders/fallback.slang`、KMS の自己診断の `selftest.slang`）と、
+  組み込みの project の shader（`prototype/compositor/scripts/shaders/`）は、Slang で書く。`proto-compositor` の `build.rs` が、
+  `slangc` で entry point ごとに SPIR-V にし、バイナリに埋め込む。実行時は、`Gpu::create_shader_spirv` で作る。
+  Slang のコンパイラーが無い機械でも、fallback、自己診断、組み込みの project は描ける。
+- `proto-gfx-lua` の例のスクリプト（`prototype/gfx-lua/scripts/`）も、同じ形の project で、shader は `scripts/shaders/` にある。
+  `gfx-probe` と `gfx-bench` の shader は `prototype/gfx-lua/shaders/` にある。どちらも、`proto-gfx-lua` の `build.rs` が
+  SPIR-V にして埋め込む。例を動かすテストと `gfx-bench` は、名前を、埋め込んだ SPIR-V に解決する loader
+  （`proto_gfx_lua::shaders::examples`）を使う。
 - `slangc` は、`prototype/slangc`（`proto-slangc`）が、子のプロセスとして呼ぶ。源は、ファイルか、標準入力で渡し、
   SPIR-V は、標準出力で受け取る。子には、時間の上限（過ぎたら、PID で止める）と、アドレス空間の上限を付け、
   core dump を残させない。環境変数は、引き継がない。エラーは、`ファイル:行:列: error 番号: 文` の形で返す。

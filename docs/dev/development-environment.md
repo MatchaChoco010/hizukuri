@@ -43,13 +43,14 @@ Wayland のサーバー側（Smithay）と、KMS のバックエンドが使う�
 | libdisplay-info（0.3 の系列） | EDID の解析（KMS） | `libdisplay-info-devel` |
 | Vulkan の loader | 実行時に `dlopen` で読み込む | `vulkan-loader` |
 
-- **Slang のコンパイラー（`slangc`）が要る。** `proto-compositor` の build script（`build.rs`）が、
-  `prototype/compositor/shaders/` の `.slang` を SPIR-V にして、バイナリに埋め込む。
+- **Slang のコンパイラー（`slangc`）が要る。** `proto-compositor` と `proto-gfx-lua` の build script（`build.rs`）が、
+  リポジトリの `.slang`（コアの shader、組み込みの project、`proto-gfx-lua` の例と道具）を SPIR-V にして、バイナリに埋め込む。
   `slangc` は、環境変数 `HIZUKURI_SLANGC` が指すもの、無ければ `PATH` のものを使う（`prototype/slangc`）。
   devShell は、`flake.lock` が固定する nixpkgs の `shader-slang`（2026.21）を入れ、`HIZUKURI_SLANGC` を、それに向ける。
   devShell の外でビルドするなら、同じ版の `slangc` を用意する。見つからなければ、ビルドは、その旨を書いて失敗する。
 - C++ のコンパイラーが要る。`proto-gfx-core` が使う SPIRV-Tools（crate `spirv-tools`）は、C++ の源からビルドされる。
-- スクリプトの shader は、いまは、WGSL と GLSL で書き、実行時に、`proto-gfx-core` が `naga` で SPIR-V にする。
+- スクリプトは、shader を Slang の源の名前で指す（[スクリプトの層](../prototype/script-layer.md#project-の-shader)）。
+  源を文字列で渡す経路（WGSL と GLSL。実行時に `proto-gfx-core` が `naga` で SPIR-V にする）も、いまは残っている。
 - スクリプト言語は、決まっていない。いまは、仮の言語として Luau を使っている。`mlua` が、Luau をソースからビルドする。
   システムのライブラリは、要らない。
 

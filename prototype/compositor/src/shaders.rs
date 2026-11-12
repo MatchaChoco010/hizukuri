@@ -8,16 +8,16 @@
 //!   the project's `shaders/` with `slangc`, giving it the core's modules
 //!   (`import color;`).
 //!
-//! Names and places are in [`crate::project_shaders`].
+//! Names and places are in [`proto_slangc::project`].
 
 use std::path::{Path, PathBuf};
 
 use proto_slangc::Compiler;
 
-use crate::project_shaders::{
+use crate::script::Project;
+use proto_slangc::project::{
     Built, MODULES_DIR, OUTPUT_DIR, build, check_entry, relative_name, spirv_file,
 };
-use crate::script::Project;
 
 mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded_shaders.rs"));
@@ -97,7 +97,7 @@ pub fn core_modules() -> impl Iterator<Item = &'static str> {
 /// whose SPIR-V is newer than every source are left alone. A project without
 /// `shaders/` is left as it is.
 pub fn build_project(dir: &Path) -> Result<Built, Vec<String>> {
-    if !dir.join(crate::project_shaders::SOURCE_DIR).is_dir() && !dir.join(OUTPUT_DIR).exists() {
+    if !dir.join(proto_slangc::project::SOURCE_DIR).is_dir() && !dir.join(OUTPUT_DIR).exists() {
         return Ok(Built::default());
     }
     let modules = dir.join(MODULES_DIR);

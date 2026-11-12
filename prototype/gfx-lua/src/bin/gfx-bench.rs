@@ -82,7 +82,10 @@ fn solid_texture(gpu: &mut Gpu, size: u32, color: [u8; 4]) -> Handle {
 }
 
 impl Bench {
-    fn new(options: HostOptions) -> Self {
+    fn new(mut options: HostOptions) -> Self {
+        options
+            .shader_loader
+            .get_or_insert_with(proto_gfx_lua::shaders::examples);
         let gpu = Gpu::new(GpuConfig::from_env()).expect("gpu");
         let host = ScriptHost::new(gpu, options).expect("host");
         let textures: Vec<Handle> = (0..16u8)
@@ -448,6 +451,7 @@ fn gc(quick: bool) {
                 HostOptions {
                     memory_limit: None,
                     time_budget: Some(Duration::from_secs(60)),
+                    shader_loader: Some(proto_gfx_lua::shaders::examples()),
                     ..HostOptions::default()
                 },
             )
@@ -630,35 +634,14 @@ fn reload(quick: bool) {
     }
 
     // The parts of `init`, measured alone.
-    let wgsl = r#"
-        struct Push { rect: vec4<f32>, tint: vec4<f32> }
-        var<immediate> pc: Push;
-        @group(0) @binding(0) var t: texture_2d<f32>;
-        @group(0) @binding(1) var s: sampler;
-        struct VsOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }
-        @vertex fn vs(@builtin(vertex_index) i: u32) -> VsOut {
-            var c = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-            var out: VsOut;
-            out.position = vec4(c[i] * pc.rect.zw + pc.rect.xy, 0.0, 1.0);
-            out.uv = c[i];
-            return out;
-        }
-        @fragment fn fs(in: VsOut) -> @location(0) vec4<f32> {
-            return textureSample(t, s, in.uv) * pc.tint;
-        }"#;
     let mut compile = Vec::new();
     let mut pipeline = Vec::new();
     for _ in 0..rounds {
         let mut gpu = bench.host.gpu();
         let t0 = Instant::now();
         let shader = |gpu: &mut Gpu, stage, entry| {
-            gpu.create_shader(&ShaderSource {
-                stage,
-                language: ShaderLanguage::Wgsl,
-                source: wgsl,
-                entry,
-            })
-            .unwrap()
+            let spirv = proto_gfx_lua::shaders::tool("shaders/bench_init.slang", entry);
+            gpu.create_shader_spirv(stage, entry, spirv).unwrap()
         };
         let vs = shader(&mut gpu, ShaderStage::Vertex, "vs");
         let fs = shader(&mut gpu, ShaderStage::Fragment, "fs");
@@ -684,7 +667,7 @@ fn reload(quick: bool) {
         }
     }
     println!(
-        "\nshader compile (naga, WGSL to SPIR-V, per shader): {:.0} µs; pipeline creation (driver): first {:.0} µs, then {:.0} µs\n",
+        "\nshader creation (SPIR-V checks, per shader): {:.0} µs; pipeline creation (driver): first {:.0} µs, then {:.0} µs\n",
         Dist::new(compile).median(),
         pipeline[0],
         Dist::new(pipeline.clone()).median()

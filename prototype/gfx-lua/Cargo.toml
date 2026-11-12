@@ -17,6 +17,9 @@ luajit = ["mlua/luajit", "mlua/vendored"]
 proto-gfx-core.workspace = true
 mlua.workspace = true
 
+[build-dependencies]
+proto-slangc.workspace = true
+
 [dev-dependencies]
 half.workspace = true
 rustix = { version = "1", features = ["time"] }

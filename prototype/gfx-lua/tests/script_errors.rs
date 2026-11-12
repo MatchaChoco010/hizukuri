@@ -394,6 +394,7 @@ fn memory_limit() {
             kept = {}
             while true do kept[#kept + 1] = { 1, 2, 3, 4 } end
         end
+        function allocate_a_mebibyte() return #string.rep("x", 2 ^ 20) end
         "#,
     )
     .unwrap();
@@ -421,12 +422,14 @@ fn memory_limit() {
         next_frame_is_correct(&host, output);
     }
     // If what the script hoarded stays reachable, collecting does not help:
-    // the heap is pinned at the limit and even a frame that allocates one
-    // small table fails. The only way out is to drop the script's state.
+    // the heap is pinned at the limit, and a call that allocates (here, one
+    // MiB) fails. The only way out is to drop the script's state. (The limit
+    // leaves some slack: whether a call that allocates only a few small
+    // tables fails depends on where the hoard happened to stop.)
     let result = host.call_in_frame("hoard_and_keep", ());
     assert!(matches!(result, Err(ScriptError::Memory(_))), "{result:?}");
     eprintln!("kept heap: {} MiB", host.lua().used_memory() >> 20);
-    let result = host.call_in_frame("frame", output.to_bits());
+    let result = host.call_in_frame("allocate_a_mebibyte", ());
     assert!(matches!(result, Err(ScriptError::Memory(_))), "{result:?}");
     host.reset().unwrap();
     host.lua().gc_collect().unwrap();

@@ -990,6 +990,7 @@ dependencies = [
  "half",
  "mlua",
  "proto-gfx-core",
+ "proto-slangc",
  "rustix",
 ]
 

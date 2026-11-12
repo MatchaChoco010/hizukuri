@@ -2,7 +2,8 @@
 //! code includes them. The built compositor carries the SPIR-V and needs no
 //! Slang compiler to use it.
 //!
-//! - `shaders/fallback.slang`: the fallback's shader.
+//! - [`CORE_SHADERS`]: the shaders of the core (the fallback, the KMS self
+//!   test).
 //! - `scripts/shaders/`: the shaders of the built-in project, built the same
 //!   way `proto-compositor build-shaders` builds any project's.
 //!
@@ -14,13 +15,16 @@ use std::path::{Path, PathBuf};
 
 use proto_slangc::{Compiler, Input, Stage};
 
-#[path = "src/project_shaders.rs"]
-#[allow(dead_code)]
-mod project_shaders;
+use proto_slangc::project as project_shaders;
 
-/// The fallback's entry points: `(stage, entry point)`. Each becomes
-/// `OUT_DIR/fallback.<entry>.spv`.
-const FALLBACK: &[(Stage, &str)] = &[(Stage::Vertex, "vs"), (Stage::Fragment, "fs")];
+/// The core's own shaders: `(file in shaders/, stage, entry point)`. Each
+/// becomes `OUT_DIR/<file stem>.<entry>.spv`.
+const CORE_SHADERS: &[(&str, Stage, &str)] = &[
+    ("fallback.slang", Stage::Vertex, "vs"),
+    ("fallback.slang", Stage::Fragment, "fs"),
+    ("selftest.slang", Stage::Vertex, "vs"),
+    ("selftest.slang", Stage::Fragment, "fs"),
+];
 
 /// The modules of `shaders/` that a project's shaders can `import`.
 const CORE_MODULES: &[&str] = &["color.slang"];
@@ -44,13 +48,13 @@ fn main() {
     };
     compiler.include_dirs.push(shaders.clone());
 
-    let fallback = shaders.join("fallback.slang");
-    for (stage, entry) in FALLBACK {
+    for (file, stage, entry) in CORE_SHADERS {
         let compiled = compiler
-            .compile(Input::File(&fallback), *stage, entry)
+            .compile(Input::File(&shaders.join(file)), *stage, entry)
             .unwrap_or_else(|e| fail(&format!("{e}")));
         warn(compiled.warnings.iter().map(|w| w.to_string()));
-        std::fs::write(out.join(format!("fallback.{entry}.spv")), compiled.spirv).unwrap();
+        let stem = Path::new(file).file_stem().unwrap().to_str().unwrap();
+        std::fs::write(out.join(format!("{stem}.{entry}.spv")), compiled.spirv).unwrap();
     }
 
     let output = out.join("builtin-shaders");
