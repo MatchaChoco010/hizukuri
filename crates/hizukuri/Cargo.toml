@@ -1,0 +1,28 @@
+[package]
+name = "hizukuri"
+description = "The verification compositor of hizukuri, a foundation for building Wayland compositors (prototype)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+hizukuri-color.workspace = true
+hizukuri-render.workspace = true
+hizukuri-layout.workspace = true
+hizukuri-wl.workspace = true
+hizukuri-backend.workspace = true
+gfx-core.workspace = true
+gfx-lua.workspace = true
+mlua = { workspace = true, features = ["serde"] }
+calloop = { workspace = true, features = ["signals"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
+rustix = { version = "1", features = ["fs", "event"] }
+
+[dev-dependencies]
+hizukuri-test-client.workspace = true

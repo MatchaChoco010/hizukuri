@@ -1,0 +1,21 @@
+[package]
+name = "hizukuri-render"
+description = "Vulkan renderer of hizukuri: buffer import, color-tracked compositing, output encoding, readback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+hizukuri-color.workspace = true
+vulkan.workspace = true
+vulkan-alloc.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+png = "0.18"
+
+[dev-dependencies]
+rustix = { version = "1", features = ["mm"] }
+
+[build-dependencies]
+naga = { version = "30", features = ["wgsl-in", "spv-out"] }

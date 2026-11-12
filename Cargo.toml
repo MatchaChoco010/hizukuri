@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/hizukuri-color",
+    "crates/hizukuri-render",
+    "crates/hizukuri-layout",
+    "crates/hizukuri-wl",
+    "crates/hizukuri-backend",
+    "crates/hizukuri",
+    "crates/gfx-core",
+    "crates/gfx-lua",
+    "tools/test-client",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[workspace.dependencies]
+hizukuri-color = { path = "crates/hizukuri-color" }
+hizukuri-render = { path = "crates/hizukuri-render" }
+hizukuri-layout = { path = "crates/hizukuri-layout" }
+hizukuri-wl = { path = "crates/hizukuri-wl" }
+hizukuri-backend = { path = "crates/hizukuri-backend" }
+hizukuri = { path = "crates/hizukuri" }
+hizukuri-test-client = { path = "tools/test-client" }
+
+# Pinned to the published vulkan-rs revision. Only hizukuri-render and
+# hizukuri-backend may depend on these directly.
+vulkan = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0", features = ["wayland"] }
+vulkan-alloc = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0" }
+
+# Pinned Smithay master revision. Only hizukuri-wl and
+# hizukuri-backend may depend on it.
+smithay = { git = "https://github.com/Smithay/smithay", rev = "8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55", default-features = false }
+
+# The checked GPU API for scripts and its script binding.
+gfx-core = { path = "crates/gfx-core" }
+gfx-lua = { path = "crates/gfx-lua" }
+naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-in", "spv-out"] }
+# The script language is not decided; Luau is the provisional choice.
+mlua = { version = "0.12.2", default-features = false }
+half = "2.7"
+
+calloop = "0.14.5"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The checks (tools/ci.sh) build with this profile. Most of their time goes
+# into compiling the dependencies, and the tests spend little time inside
+# them, so the dependencies are not optimized here.
+[profile.test.package."*"]
+opt-level = 0

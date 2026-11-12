@@ -1,0 +1,21 @@
+[package]
+name = "gfx-lua"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Exactly one script VM. The script language is not decided: Luau is the
+# provisional default, the others exist to compare.
+default = ["luau"]
+luau = ["mlua/luau"]
+lua55 = ["mlua/lua55", "mlua/vendored"]
+luajit = ["mlua/luajit", "mlua/vendored"]
+
+[dependencies]
+gfx-core.workspace = true
+mlua.workspace = true
+
+[dev-dependencies]
+half.workspace = true
