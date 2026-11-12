@@ -1,0 +1,9 @@
+/target/
+# Captured frames and other verification artifacts.
+/artifacts/
+# Nix build results and direnv's cache.
+/result
+/result-*
+/.direnv/
+# Python bytecode caches.
+__pycache__/
