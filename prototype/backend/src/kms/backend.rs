@@ -719,6 +719,18 @@ impl<D: KmsDevice, C: Clock> Backend for KmsBackend<D, C> {
         }
     }
 
+    fn next_presentation(&self, output: OutputId) -> Option<Duration> {
+        let inner = self.inner.borrow();
+        let state = inner.output.as_ref().filter(|o| o.info.id == output)?;
+        let last = *state.flips.back()?;
+        Some(super::frame::next_vblank(
+            last,
+            state.info.frame_interval(),
+            inner.clock.now(),
+            state.pacer.flip_pending(),
+        ))
+    }
+
     fn request_frame(&mut self, output: OutputId) {
         let mut inner = self.inner.borrow_mut();
         let Some(state) = inner.output.as_mut().filter(|o| o.info.id == output) else {

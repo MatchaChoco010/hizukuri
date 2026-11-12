@@ -33,7 +33,9 @@ use std::io;
 use std::time::Instant;
 
 use crate::wm::{Point, Rect, Size};
-use proto_backend::{AxisSource, Backend, BackendError, BackendEvent, InputEvent, OutputInfo};
+use proto_backend::{
+    AxisSource, Backend, BackendError, BackendEvent, InputEvent, OutputInfo, TimeSource,
+};
 use proto_color::{
     AlphaMode, CompositeSpace, DecodeTransform, EncodeTransform, ImageDescription, Primaries,
 };
@@ -47,8 +49,8 @@ use serde_json::{Value, json};
 
 use crate::control::{self, Request};
 use crate::scene::{
-    CursorImage, CursorView, DrawStatus, Hit, Scene, SceneError, SceneRequest, SurfaceView,
-    WindowSnapshot, WindowView, WorldSnapshot,
+    CursorImage, CursorView, DrawStatus, FrameTiming, Hit, Scene, SceneError, SceneRequest,
+    SurfaceView, WindowSnapshot, WindowView, WorldSnapshot,
 };
 use crate::timing::FrameTimes;
 use crate::x11::X11Status;
@@ -86,6 +88,10 @@ pub struct CompositorOptions {
     /// no other way to see where the pointer is; for verification captures
     /// it is usually better left out.
     pub draw_cursor: bool,
+    /// The clock frames are timed with. The same one has to be given to the
+    /// backend and to whatever draws, so that their times agree. A manual
+    /// clock is moved through the control interface (`advance_clock`).
+    pub clock: TimeSource,
 }
 
 impl Default for CompositorOptions {
@@ -95,6 +101,7 @@ impl Default for CompositorOptions {
             background: [0.125, 0.125, 0.125],
             composite_space: CompositeSpace::default(),
             draw_cursor: false,
+            clock: TimeSource::default(),
         }
     }
 }
@@ -1012,7 +1019,18 @@ impl<B: Backend> Compositor<B> {
             }
         }
 
-        // Port 2: the scene draws into the target the backend hands out.
+        // Port 2: the scene draws into the target the backend hands out,
+        // for the time the frame is expected on screen.
+        let now = self.options.clock.now();
+        self.scene.frame_timing(&FrameTiming {
+            output,
+            now,
+            presentation: self
+                .backend
+                .next_presentation(output)
+                .map_or(now, |at| at.max(now)),
+            refresh: info.frame_interval(),
+        });
         let target = self.backend.render_target(output);
         let status = self.scene.draw(
             &info,
@@ -1291,6 +1309,17 @@ impl<B: Backend> Compositor<B> {
             Request::ScriptMode { mode } => {
                 self.scene_control("script_mode", json!({ "mode": mode }))
             }
+            Request::AdvanceClock { milliseconds } => {
+                if !(milliseconds.is_finite() && *milliseconds >= 0.0) {
+                    return Err(format!("cannot move the clock by {milliseconds} ms"));
+                }
+                let now = self
+                    .options
+                    .clock
+                    .advance(std::time::Duration::from_secs_f64(milliseconds / 1000.0))
+                    .ok_or("the clock is not a manual one (start with --clock manual)")?;
+                Ok(json!({ "now_ms": now.as_secs_f64() * 1000.0 }))
+            }
             Request::Quit => {
                 self.quit = true;
                 Ok(json!({}))
@@ -1516,6 +1545,10 @@ impl<B: Backend> Compositor<B> {
                 },
             },
             "frames_rendered": scene["frames_rendered"],
+            "clock": {
+                "kind": if self.options.clock.is_manual() { "manual" } else { "monotonic" },
+                "now_ms": self.options.clock.now().as_secs_f64() * 1000.0,
+            },
         })
     }
 }

@@ -33,6 +33,10 @@ management, on lavapipe) with real applications: tiling, faults in every
 hook, editing and reloading a script, VT switching, the watchdog, frame
 times, and the `hzk script` launcher.
 
+The part `animation` runs the animation example
+(`prototype/compositor/projects/animation`): two windows are swapped with
+logo+shift+L and move to their new places over time.
+
 The part `vkms` runs the compositor and its self test on the virtual KMS
 driver over SSH alone, without a VT. `safety` covers the watchdog; `outputs`
 two outputs and hotplug; `ime` Japanese input with a real input method
@@ -62,6 +66,9 @@ failed is kept under the output directory (default
     x11/satellite.log                what xwayland-satellite and Xwayland printed
     x11/x11-client*.log              the events the X11 test client received
     script/hzk-script.log            what `hzk script` printed
+    animation/screen-*.png           the animation example (its moves slowed down) before,
+                                     during and after a swap, with what the script drew
+                                     at each (animation-*.json)
     kms-info.json                    the guest's DRM device
     kms-summary.txt                  `proto-compositor kms-info --summary` in the guest
 
@@ -99,6 +106,11 @@ BTN_LEFT = 272
 
 # Where the draw-only project goes in the guest.
 DRAW_ONLY = "/home/hizukuri/hzk-draw-only"
+# Where the animation example goes in the guest.
+ANIMATION = "/home/hizukuri/hzk-animation"
+# Seconds a move of the example takes in the VM check: long enough for a
+# capture to see it.
+SLOW_MOVE = "3.0"
 
 PATHS = {
     "lavapipe": {
@@ -111,7 +123,8 @@ PATHS = {
 }
 
 # What runs on any machine, in this order, when nothing is asked for.
-DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs", "ime", "x11"]
+DEFAULT_PARTS = ["lavapipe", "script", "animation", "vkms", "safety", "outputs", "ime",
+                 "x11"]
 
 
 def drawing(args, builtin=False):
@@ -2907,9 +2920,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", help="directory for results and evidence")
     parser.add_argument("--only", default=",".join(DEFAULT_PARTS),
-                        help="comma separated parts to check: lavapipe, script, vkms, safety, "
-                             "outputs, ime, x11 (the default: all of these), real-hardware (needs "
-                             "HIZUKURI_VM_CPU=host,-hypervisor)")
+                        help="comma separated parts to check: lavapipe, script, animation, "
+                             "vkms, safety, outputs, ime, x11 (the default: all of these), "
+                             "real-hardware (needs HIZUKURI_VM_CPU=host,-hypervisor)")
     parser.add_argument("--skip-build", action="store_true",
                         help="send the binaries that are already built")
     args = parser.parse_args()
@@ -2932,16 +2945,20 @@ def main():
     # The projects' shaders, as SPIR-V in each project's .build/ (sent along
     # with the project): the guest has no Slang compiler, and the compositor
     # reads only SPIR-V.
-    for project in ("scripts", os.path.join("projects", "draw-only")):
+    for project in ("scripts", os.path.join("projects", "draw-only"),
+                    os.path.join("projects", "animation")):
         subprocess.run([binaries[0], "build-shaders",
                         os.path.join(ROOT, "prototype", "compositor", project)],
                        cwd=ROOT, check=True)
     results = []
     try:
-        guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR} && rm -rf {DRAW_ONLY} && mkdir -p {DRAW_ONLY}")
+        guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR} && rm -rf {DRAW_ONLY} {ANIMATION} "
+              f"&& mkdir -p {DRAW_ONLY} {ANIMATION}")
         vm("push", *binaries, "bin/", timeout=300)
         vm("push", os.path.join(ROOT, "prototype", "compositor", "projects", "draw-only") + "/",
            f"{DRAW_ONLY}/")
+        vm("push", os.path.join(ROOT, "prototype", "compositor", "projects", "animation") + "/",
+           f"{ANIMATION}/")
         uid = int(guest("id -u").strip())
     except (Failed, ValueError) as error:
         print(f"FAIL setup: {error}")
@@ -3009,8 +3026,94 @@ def main():
     return 1 if counts["FAIL"] else 0
 
 
+def check_animation(out, uid, results):
+    """The animation example as a DRM/KMS session: two windows side by
+    side, logo+shift+L swaps them, and they move to their new places over
+    time. The screen is taken before, during and after. The example runs
+    with its moves slowed down to a few seconds (a copy with another
+    `move_duration`), so that a capture through the VM catches the windows
+    on their way; where they are then is kept as evidence, not checked (the
+    clock is real). The positions over time are checked by
+    tests/animation.rs on a manual clock."""
+    part = Part("animation", out, uid, results)
+    left_color, left_arg = CLIENT_COLOR, CLIENT_COLOR_ARG
+    right_color, right_arg = (60, 170, 90), "3CAA5AFF"
+    # 1280 wide with gaps of 8: two tiles of 628, at x 8 and 644.
+    tiles = {8: 8 + 628 // 2, 644: 644 + 628 // 2}
+
+    def state():
+        return part.ctl("state")
+
+    def drawn():
+        return part.ctl("script-call", "animation_state")["result"]
+
+    def keep(name, value):
+        with open(os.path.join(part.out, name), "w") as file:
+            json.dump(value, file, indent=2)
+
+    def at(title):
+        window = next((w for w in state()["windows"] if w["title"] == title), None)
+        return window and window["position"][0]
+
+    def swap():
+        # The example as it is, with slower moves.
+        slow = f"{GUEST_DIR}/animation-slow"
+        guest(f"rm -rf {slow} && cp -r {ANIMATION} {slow} && sed -i "
+              f"'s/move_duration = [0-9.]*/move_duration = {SLOW_MOVE}/' {slow}/main.luau")
+        if f"move_duration = {SLOW_MOVE}" not in guest(f"cat {slow}/main.luau"):
+            raise Failed("the example's main.luau has no move_duration to slow down")
+        part.start("--script", slow, "--exit-after", "120")
+        current = state()
+        if current["script"]["mode"] != "running" or "frame" not in current["script"]["callbacks"]:
+            raise Failed(f"the example does not run: {current['script']}")
+        for title, color in (("anim-left", left_arg), ("anim-right", right_arg)):
+            spawn(f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} "
+                  f"--title {title} --size 100x100 --color {color} --duration 110",
+                  f"{title}.log")
+            wait_for(f"{title} mapped", lambda: at(title) is not None, seconds=10)
+        wait_for("two tiles", lambda: at("anim-left") == 8 and at("anim-right") == 644,
+                 seconds=10)
+        wait_for("the windows to have opened",
+                 lambda: all(not w["moving"] for w in drawn()), seconds=10)
+        before = pixels([(tiles[8], 400), (tiles[644], 400)])
+        if not (near(before[0], left_color, 6) and near(before[1], right_color, 6)):
+            raise Failed(f"before the swap: {before}, expected {left_color} and {right_color}")
+        vm("screendump", os.path.join(part.out, "screen-before.png"), check=False)
+        keep("animation-before.json", drawn())
+
+        # The newest window has the focus; logo+H gives it to the left one,
+        # logo+shift+L moves that one to the right.
+        vm("key", "logo-h")
+        wait_for("the focus on the left window", lambda: (lambda s: s["focus"]["window"] == next(
+            w["id"] for w in s["windows"] if w["title"] == "anim-left"))(state()), seconds=5)
+        vm("key", "logo-shift-l")
+        during = drawn()
+        vm("screendump", os.path.join(part.out, "screen-during.png"), check=False)
+        keep("animation-during.json", during)
+        wait_for("the windows to swap", lambda: at("anim-left") == 644 and at("anim-right") == 8,
+                 seconds=5)
+        wait_for("the windows to stop", lambda: all(not w["moving"] for w in drawn()), seconds=10)
+        after = wait_for("the swapped windows on screen", lambda: (lambda v: v if near(
+            v[0], right_color, 6) and near(v[1], left_color, 6) else None)(
+            pixels([(tiles[8], 400), (tiles[644], 400)])), seconds=5)
+        vm("screendump", os.path.join(part.out, "screen-after.png"), check=False)
+        keep("animation-after.json", drawn())
+        script = state()["script"]
+        if script["failures"]:
+            raise Failed(f"the script failed: {script['last_failures']}")
+        moving = [w["x"] for w in during if w["moving"]]
+        return (f"logo+shift+L swapped the tiles: {before} became {after}; right after the key "
+                f"{len(moving)} window(s) were moving, drawn at x {moving}")
+
+    try:
+        part.item("swap", swap)
+    finally:
+        part.stop()
+
+
 PARTS = {
     "script": check_script,
+    "animation": check_animation,
     "vkms": check_vkms,
     "safety": check_safety,
     "outputs": check_outputs,

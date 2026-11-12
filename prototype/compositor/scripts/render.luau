@@ -177,7 +177,11 @@ local function draw_quad(to_pixels, width, height, surface, opacity)
     gfx.draw(4)
 end
 
-function R.frame(output, target)
+-- `items`, when given, is what to draw instead of the windows, bottom to
+-- top: { id = window id, transform = { a, b, c, d, tx, ty }, opacity = 0..1 }.
+-- `id` may name a closed window that is kept (`hz.keep_closed`). Without
+-- it, every window is drawn with `R.transform_of` and its opacity.
+function R.frame(output, target, items)
     local composite = composite_for(output)
     hz.debug_composite(composite.image, R.working)
 
@@ -193,16 +197,22 @@ function R.frame(output, target)
     buffer.writef32(surface_push, 112, output.width)
     buffer.writef32(surface_push, 116, output.height)
 
-    for _, window in hz.windows() do
-        local to_pixels = affine.multiply(to_output, R.transform_of(window))
-        for _, surface in hz.surfaces(window.id) do
+    if not items then
+        items = {}
+        for _, window in hz.windows() do
+            table.insert(items, { id = window.id, transform = R.transform_of(window), opacity = window.opacity })
+        end
+    end
+    for _, item in items do
+        local to_pixels = affine.multiply(to_output, item.transform)
+        for _, surface in hz.surfaces(item.id) do
             if surface.texture and surface.uv then
                 draw_quad(
                     affine.multiply(to_pixels, affine.translate(surface.x, surface.y)),
                     surface.width,
                     surface.height,
                     surface,
-                    window.opacity
+                    item.opacity
                 )
             end
         end
@@ -251,11 +261,14 @@ end
 -- The topmost surface at a point of the screen (global logical
 -- coordinates), with the point in that surface's coordinates. `accepts`
 -- tells whether a surface takes input at a point of its own.
-function R.hit_test(x, y, accepts)
+-- `transform_of(window)`, when given, is where each window is drawn instead
+-- of `R.transform_of`.
+function R.hit_test(x, y, accepts, transform_of)
+    transform_of = transform_of or R.transform_of
     local windows = hz.windows()
     for i = #windows, 1, -1 do
         local window = windows[i]
-        local inverse = affine.invert(R.transform_of(window))
+        local inverse = affine.invert(transform_of(window))
         if inverse then
             local wx, wy = affine.apply(inverse, x, y)
             local surfaces = hz.surfaces(window.id)
@@ -273,11 +286,12 @@ end
 
 -- A point of the screen in the coordinates of one given surface, wherever
 -- the point is.
-function R.locate(surface_id, x, y)
+function R.locate(surface_id, x, y, transform_of)
+    transform_of = transform_of or R.transform_of
     for _, window in hz.windows() do
         for _, surface in hz.surfaces(window.id) do
             if surface.id == surface_id then
-                local inverse = affine.invert(R.transform_of(window))
+                local inverse = affine.invert(transform_of(window))
                 if not inverse then
                     return nil
                 end

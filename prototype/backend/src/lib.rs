@@ -362,8 +362,64 @@ pub trait Backend {
         serde_json::Value::Null
     }
 
+    /// When a frame handed to [`Backend::present`] now is expected to reach
+    /// the output, on the clock of its [`Presentation`] times. `None` when
+    /// the backend cannot tell (no frame has been shown yet).
+    fn next_presentation(&self, _output: OutputId) -> Option<Duration> {
+        None
+    }
+
     /// Takes the queued events, oldest first.
     fn drain_events(&mut self) -> Vec<BackendEvent>;
+}
+
+/// The clock frames are timed with: what [`Presentation`] times and the
+/// times scripts see are read from.
+///
+/// `CLOCK_MONOTONIC` normally. For tests, a clock that stands still until it
+/// is moved ([`kms::clock::ManualClock`]), so that whatever is computed from
+/// the time (an animation) comes out the same on every run.
+#[derive(Debug, Clone, Default)]
+pub enum TimeSource {
+    #[default]
+    Monotonic,
+    Manual(kms::clock::ManualClock),
+}
+
+impl TimeSource {
+    /// A manual clock that starts at the current monotonic time.
+    pub fn manual() -> Self {
+        TimeSource::Manual(kms::clock::ManualClock::new(monotonic_now()))
+    }
+
+    pub fn now(&self) -> Duration {
+        match self {
+            TimeSource::Monotonic => monotonic_now(),
+            TimeSource::Manual(clock) => kms::clock::Clock::now(clock),
+        }
+    }
+
+    pub fn is_manual(&self) -> bool {
+        matches!(self, TimeSource::Manual(_))
+    }
+
+    /// Moves a manual clock forward. Returns the new time, or `None` for the
+    /// monotonic clock, which nobody moves.
+    pub fn advance(&self, by: Duration) -> Option<Duration> {
+        match self {
+            TimeSource::Monotonic => None,
+            TimeSource::Manual(clock) => {
+                clock.advance(by);
+                Some(kms::clock::Clock::now(clock))
+            }
+        }
+    }
+}
+
+impl kms::clock::Clock for TimeSource {
+    fn now(&self) -> Duration {
+        TimeSource::now(self)
+    }
 }
 
 /// The current time on `CLOCK_MONOTONIC`.

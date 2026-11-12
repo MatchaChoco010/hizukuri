@@ -76,6 +76,7 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | headless の全体 | `prototype/compositor/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。どの場面も、Vulkan のデバイス（`HIZUKURI_TEST_DEVICES`）ごとに 1 回走る。スクリプトが描く（描くだけのプロジェクトで、配置は fallback）。色は、`proto-color` の CPU の参照計算と比べる | 要る |
 | project の shader | `prototype/compositor/tests/project_shaders.rs` | project の Slang の shader を `build-shaders` で SPIR-V にし（テストの `Session` は、起動の前に、project の shader をビルドする）、スクリプトが名前で指して描くこと。SPIR-V が無いときのエラー | 要る |
 | スクリプトの層 | `prototype/compositor/tests/script.rs`、`tests/script_window_requests.rs` | 混ざった場面を 4 つの出力に描き、CPU の参照計算と比べる（下の「色の検証」）、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し、入力メソッドの候補ウィンドウ、`wp_color_management_v1` で設定した色の画素。ダイアログを浮かせること、fullscreen、activate の要求 | 要る |
+| アニメーションの例 | `prototype/compositor/tests/animation.rs` | アニメーションの例（`projects/animation`）を、止まった時計（`--clock manual`）で動かし、制御口から時計を進めて、決まった時刻の画面を取り込む。入れ替えの直後、途中、終わった後のウィンドウの位置（画素と、スクリプトが描いた位置）。終わると、フレームを求めなくなること。途中で入れ替え直すと、いまの位置から動き直すこと。閉じたウィンドウが、薄くなりながら描かれ、終わると手放されること。動いている途中の、ポインターの当たり判定 | 要る |
 | スクリプトに見せる GPU の API | `prototype/gfx-core/tests/`、`prototype/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み。`gfx-core` のテストの多くは、shader を、源の入口と、SPIR-V の入口（naga が書いた SPIR-V）の両方で作って、同じ結果になることを確かめる。SPIR-V の入口の、添字の切り詰めと、拒むべき module と、1 語ずつ書き換えた module（`spirv_input.rs`。全 bit を試す版は `--ignored`） | 要る |
 | Slang の shader | `prototype/slangc/tests/` | `slangc` が書いた SPIR-V を、GPU の API の SPIR-V の入口に通す。reflection、描画、texture の配列、`discard`、module。`slangc` のエラーの行と列、時間の上限 | 要る |
 | 実際のアプリ | `prototype/compositor/tests/real_clients.rs`、`tests/script_real_clients.rs` | 実際のアプリを、headless の中で動かす。スクリプトの描画（`real_clients.rs` は、描くだけのプロジェクト）。popup と grab、selection、fractional-scale、dmabuf | 要る |
@@ -150,7 +151,7 @@ nix develop .#ci --command tools/vm/vm test tools/vm-check.py
 - ゲストは、`flake.lock` の nixpkgs で作る NixOS である（`tools/vm/guest.nix`）。kernel、Mesa、アプリ、QEMU の版は、`flake.lock` で決まる。
   ディスクは無く、起動するたびに、同じ状態から始まる。`/nix/store` を共有するので、devShell でビルドしたバイナリが、ゲストでそのまま動く。
 - `vm test` は、ゲストをビルドし、VM を起動し、試験を走らせ、VM を止める。
-- 既定で回るのは、GPU の要らない部である（`lavapipe`、`script`、`vkms`、`safety`、`outputs`、`ime`、`x11`）。
+- 既定で回るのは、GPU の要らない部である（`lavapipe`、`script`、`animation`、`vkms`、`safety`、`outputs`、`ime`、`x11`）。
   VM の起動のしかたが違う部（`real-hardware`）は、`--only` で、別に回す。構成が合わない VM に頼むと、失敗になる。
 
 VM の作りと、試験の部の一覧は、[検証用の VM](vm-environment.md)にある。

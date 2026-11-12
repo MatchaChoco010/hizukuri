@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::time::Duration;
 
 use crate::target::{OutputFormat, TargetDesc, TargetId, Targets};
 use calloop::LoopHandle;
@@ -21,7 +22,7 @@ use proto_color::{CompositeSpace, ImageDescription};
 
 use crate::{
     Backend, BackendError, BackendEvent, BackendHost, InputEvent, OutputId, OutputInfo,
-    Presentation, monotonic_now,
+    Presentation, TimeSource,
 };
 
 /// Configuration of one virtual output.
@@ -105,6 +106,8 @@ impl Shared {
 /// See the module documentation.
 pub struct HeadlessBackend {
     shared: Rc<RefCell<Shared>>,
+    /// What presented frames are timestamped with.
+    clock: TimeSource,
 }
 
 impl HeadlessBackend {
@@ -179,7 +182,16 @@ impl HeadlessBackend {
         events.push_back(BackendEvent::Input(InputEvent::TouchAvailable(true)));
         Ok(Self {
             shared: Rc::new(RefCell::new(Shared { outputs, events })),
+            clock: TimeSource::Monotonic,
         })
+    }
+
+    /// Timestamps presented frames with `clock` instead of
+    /// `CLOCK_MONOTONIC`. The frame clock that grants frames keeps running
+    /// in real time: a manual clock only stops what frames are said to show.
+    pub fn with_clock(mut self, clock: TimeSource) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Registers the virtual frame clocks on an event loop.
@@ -297,7 +309,7 @@ impl Backend for HeadlessBackend {
         // and counts as shown immediately.
         o.sequence += 1;
         let presentation = Presentation {
-            time: monotonic_now(),
+            time: self.clock.now(),
             refresh: o.info.frame_interval(),
             sequence: o.sequence,
         };
@@ -306,6 +318,17 @@ impl Backend for HeadlessBackend {
             presentation,
         });
         Ok(())
+    }
+
+    fn next_presentation(&self, output: OutputId) -> Option<Duration> {
+        // A presented frame counts as shown at once.
+        let known = self
+            .shared
+            .borrow()
+            .outputs
+            .iter()
+            .any(|o| o.info.id == output);
+        known.then(|| self.clock.now())
     }
 
     fn drain_events(&mut self) -> Vec<BackendEvent> {

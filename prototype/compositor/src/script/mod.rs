@@ -29,8 +29,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::wm::WindowId;
-use proto_backend::OutputInfo;
 use proto_backend::{DmabufPlane, TargetDesc, TargetError, TargetId, TargetProvider, Targets};
+use proto_backend::{OutputInfo, TimeSource};
 use proto_color::{AlphaMode, CompositeSpace, ImageDescription, Primaries};
 use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, GpuConfig, Handle, ImageDesc, ImageUsage};
 use proto_gfx_lua::{HostOptions, ScriptError, ScriptHost, ShaderLoader};
@@ -42,8 +42,8 @@ use serde_json::{Value, json};
 use crate::fallback;
 use crate::image::{CompositeImage, EncodedImage};
 use crate::scene::{
-    Capture, CursorView, DrawStatus, Hit, Scene, SceneError, SceneRequest, SurfaceView,
-    VisualWindow, WindowView, WorldSnapshot, arrow_image,
+    Capture, CursorView, DrawStatus, FrameTiming, Hit, Scene, SceneError, SceneRequest,
+    SurfaceView, VisualWindow, WindowSnapshot, WindowView, WorldSnapshot, arrow_image,
 };
 use crate::targets::OutputImages;
 
@@ -193,6 +193,9 @@ pub struct ScriptOptions {
     /// measurements: without it the time of a frame is the time to record
     /// and submit it.
     pub wait_for_gpu: bool,
+    /// The clock frames are timed with; `hz.time()` and the time `frame` is
+    /// given are read from it. The same one as the core's and the backend's.
+    pub clock: TimeSource,
 }
 
 impl Default for ScriptOptions {
@@ -207,6 +210,7 @@ impl Default for ScriptOptions {
             retry_after: Duration::from_secs(1),
             manage_windows: false,
             wait_for_gpu: false,
+            clock: TimeSource::default(),
         }
     }
 }
@@ -238,6 +242,47 @@ pub(crate) struct SurfaceTexture {
     pub y_inverted: bool,
 }
 
+/// A window that closed while the script asked to keep it
+/// (`hz.keep_closed`): what it last showed, until the script lets go of it
+/// (`hz.forget_closed`).
+pub(crate) struct ClosedWindow {
+    /// The window as the core last knew it: place, size, surfaces.
+    pub window: WindowSnapshot,
+    /// When it closed, in seconds of `hz.time()`.
+    pub closed_at: f64,
+    /// The textures of its surfaces, taken from [`Shared::textures`].
+    pub textures: HashMap<SurfaceId, SurfaceTexture>,
+    /// For surfaces that showed dma-bufs: the imports, and the client
+    /// buffers they read from, which stay held.
+    pub buffers: Vec<dmabuf::KeptBuffers>,
+}
+
+impl ClosedWindow {
+    /// What its textures take, in bytes (4 per pixel).
+    pub fn bytes(&self) -> u64 {
+        self.textures
+            .values()
+            .map(|t| t.width as u64 * t.height as u64 * 4)
+            .sum()
+    }
+
+    /// Lets go of the textures and buffers. The GPU objects are destroyed
+    /// once no frame in flight samples them.
+    pub(crate) fn release(self, shared: &mut Shared, gpu: &mut Gpu) {
+        for texture in self.textures.values().filter(|t| !t.imported) {
+            let _ = gpu.destroy(texture.slot);
+            let _ = gpu.destroy(texture.image);
+        }
+        for buffers in self.buffers {
+            buffers.release(&mut shared.dmabuf, gpu);
+        }
+    }
+}
+
+/// How many closed windows are kept at most. A script that never forgets
+/// them loses the oldest first.
+const MAX_CLOSED: usize = 32;
+
 /// One recorded failure of the script.
 #[derive(Debug, Clone)]
 pub(crate) struct Failure {
@@ -261,7 +306,16 @@ pub(crate) struct Shared {
     /// The compositing buffer the script offers for verification captures.
     pub debug_composite: Option<(Handle, Primaries)>,
     pub project: Project,
-    pub started: Instant,
+    pub clock: TimeSource,
+    /// The time of the clock when the runtime started: `hz.time()` counts
+    /// from here.
+    pub origin: Duration,
+    /// When the frame being drawn is expected on screen (on the clock).
+    pub frame_time: Option<Duration>,
+    /// Windows whose contents are kept when they close.
+    pub keep_closed: std::collections::HashSet<WindowId>,
+    /// Closed windows that are kept, oldest first.
+    pub closed: Vec<ClosedWindow>,
     pub wm: wm::WmState,
     pub dmabuf: dmabuf::DmabufState,
 
@@ -291,6 +345,11 @@ pub(crate) struct CallTiming {
 }
 
 impl Shared {
+    /// Seconds of `hz.time()` at a time of the clock.
+    pub(crate) fn seconds(&self, at: Duration) -> f64 {
+        at.as_secs_f64() - self.origin.as_secs_f64()
+    }
+
     pub(crate) fn color_id(&mut self, description: ImageDescription, alpha: AlphaMode) -> u32 {
         match self.colors.iter().position(|c| *c == (description, alpha)) {
             Some(index) => index as u32,
@@ -360,7 +419,11 @@ impl ScriptRuntime {
             requests: Vec::new(),
             debug_composite: None,
             project: options.project.clone(),
-            started: Instant::now(),
+            clock: options.clock.clone(),
+            origin: options.clock.now(),
+            frame_time: None,
+            keep_closed: Default::default(),
+            closed: Vec::new(),
             wm: wm::WmState::new(options.manage_windows),
             dmabuf: dmabuf::DmabufState::default(),
             mode: Mode::Running,
@@ -509,6 +572,9 @@ impl ScriptRuntime {
         };
         // Close whatever the old script left open before its objects go.
         self.finish_frame(false);
+        // What the old script kept, and asked to keep, is its own business.
+        self.forget_closed_windows();
+        self.shared.borrow_mut().keep_closed.clear();
         self.host
             .reset()
             .map_err(|e| format!("resetting the script VM: {e}"))?;
@@ -691,6 +757,60 @@ impl ScriptRuntime {
         self.collect_retired_buffers();
     }
 
+    /// Keeps what a window last showed, now that it is gone, if the script
+    /// asked for it: its textures (and the client buffers of imported
+    /// ones) move out of the live table into [`Shared::closed`].
+    fn keep_closed_window(&self, window: WindowId) {
+        let snapshot = {
+            let mut shared = self.shared.borrow_mut();
+            let wanted = shared.keep_closed.remove(&window);
+            if !wanted || shared.mode == Mode::Fallback {
+                return;
+            }
+            match shared.world.windows.iter().find(|w| w.window == window) {
+                Some(snapshot) => snapshot.clone(),
+                None => return,
+            }
+        };
+        let mut textures = HashMap::new();
+        let mut buffers = Vec::new();
+        for node in &snapshot.surfaces {
+            let texture = self.shared.borrow_mut().textures.remove(&node.surface);
+            if let Some(texture) = texture {
+                if texture.imported {
+                    buffers.push(self.take_surface_buffers(node.surface));
+                }
+                textures.insert(node.surface, texture);
+            }
+        }
+        let mut shared = self.shared.borrow_mut();
+        let closed_at = shared.seconds(shared.clock.now());
+        shared.closed.push(ClosedWindow {
+            window: snapshot,
+            closed_at,
+            textures,
+            buffers,
+        });
+        let excess = shared.closed.len().saturating_sub(MAX_CLOSED);
+        let dropped: Vec<ClosedWindow> = shared.closed.drain(..excess).collect();
+        drop(shared);
+        for closed in dropped {
+            self.release_closed(closed);
+        }
+    }
+
+    /// Lets go of every kept closed window.
+    fn forget_closed_windows(&self) {
+        let closed = std::mem::take(&mut self.shared.borrow_mut().closed);
+        for closed in closed {
+            self.release_closed(closed);
+        }
+    }
+
+    fn release_closed(&self, closed: ClosedWindow) {
+        closed.release(&mut self.shared.borrow_mut(), &mut self.gpu());
+    }
+
     /// The dma-buf formats and modifiers this device imports, for
     /// `zwp_linux_dmabuf_v1`.
     pub fn dmabuf_formats(&self) -> Vec<(u32, u64)> {
@@ -743,6 +863,12 @@ impl ScriptRuntime {
                     }))
                 }).collect::<serde_json::Map<String, Value>>(),
                 "dmabuf": shared.dmabuf.describe(),
+                "closed_windows": shared.closed.iter().map(|c| json!({
+                    "id": c.window.window.0,
+                    "closed_at": c.closed_at,
+                    "surfaces": c.textures.len(),
+                    "bytes": c.bytes(),
+                })).collect::<Vec<_>>(),
                 "callbacks": shared.defined,
                 "memory_bytes": self.host.lua().used_memory(),
                 "gpu": {
@@ -943,10 +1069,15 @@ impl ScriptScene {
             return Ok(false);
         }
         let started = Instant::now();
+        // The time the frame is for: when it is expected on screen.
+        let time = {
+            let shared = self.runtime.shared.borrow();
+            shared.seconds(shared.frame_time.unwrap_or_else(|| shared.clock.now()))
+        };
         let result = self.runtime.host.run(None, |lua| {
             let function: mlua::Function = lua.globals().get("frame")?;
             let output = api::output_table(lua, output)?;
-            function.call::<()>((output, image.to_bits()))
+            function.call::<()>((output, image.to_bits(), time))
         });
         self.runtime.time_call("frame", started);
         result?;
@@ -972,6 +1103,7 @@ impl Scene for ScriptScene {
 
     fn window_removed(&mut self, window: WindowId) {
         self.runtime.shared.borrow_mut().opacity.remove(&window);
+        self.runtime.keep_closed_window(window);
     }
 
     fn set_window_opacity(&mut self, window: WindowId, opacity: f32) -> bool {
@@ -1206,6 +1338,10 @@ impl Scene for ScriptScene {
         self.runtime.shared.borrow().textures.contains_key(&surface)
     }
 
+    fn frame_timing(&mut self, timing: &FrameTiming) {
+        self.runtime.shared.borrow_mut().frame_time = Some(timing.presentation);
+    }
+
     fn draw(
         &mut self,
         output: &OutputInfo,
@@ -1287,8 +1423,9 @@ impl Scene for ScriptScene {
         } else {
             // The script does not draw (it failed, or it defines no `frame`):
             // the built-in fallback does. Close what the script left open
-            // first.
+            // first. Nobody is left to let go of closed windows.
             runtime.finish_frame(false);
+            runtime.forget_closed_windows();
             let drew = runtime
                 .ensure_frame()
                 .and_then(|()| runtime.draw_fallback(output, image, background, windows, cursor));

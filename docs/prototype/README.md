@@ -104,6 +104,8 @@ image description の名前:
 - **headless**: 仮想の出力を、画面に出さずに描く。出力は複数作れる（左から右へ並ぶ）。仮想の frame clock が、
   リフレッシュレートの周期でフレームを許す。既定のバックエンドである。入力は制御口から来る。
   制御口からタッチを送れるので、いつも、タッチスクリーンがあるものとして扱う（seat が touch を出す）。
+  present したフレームは、その時点で出たものとして扱う。`--clock manual` では、フレームの時刻を測る時計が、
+  制御口の `advance_clock` で進めるまで止まる（テストのため。[スクリプトの層](script-layer.md#時刻)）。
 - **KMS**: 仮想コンソールの上の DRM/KMS の session として動く。出力は 1 つだけ使う。
   明示したときだけ選ばれる（[KMS のバックエンド](kms-backend.md)）。
 - nested（ほかの compositor の中のウィンドウとして動く）は、未実装である。
@@ -187,6 +189,7 @@ rm -rf "$RT"
 | `--script-wait-gpu` | off | スクリプトの描画で、フレームごとに GPU の完了を待つ（計測用） |
 | `--dmabuf` | `off` | クライアントから dmabuf を受け取るか（[プロトコルの層](protocol-layer.md#dmabuf)）。`off`、`cpu`（linear の 8 bit の RGB を、`wl_shm` と同じように複写する。プロトコルを試すため）、`gpu`（スクリプトの描画のデバイスが取り込めるものを、複写せずに使う） |
 | `--exit-after` | なし | 指定した秒数で終了する |
+| `--clock` | `monotonic` | フレームの時刻を測る時計。`monotonic`: `CLOCK_MONOTONIC`。`manual`（headless だけ）: `advance_clock` で進めるまで止まっている。フレームの許可は、実時間の周期のまま |
 | `--kms-device` | seat の primary GPU | KMS: DRM のデバイス（`/dev/dri/card1` など） |
 | `--kms-output` | つながっている最初の connector | KMS: 使う connector を 1 つ（`DP-1` など） |
 | `--kms-mode` | 画面の preferred のモード | KMS: `幅x高さ` か `幅x高さ@Hz` |
@@ -255,6 +258,7 @@ target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LA
 | `script_call` | `function`、`args`（JSON の配列） | スクリプトの大域の関数を呼び、戻り値を `result` で返す |
 | `script_reload` | `path`（省略可） | スクリプトを読み直す。`path` があれば、そのプロジェクトに替える。コンパイルできないモジュールがあれば、読み直さずに、失敗を返す（[スクリプトの層](script-layer.md#読み直し)） |
 | `script_mode` | `mode` | `running`: スクリプトに任せる。`fallback`: 組み込みの fallback に任せる |
+| `advance_clock` | `milliseconds` | `--clock manual` の時計を進める。進めた後の時刻（`now_ms`）を返す |
 | `quit` | | 終了する |
 
 `proto-ctl` は、これをコマンドにしたものである。失敗の応答のときは、終了コードが 0 以外になる。
@@ -275,6 +279,7 @@ proto-ctl --socket PATH move-window 3 40 30
 proto-ctl --socket PATH set-surface-color 2 display-p3
 proto-ctl --socket PATH set-output-image-description HEADLESS-1 bt2020-pq
 proto-ctl --socket PATH script-reload
+proto-ctl --socket PATH advance-clock 16.7
 proto-ctl --socket PATH raw '{"cmd":"state"}'
 ```
 
@@ -306,7 +311,9 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
   進行中のタッチパッドのジェスチャー（`gesture`。種類と、持ち主 `window_manager` か `client`）
 - `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
 - `window_manager`: `script`（スクリプトのウィンドウ管理）か `fallback`（`--no-drawing`）
-- `script`: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計。`--no-drawing` では `null`
+- `script`: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計、
+  持ち続けている閉じたウィンドウ（`closed_windows`。id、閉じた時刻、表面の数、テクスチャのバイト数）。`--no-drawing` では `null`
+- `clock`: フレームの時刻を測る時計の種類（`monotonic`、`manual`）と、いまの時刻（`now_ms`）
 
 `decode_pipeline` と `encode_pipeline` は、どの変換をどの順でかけるかを表す文字列である。
 
@@ -431,6 +438,9 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 - `prototype/compositor/tests/script_measure.rs` は、テストではなく、計測である（GPU の完了を待つときと、待たないときの、フレームの時間、当たり判定の費用、読み直しの時間）。
   既定では走らない。`cargo test --release -p proto-compositor --test script_measure -- --ignored --nocapture` で走らせる。
   結果は、`target/test-output/script-measure.md` に書く。
+- `prototype/compositor/tests/animation.rs` の `animation_cost` も、計測である（アニメーションの例の、ウィンドウの数ごとの、
+  1 フレームのアニメーションの計算の時間と、`frame` の呼び出しの時間）。`cargo test --release -p proto-compositor --test animation -- --ignored --nocapture`
+  で走らせ、結果を `target/test-output/animation-measure.md` に書く。
 - DRM/KMS の session としての検査は、検証用 VM の中で、`tools/vm-check.py` が行う（[KMS のバックエンド](kms-backend.md#vm-での検査)）。
 
 ### テストが起動するプロセス

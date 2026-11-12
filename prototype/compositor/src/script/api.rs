@@ -152,7 +152,11 @@ fn role_name(role: SurfaceRole) -> &'static str {
 
 /// The fields of a surface that come from its texture.
 fn texture_fields(shared: &Shared, t: &Table, surface: proto_wl::SurfaceId) -> mlua::Result<()> {
-    if let Some(texture) = shared.textures.get(&surface) {
+    set_texture_fields(t, shared.textures.get(&surface))
+}
+
+fn set_texture_fields(t: &Table, texture: Option<&super::SurfaceTexture>) -> mlua::Result<()> {
+    if let Some(texture) = texture {
         t.set("texture", texture.slot.to_bits())?;
         t.set("image", texture.image.to_bits())?;
         t.set("buffer_width", texture.width)?;
@@ -315,19 +319,20 @@ pub fn register(
     });
 
     // The surfaces of a window, back to front. Offsets are relative to the
-    // window geometry, in logical coordinates.
+    // window geometry, in logical coordinates. Also for a closed window that
+    // is kept (`hz.keep_closed`): what it last showed.
     def!("surfaces", |lua, shared, window: u64| {
         let shared = shared.borrow();
         let list = lua.create_table()?;
-        let Some(window) = shared
-            .world
-            .windows
-            .iter()
-            .find(|w| w.window == WindowId(window))
-        else {
-            return Ok(list);
+        let id = WindowId(window);
+        let (nodes, textures) = match shared.world.windows.iter().find(|w| w.window == id) {
+            Some(window) => (&window.surfaces, &shared.textures),
+            None => match shared.closed.iter().find(|c| c.window.window == id) {
+                Some(closed) => (&closed.window.surfaces, &closed.textures),
+                None => return Ok(list),
+            },
         };
-        for node in &window.surfaces {
+        for node in nodes {
             let t = lua.create_table()?;
             t.set("id", node.surface.0)?;
             t.set("role", role_name(node.role))?;
@@ -337,10 +342,9 @@ pub fn register(
             t.set("height", node.size.1)?;
             t.set("scale", node.buffer_scale)?;
             t.set("alpha_mode", node.alpha_mode.name())?;
-            texture_fields(&shared, &t, node.surface)?;
+            set_texture_fields(&t, textures.get(&node.surface))?;
             // Where the surface's rectangle lies in the texture.
-            if let (Some(source), Some(texture)) = (node.source, shared.textures.get(&node.surface))
-            {
+            if let (Some(source), Some(texture)) = (node.source, textures.get(&node.surface)) {
                 t.set(
                     "uv",
                     lua.create_sequence_from(uv_transform(texture, source))?,
@@ -439,10 +443,81 @@ pub fn register(
         Ok((r, g, b))
     });
 
-    // Seconds since the compositor started.
+    // Seconds since the script runtime started, on the clock frames are
+    // timed with (the clock `frame` is given its time on).
     def!("time", |lua, shared, (): ()| {
-        Ok(shared.borrow().started.elapsed().as_secs_f64())
+        let shared = shared.borrow();
+        Ok(shared.seconds(shared.clock.now()))
     });
+
+    // ----- closed windows -----------------------------------------------------
+    //
+    // A window that closes takes its surfaces with it. A script that wants
+    // to show it a while longer (a close animation) asks beforehand: then
+    // what the window last showed stays, until the script lets go.
+
+    // Keeps what a window shows once it closes (`keep` defaults to true).
+    def!(
+        "keep_closed",
+        |lua, shared, (window, keep): (u64, Option<bool>)| {
+            let mut shared = shared.borrow_mut();
+            let id = WindowId(window);
+            if !shared.world.windows.iter().any(|w| w.window == id) {
+                return Err(arg_error(format!("unknown window {window}")));
+            }
+            if keep.unwrap_or(true) {
+                shared.keep_closed.insert(id);
+            } else {
+                shared.keep_closed.remove(&id);
+            }
+            Ok(())
+        }
+    );
+
+    // The closed windows that are kept, oldest first: id, title, app_id,
+    // x, y, width, height as they last were, and `closed_at` (`hz.time()`).
+    def!("closed_windows", |lua, shared, (): ()| {
+        let shared = shared.borrow();
+        let list = lua.create_table()?;
+        for closed in &shared.closed {
+            let window = &closed.window;
+            let t = lua.create_table()?;
+            t.set("id", window.window.0)?;
+            t.set("title", window.title.as_deref())?;
+            t.set("app_id", window.app_id.as_deref())?;
+            t.set("x", window.position.0)?;
+            t.set("y", window.position.1)?;
+            if let Some((width, height)) = window.size {
+                t.set("width", width)?;
+                t.set("height", height)?;
+            }
+            t.set("closed_at", closed.closed_at)?;
+            list.push(t)?;
+        }
+        Ok(list)
+    });
+
+    // Lets go of a closed window that is kept. Returns whether there was one.
+    {
+        let state = Rc::clone(shared);
+        let gpu = Rc::clone(gpu);
+        hz.set(
+            "forget_closed",
+            lua.create_function(move |_, window: u64| {
+                let mut shared = state.borrow_mut();
+                let index = shared
+                    .closed
+                    .iter()
+                    .position(|c| c.window.window == WindowId(window));
+                let Some(index) = index else {
+                    return Ok(false);
+                };
+                let closed = shared.closed.remove(index);
+                closed.release(&mut shared, &mut gpu.borrow_mut());
+                Ok(true)
+            })?,
+        )?;
+    }
 
     // ----- color --------------------------------------------------------------
     //
@@ -542,7 +617,8 @@ pub fn register(
 
     // ----- requests -----------------------------------------------------------
 
-    // Draw another frame even if nothing else changes (animations).
+    // Draw another frame even if nothing else changes (animations). Asked
+    // for from `frame`, it is the next frame of the output.
     def!("request_frame", |lua, shared, (): ()| {
         shared.borrow_mut().requests.push(SceneRequest::Redraw);
         Ok(())

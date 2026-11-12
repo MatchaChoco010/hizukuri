@@ -28,7 +28,7 @@ use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
 use proto_color::{AlphaMode, ImageDescription};
-use proto_gfx_core::{DmabufDesc, DmabufPlaneDesc, Handle};
+use proto_gfx_core::{DmabufDesc, DmabufPlaneDesc, Gpu, Handle};
 use proto_wl::{BufferUpdate, DamageRect, DmabufContents, SurfaceId};
 use serde_json::{Value, json};
 
@@ -48,6 +48,28 @@ pub(crate) struct Import {
     slot: Handle,
     has_alpha: bool,
     last_used: u64,
+}
+
+/// The imports and the held buffer of a surface whose window closed and is
+/// kept (`hz.keep_closed`).
+pub(crate) struct KeptBuffers {
+    imports: Vec<Import>,
+    held: Option<BufferUpdate>,
+}
+
+impl KeptBuffers {
+    /// Lets go of what [`ScriptRuntime::take_surface_buffers`] took: the
+    /// imports go, and the buffer is released once no frame in flight can
+    /// still sample it.
+    pub(crate) fn release(self, state: &mut DmabufState, gpu: &mut Gpu) {
+        if let Some(held) = self.held {
+            state.retired.push((held, gpu.current_serial()));
+        }
+        for import in self.imports {
+            let _ = gpu.destroy(import.slot);
+            let _ = gpu.destroy(import.image);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -318,6 +340,19 @@ impl ScriptRuntime {
         for import in imports {
             let _ = gpu.destroy(import.slot);
             let _ = gpu.destroy(import.image);
+        }
+    }
+
+    /// Takes the imports of a surface and the buffer it shows out of the
+    /// cache, for a closed window that is kept: they stay alive, and the
+    /// client's buffer stays held, until [`Self::release_kept_buffers`].
+    pub(crate) fn take_surface_buffers(&self, surface: SurfaceId) -> KeptBuffers {
+        let mut shared = self.shared.borrow_mut();
+        let state = &mut shared.dmabuf;
+        state.warned.remove(&surface);
+        KeptBuffers {
+            imports: state.imports.remove(&surface).unwrap_or_default(),
+            held: state.held.remove(&surface),
         }
     }
 

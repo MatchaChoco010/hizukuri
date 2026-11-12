@@ -209,7 +209,7 @@ display manager や、コンソールのログインと、同じ形である。
 ## 検証用の compositor を VM で動かす
 
 ```sh
-nix develop --command tools/vm/try-hizukuri [--gtk] [--skip-build]
+nix develop --command tools/vm/try-hizukuri [--gtk] [--skip-build] [--project DIR]
 ```
 
 `try-hizukuri` は、次を行う。devShell の中で実行する。
@@ -223,6 +223,8 @@ nix develop --command tools/vm/try-hizukuri [--gtk] [--skip-build]
    ゲストには、Slang のコンパイラーが無い）。
 5. 組み込みのプロジェクト（`prototype/compositor/scripts/`）を、ゲストの `~/hzk-scripts.orig/` へ送る。
 6. 描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）を、ゲストの `~/hzk-draw-only/` へ送る。
+7. `--project DIR` があれば、`DIR` のプロジェクト（`main.luau` のあるディレクトリ）の shader を、同じく機械の側で
+   `build-shaders` で SPIR-V にしてから、ゲストの `~/hzk-project/` へ送る（前のものは、消して置き換える）。`hzk project` が使う。
 
 ゲストは、起動のたびに最初の状態に戻る。VM を起動し直したら、`try-hizukuri` で、送り直す。
 
@@ -247,6 +249,7 @@ X11 のアプリも動く。`hzk` は、compositor を `--xwayland-satellite` �
 | --- | --- |
 | `lavapipe`（既定） | 組み込みの描画（スクリプト）を lavapipe で動かし、dumb buffer へ写して scanout する。ウィンドウは、コアの fallback が置く（`~/hzk-draw-only` の、描くだけのプロジェクト） |
 | `script` | `~/hzk-scripts` のスクリプトの描画と、スクリプトのウィンドウ管理（タイル）。lavapipe で描く |
+| `project` | `~/hzk-project` のプロジェクト（`try-hizukuri --project DIR` で送ったもの）。lavapipe で描く。端末は、`script` と同じく、プロジェクトが置く |
 | `--reset-scripts` | `script` と一緒に使う。ゲストで書き換えたプロジェクトを、送ったものに戻す（書き換えたものは、`~/hzk-scripts.bak` に残る） |
 | `--seconds N` | 自動で終わるまでの秒数（既定は 600） |
 | `--mode 1920x1080` | モード（既定は 1280x800） |
@@ -289,8 +292,34 @@ X11 のアプリも動く。`hzk` は、compositor を `--xwayland-satellite` �
 | `~/hzk-scripts/` | `hzk script` が使うもの。無ければ、上の写しから作る。**ゲストで書き換えるのは、ここである** |
 | `~/hzk-scripts.bak/` | `hzk script --reset-scripts` が、書き換えたものを退避する場所 |
 | `~/hzk-draw-only/` | `prototype/compositor/projects/draw-only/` の写し。`hzk`（`lavapipe`）が使う。`tools/vm/try-hizukuri` が、毎回置き換える |
+| `~/hzk-project/` | `tools/vm/try-hizukuri --project DIR` で送ったプロジェクトの写し。`hzk project` が使う。送るたびに置き換える |
 
 どれも、VM を止めると消える。残したい変更は、`tools/vm/vm pull` で取り出す。
+
+### 自分のプロジェクトを動かす（`hzk project`）
+
+手元のエディターで書き換えたプロジェクトを、VM の中で動かす。プロジェクトは、手元のものが元で、ゲストのものは写しである。
+例として、ウィンドウの動きをアニメーションで見せるプロジェクト（`prototype/compositor/projects/animation/`。
+[スクリプトの層](../prototype/script-layer.md#アニメーションの例)）を使う。
+
+```sh
+# 送って、起動する
+nix develop --command tools/vm/try-hizukuri --gtk --project prototype/compositor/projects/animation
+# ゲストのコンソールで: hzk project
+# （画面なしなら: tools/vm/vm tty-run -- hzk project --seconds 300）
+
+# 手元で書き換えたら、送り直して、読み直す（compositor は動いたまま。ウィンドウは開いたまま）
+nix develop --command tools/vm/try-hizukuri --skip-build --project prototype/compositor/projects/animation
+tools/vm/vm ssh '~/bin/proto-ctl --socket /run/user/1000/hizukuri-0.control script-reload'
+```
+
+- 読み直しは、ゲストの session で Ctrl+Alt+Shift+R を押しても行える。
+- アニメーションの例では、logo+shift+H と logo+shift+L で、focus のあるウィンドウが、隣と入れ替わりながら動く。
+  logo+Q で閉じると、薄くなりながら消える。端末を開くと、ほかのウィンドウが詰めながら、新しいウィンドウが現れる。
+  長さと easing の種類は、`main.luau` の先頭にある。
+- プロジェクトに無いモジュール（`render`、`tile` など）は、バイナリに組み込まれたものを使う。それらを変えるには、
+  組み込みのプロジェクト（`prototype/compositor/scripts/`）から、同じ名前のファイルをプロジェクトに写して、書き換える。
+- 読み直しで、文法の誤りが見つかると、動いていたスクリプトが、そのまま使われる。何が誤りかは、`state` の `script` の `last_failures` に出る。
 
 ### 画面なしで操作する
 
@@ -437,6 +466,7 @@ GPU は、要らない。数分で終わる。
 | 部 | 内容 | VM の構成 |
 | --- | --- | --- |
 | `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、uinput の仮想のタッチスクリーンとタッチパッドからのタッチとジェスチャー、色のプロトコル（wayland-info、vkcube、検証用のクライアント）、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
+| `animation` | アニメーションの例（`prototype/compositor/projects/animation`）で、検証用のクライアントの窓を 2 つ開き、logo+shift+L で入れ替える。入れ替わり、止まり、スクリプトが失敗しないこと。動きは、画面の取り込みが途中を捉えられるように、3 秒に延ばす（`main.luau` の `move_duration` を書き換えた写しで動かす）。前、途中、後の画面と、スクリプトが描いた位置（`animation_state`）を残す。途中の位置は、実時間なので、確かめない（`tests/animation.rs` が、止まった時計で確かめる） | 既定 |
 | `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーとタッチパッドの 3 本指の swipe の割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、1920x1080 で 4 つのアプリを動かしたときのフレームの時間（`apps-1080p`。描くだけのプロジェクトで配置は fallback のものと、組み込みのプロジェクトでタイルに並べたものの 2 つ）、`hzk script` | 既定 |
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
@@ -447,7 +477,7 @@ GPU は、要らない。数分で終わる。
 
 - compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目は、組み込みのプロジェクトで動かす。そのほかは、
   描くだけのプロジェクトで動かし、ウィンドウを、項目が置いた場所に保つ。`vm-check.py` は、バイナリと一緒に、
-  描くだけのプロジェクトを、ゲストの `/home/hizukuri/hzk-draw-only` へ送る。
+  描くだけのプロジェクトを、ゲストの `/home/hizukuri/hzk-draw-only` へ、アニメーションの例を `/home/hizukuri/hzk-animation` へ送る。
 - 自己診断の項目（`selftest`、`selftest-1080p`、`vkms/selftest-1080p`）は、`kms-selftest` を動かす。パターンは、`proto-gfx-core` で描く。
 
 既定の実行に入らない `real-hardware` の部は、VM の起動のしかたが違う。VM を止めてから、実行する。
