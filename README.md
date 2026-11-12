@@ -27,6 +27,8 @@ nix develop --command tools/ci.sh
 `tools/ci.sh` は、format の確認、lint、テストを行います。テストは、画面も GPU も使いません（CPU で描く Vulkan の実装、lavapipe で動きます）。
 Nix を使わない場合に要るものは、[docs/dev/development-environment.md](docs/dev/development-environment.md) にあります。
 
+CI に [RunsOn](https://runs-on.com) を利用しています。
+
 ## 文書
 
 | 文書 | 内容 |
