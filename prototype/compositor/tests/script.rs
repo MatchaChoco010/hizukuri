@@ -15,8 +15,9 @@ use proto_color::{AlphaMode, CompositeSpace, DecodeTransform, ImageDescription, 
 use proto_compositor::control::Request;
 use proto_compositor::image::{CompositeImage, EncodedImage};
 use proto_test_client::{
-    ClientEvent, ClientOptions, ConstraintRequest, ExternalDmabuf, GestureKind, InputMethodMode,
-    Pattern, PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform, create_udmabuf,
+    ClientEvent, ClientOptions, ConstraintRequest, DialogOptions, ExternalDmabuf, GestureKind,
+    InputMethodMode, Pattern, PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform,
+    create_udmabuf,
 };
 use serde_json::{Value, json};
 
@@ -3229,6 +3230,40 @@ fn the_script_takes_the_gestures_it_wants(device: Device) {
         "{report}"
     );
     assert_eq!(session.state()["focus"]["window"], ida);
+
+    // A dialog of b floats above the tiles and has the focus. A swipe to
+    // the left goes from its parent's tile, b, to the tile on its left, a;
+    // floating windows are passed over.
+    session.send(Request::FocusWindow { window: Some(idb) });
+    b.open_dialog(DialogOptions::default()).unwrap();
+    let state = session.wait(&mut [&mut a, &mut b], "the dialog has the focus", |s| {
+        window(s, "dialog").is_some_and(|w| w["mapped"] == true)
+            && s["focus"]["window"] == window(s, "dialog").unwrap()["id"]
+    });
+    let dialog = window(&state, "dialog").unwrap()["id"].as_u64().unwrap();
+    for request in [
+        Request::GestureBegin {
+            kind: "swipe".into(),
+            fingers: 3,
+        },
+        Request::GestureUpdate {
+            kind: "swipe".into(),
+            dx: -90.0,
+            dy: 0.0,
+            scale: 1.0,
+            rotation: 0.0,
+        },
+        Request::GestureEnd {
+            kind: "swipe".into(),
+            cancelled: false,
+        },
+    ] {
+        session.send(request);
+    }
+    session.wait(&mut [&mut a, &mut b], "focus on a from the dialog", |s| {
+        s["focus"]["window"] == ida
+    });
+    assert_ne!(dialog, ida);
     session.assert_script_healthy();
     session.quit();
 }
