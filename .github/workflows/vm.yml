@@ -22,8 +22,11 @@ on:
 permissions:
   contents: read
 
+# One run per commit of a ref. A group for the whole ref would let a newer
+# push replace a run that is still waiting, and when the newer push changed
+# documentation only, nothing would run the session on the older one.
 concurrency:
-  group: vm-${{ github.ref }}
+  group: vm-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
