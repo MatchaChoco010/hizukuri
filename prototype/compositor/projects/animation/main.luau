@@ -71,11 +71,18 @@ function window_opened(id)
 end
 
 function window_changed(id)
+    tile.window_changed(id)
     animate.retarget()
 end
 
 function window_closed(id)
     tile.window_closed(id)
+    animate.retarget()
+end
+
+-- A client asks for something (to be fullscreen, to be activated, ...).
+function window_request(id, request)
+    tile.window_request(id, request)
     animate.retarget()
 end
 
