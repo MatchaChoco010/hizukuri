@@ -12,6 +12,11 @@
   判断のロジック（モードと plane の選び方、atomic commit の組み立て、フレームを描く時機）は、模擬のデバイスでテストする。
 - **DRM/KMS の session としての動作は、[検証用の VM](vm-environment.md)の中で、自動で確かめる。**
 - **色は、見た目ではなく、数値で確かめる。** 読み戻した画素を、CPU の参照計算と比べる。
+- **Vulkan の仕様が、ドライバーに任せていることを、テストで決め打ちにしない。**
+  - 浮動小数点から UNORM への変換は、`f × (2^b − 1)` に近い 2 つの符号値の、どちらを返してもよい（最も近いほうへの丸めは推奨で、
+    積がちょうど整数のときだけ、その値に決まる）。0.5 は、8 bit で 127 にも 128 にもなる。8 bit の値を比べるときは、±1 を許す。
+  - scanout の画像の format modifier は、ドライバーごとに違う（LINEAR を出さず、tiled のものだけを出すドライバーがある）。
+    テストは、レンダラーが出せると答えた modifier を使い、LINEAR を前提にしない。
 - **回帰を防ぐ確認は、数値の検査にする。** 画像を見て確かめたものは、次に崩れたときに気づけない。
   見て確かめたものは、状態か画素の検査に直して、テストにする。
 - **テストの合否を、機械の速さに依存させない。** 検査は、依存を最適化しないビルドで、遅い機械の上でも走る。
@@ -66,7 +71,7 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | バックエンドの取り決め | `crates/hizukuri/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
 | KMS のロジック | `hizukuri-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
 | レンダラー | `crates/hizukuri-render/tests/gpu.rs` | 表面と出力の image description の組み合わせを描き、CPU の参照計算と比べる | 要る |
-| KMS の scanout | `crates/hizukuri/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイス、実際のレンダラーをつなぎ、模擬の「画面」の画素を確かめる | 要る |
+| KMS の scanout | `crates/hizukuri/tests/kms_scanout.rs` | 中核、KMS のバックエンド、模擬のデバイス、実際のレンダラーをつなぎ、模擬の「画面」の画素を確かめる。模擬の plane が受け取る modifier を、レンダラーが出せるものから作り、選ばれる scanout の経路を確かめる。共通の modifier が無ければ、`auto` は CPU コピーになり、`dmabuf` の指定は失敗する | 要る |
 | headless の全体 | `crates/hizukuri/tests/headless.rs` | 実行バイナリを headless で起動し、検証用のクライアントを出し、画面を取り込んで、画素を数値で確かめる。入力も確かめる。Rust のレンダラーと、スクリプトの描画の両方で走る | 要る |
 | スクリプトの層 | `crates/hizukuri/tests/script.rs` | 2 つのレンダラーの画素の比較、作業用の色空間、dmabuf の取り込み、変形したウィンドウへの入力、タイル、スクリプトの故障と読み直し | 要る |
 | スクリプトに見せる GPU の API | `crates/gfx-core/tests/`、`crates/gfx-lua/tests/` | 誤った呼び出しが、エラーの値になること。dmabuf の書き出しと取り込み | 要る |
@@ -114,6 +119,8 @@ KMS のバックエンドは、DRM のデバイスに触る部分を、trait の
 hizukuri kms-info --device /dev/dri/cardN --anonymize
 ```
 
+- 模擬のデバイスは、framebuffer のメモリを、画素として見せる（dumb buffer と、map できる LINEAR の dma-buf）。
+  tiled の modifier の dma-buf は、並びがドライバーのものなので、画素として見せない。
 - 模擬が再現するのは、kernel の文書に書かれた決まりと、実際のドライバーが commit を拒否した例である。
   実際のドライバーで、模擬と違う振る舞いが見つかったら、その例を、模擬とテストに足す。
 
