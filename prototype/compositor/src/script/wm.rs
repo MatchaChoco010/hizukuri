@@ -36,6 +36,9 @@ enum Event {
     /// request from outside, the focused window going away.
     Focus(Option<WindowId>),
     Outputs,
+    /// The client of a window asked for something the window manager
+    /// decides (fullscreen, activation...).
+    Request(WindowId, proto_wl::WindowRequest),
 }
 
 /// What the script side keeps besides the table.
@@ -218,7 +221,61 @@ pub(crate) fn register(
             })?,
         )?;
     }
+
+    // Tells a window whether it is maximized and whether it is fullscreen
+    // (`{ maximized = bool, fullscreen = bool }`; a missing field is false).
+    // Where it goes and how large it is asked to be stay `hz.place` and
+    // `hz.configure`.
+    def!("set_states", |table, (id, states): (u64, Table)| {
+        if !table.contains(WindowId(id)) {
+            return Err(unknown(id));
+        }
+        let flag = |name: &str| -> mlua::Result<bool> {
+            Ok(states.get::<Option<bool>>(name)?.unwrap_or(false))
+        };
+        table.request(WmRequest::SetStates {
+            window: WindowId(id),
+            maximized: flag("maximized")?,
+            fullscreen: flag("fullscreen")?,
+        });
+        Ok(())
+    });
     Ok(())
+}
+
+/// The table `window_request` receives: `kind`, and what comes with it.
+fn request_table(lua: &Lua, request: proto_wl::WindowRequest) -> mlua::Result<Table> {
+    use proto_wl::WindowRequest as R;
+    let table = lua.create_table()?;
+    let kind = match request {
+        R::Maximize => "maximize",
+        R::Unmaximize => "unmaximize",
+        R::Fullscreen { output } => {
+            table.set("output", output.map(|o| o.0))?;
+            "fullscreen"
+        }
+        R::Unfullscreen => "unfullscreen",
+        R::Minimize => "minimize",
+        R::Move => "move",
+        R::Resize { edges } => {
+            table.set("top", edges.top)?;
+            table.set("bottom", edges.bottom)?;
+            table.set("left", edges.left)?;
+            table.set("right", edges.right)?;
+            "resize"
+        }
+        R::ShowMenu { position } => {
+            table.set("x", position.0)?;
+            table.set("y", position.1)?;
+            "show_menu"
+        }
+        R::Activate { from_input } => {
+            table.set("from_input", from_input)?;
+            "activate"
+        }
+    };
+    table.set("kind", kind)?;
+    Ok(table)
 }
 
 /// The [`WindowManager`] backed by a script, on top of the fallback's table.
@@ -337,6 +394,10 @@ impl WindowManager for ScriptWm {
             .call::<_, ()>("pointer_constraint_changed", table);
     }
 
+    fn window_request(&mut self, id: WindowId, request: proto_wl::WindowRequest) {
+        self.event(Event::Request(id, request));
+    }
+
     fn dispatch(&mut self) -> bool {
         let events = {
             let mut shared = self.runtime.shared.borrow_mut();
@@ -373,6 +434,11 @@ impl WindowManager for ScriptWm {
                 }
                 Event::Outputs => {
                     self.runtime.call::<_, ()>("outputs_changed", ());
+                }
+                Event::Request(id, request) => {
+                    if let Ok(table) = request_table(self.runtime.host.lua(), request) {
+                        self.runtime.call::<_, ()>("window_request", (id.0, table));
+                    }
                 }
             }
         }

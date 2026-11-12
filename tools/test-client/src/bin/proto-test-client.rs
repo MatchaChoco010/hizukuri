@@ -24,6 +24,20 @@
 //! (`tf=st2084_pq,primaries=bt2020`; `tf=power:2.4` for a power function;
 //! luminances in cd/m²). `--color-info` reads the image descriptions of the
 //! outputs and the one preferred for the window.
+//!
+//! ```text
+//! proto-test-client --as-xwayland-satellite :N -listenfd FD [-listenfd FD]...
+//! ```
+//!
+//! Stands in for xwayland-satellite, for testing how a compositor starts
+//! it, without Xwayland: it takes the command line a compositor gives
+//! xwayland-satellite, reports what it was given (the display, the sockets
+//! behind the descriptors, `DISPLAY` and `WAYLAND_DISPLAY`), connects to
+//! the compositor named by `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY` (which
+//! is how the compositor that started it hands it the socket) and shows
+//! one window. It accepts connections on the X11 sockets: each one is
+//! greeted with a line, and a line `exit CODE` sent back ends the process
+//! with that status.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -147,6 +161,9 @@ struct ColorProgress {
 }
 
 fn run() -> Result<(), String> {
+    if std::env::args().nth(1).as_deref() == Some("--as-xwayland-satellite") {
+        return stand_in_for_satellite(std::env::args().skip(2).collect());
+    }
     let mut options = ClientOptions::default();
     let mut socket: Option<PathBuf> = None;
     let mut duration: Option<Duration> = None;
@@ -379,4 +396,111 @@ fn advance_color(
         }
     }
     Ok(())
+}
+
+/// One JSON object per line on stdout.
+fn report(value: serde_json::Value) -> Result<(), String> {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{value}").map_err(|e| e.to_string())?;
+    out.flush().map_err(|e| e.to_string())
+}
+
+/// See the module documentation.
+fn stand_in_for_satellite(args: Vec<String>) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::FromRawFd;
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let display = args
+        .first()
+        .filter(|a| a.starts_with(':'))
+        .ok_or("the first argument must be the display (:N)")?
+        .clone();
+    let mut listeners = Vec::new();
+    let mut rest = args[1..].iter();
+    while let Some(arg) = rest.next() {
+        if arg != "-listenfd" {
+            return Err(format!("unexpected argument {arg:?}"));
+        }
+        let fd: i32 = rest
+            .next()
+            .and_then(|v| v.parse().ok())
+            .ok_or("-listenfd needs a descriptor")?;
+        // SAFETY: the descriptor was handed over on the command line, to
+        // this process alone; nothing else here owns it.
+        let listener = unsafe { UnixListener::from_raw_fd(fd) };
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("descriptor {fd}: {e}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|e| format!("descriptor {fd} is not a listening socket: {e}"))?;
+        let path = address.as_pathname().map(|p| p.display().to_string());
+        let abstract_name = address
+            .as_abstract_name()
+            .map(|n| String::from_utf8_lossy(n).into_owned());
+        listeners.push((fd, path, abstract_name, listener));
+    }
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR is not set")?;
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").ok_or("WAYLAND_DISPLAY is not set")?;
+    // The signals blocked when it was started (a hexadecimal mask), as the
+    // kernel shows them.
+    let blocked = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("SigBlk:").map(|v| v.trim().to_string()))
+        });
+    report(serde_json::json!({
+        "blocked_signals": blocked,
+        "event": "satellite_started",
+        "pid": std::process::id(),
+        "display": display,
+        "listen": listeners.iter().map(|(fd, path, name, _)| serde_json::json!({
+            "fd": fd, "path": path, "abstract": name,
+        })).collect::<Vec<_>>(),
+        "env_display": std::env::var("DISPLAY").ok(),
+        "wayland_display": wayland.to_string_lossy(),
+        "wayland_socket": std::env::var("WAYLAND_SOCKET").ok(),
+    }))?;
+
+    let socket = PathBuf::from(runtime).join(wayland);
+    let options = ClientOptions {
+        title: format!("X11 window on {display}"),
+        app_id: "hizukuri.fake-x11".to_string(),
+        ..ClientOptions::default()
+    };
+    let mut client = TestClient::connect_path(&socket, options).map_err(|e| e.to_string())?;
+    let mut connections: Vec<BufReader<UnixStream>> = Vec::new();
+    loop {
+        client
+            .pump(Some(Duration::from_millis(20)))
+            .map_err(|e| e.to_string())?;
+        for (fd, _, _, listener) in &listeners {
+            while let Ok((mut stream, _)) = listener.accept() {
+                writeln!(
+                    stream,
+                    "proto-test-client stands in for xwayland-satellite on {display}"
+                )
+                .map_err(|e| e.to_string())?;
+                stream.set_nonblocking(true).map_err(|e| e.to_string())?;
+                report(serde_json::json!({ "event": "x11_client", "fd": fd }))?;
+                connections.push(BufReader::new(stream));
+            }
+        }
+        for connection in &mut connections {
+            let mut line = String::new();
+            if connection.read_line(&mut line).is_ok()
+                && let Some(code) = line.trim().strip_prefix("exit ")
+            {
+                let code: i32 = code
+                    .parse()
+                    .map_err(|_| format!("bad exit code {code:?}"))?;
+                report(serde_json::json!({ "event": "exit", "code": code }))?;
+                std::process::exit(code);
+            }
+        }
+    }
 }

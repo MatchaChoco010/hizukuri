@@ -50,6 +50,7 @@ use crate::scene::{
     WindowSnapshot, WindowView, WorldSnapshot,
 };
 use crate::timing::FrameTimes;
+use crate::x11::X11Status;
 
 type WmWindowId = crate::wm::WindowId;
 type WmOutputId = crate::wm::OutputId;
@@ -142,6 +143,9 @@ pub struct Compositor<B: Backend> {
     frame_times: FrameTimes,
     /// What the core remembers about pointer constraints.
     constraints: constraints::ConstraintPolicy,
+    /// The X11 display and xwayland-satellite, when the compositor serves
+    /// one (see [`crate::x11`]).
+    x11: Option<X11Status>,
     quit: bool,
 }
 
@@ -192,6 +196,7 @@ impl<B: Backend> Compositor<B> {
             unreadable: std::collections::HashSet::new(),
             frame_times: FrameTimes::new(),
             constraints: Default::default(),
+            x11: None,
             quit: false,
         };
         // Pick up the outputs the backend announced at startup.
@@ -208,6 +213,19 @@ impl<B: Backend> Compositor<B> {
     }
 
     /// Whether a `quit` request was received.
+    /// What the state dump says about the X11 display. Windows whose
+    /// client is the running xwayland-satellite are X11 windows.
+    pub fn set_x11_status(&mut self, status: Option<X11Status>) {
+        self.x11 = status;
+        self.sync_world();
+    }
+
+    /// Whether a window belongs to the running xwayland-satellite.
+    fn is_x11(&self, info: Option<&proto_wl::WindowInfo>) -> bool {
+        let satellite = self.x11.as_ref().and_then(|x11| x11.satellite_pid);
+        satellite.is_some() && info.and_then(|i| i.client_pid) == satellite.map(|pid| pid as i32)
+    }
+
     pub fn should_quit(&self) -> bool {
         self.quit
     }
@@ -281,6 +299,18 @@ impl<B: Backend> Compositor<B> {
                 WmRequest::Close(window) => self.wl.close_window(to_wl(window)),
                 WmRequest::ReleasePointerConstraint => self.release_pointer_constraint(),
                 WmRequest::ReviewPointerConstraints => self.review_pointer_constraints(),
+                WmRequest::SetStates {
+                    window,
+                    maximized,
+                    fullscreen,
+                } => self.wl.set_window_states(
+                    to_wl(window),
+                    proto_wl::WindowStates {
+                        maximized,
+                        fullscreen,
+                        resizing: false,
+                    },
+                ),
             }
         }
     }
@@ -307,6 +337,10 @@ impl<B: Backend> Compositor<B> {
                     activated: info.as_ref().is_some_and(|i| i.activated),
                     position: (placement.position.x, placement.position.y),
                     surfaces: self.wl.window_surfaces(to_wl(placement.window)),
+                    parent: info.as_ref().and_then(|i| i.parent).map(to_wm),
+                    min_size: info.as_ref().map_or((0, 0), |i| i.min_size),
+                    max_size: info.as_ref().map_or((0, 0), |i| i.max_size),
+                    x11: self.is_x11(info.as_ref()),
                 }
             })
             .collect();
@@ -1293,6 +1327,13 @@ impl<B: Backend> Compositor<B> {
                     "app_id": info.as_ref().and_then(|i| i.app_id.clone()),
                     "mapped": info.as_ref().is_some_and(|i| i.mapped),
                     "activated": info.as_ref().is_some_and(|i| i.activated),
+                    "maximized": info.as_ref().is_some_and(|i| i.maximized),
+                    "fullscreen": info.as_ref().is_some_and(|i| i.fullscreen),
+                    "parent": info.as_ref().and_then(|i| i.parent).map(|p| p.0),
+                    "min_size": info.as_ref().map(|i| [i.min_size.0, i.min_size.1]),
+                    "max_size": info.as_ref().map(|i| [i.max_size.0, i.max_size.1]),
+                    "client_pid": info.as_ref().and_then(|i| i.client_pid),
+                    "x11": self.is_x11(info.as_ref()),
                     "surface": info.as_ref().map(|i| i.surface.0),
                     "output": placement.output.map(|o| o.0),
                     "position": [placement.position.x, placement.position.y],
@@ -1353,6 +1394,12 @@ impl<B: Backend> Compositor<B> {
             // Locks and confinements clients asked for; `active` is in effect.
             "pointer_constraints": self.describe_pointer_constraints(),
             "input_method": input_method_json(&self.wl.input_method_status()),
+            "x11": self.x11.as_ref().map(|x11| json!({
+                "display": x11.display,
+                "satellite_pid": x11.satellite_pid,
+                "satellite_starts": x11.starts,
+                "satellite_exits": x11.exits,
+            })),
             "pointer": {
                 "position": self.pointer_active.then_some([self.pointer.0, self.pointer.1]),
                 "cursor": match self.wl.cursor() {

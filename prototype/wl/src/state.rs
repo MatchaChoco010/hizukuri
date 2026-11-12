@@ -16,11 +16,11 @@ use smithay::input::{Seat, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::utils::{Point, Rectangle, SERIAL_COUNTER, Size, Transform};
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorState, SurfaceAttributes, TraversalAction, with_states,
@@ -47,6 +47,7 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
+use smithay::wayland::xdg_activation::XdgActivationState;
 
 use crate::color::{ColorState, Record};
 use crate::ime::ImeState;
@@ -130,6 +131,7 @@ pub(crate) struct State {
     pub menu_grab: Option<PopupGrab<State>>,
     /// color-management-v1.
     pub color: ColorState,
+    pub activation_state: XdgActivationState,
 
     pub events: Vec<WlEvent>,
     pub windows: Vec<Window>,
@@ -205,6 +207,7 @@ impl State {
         let input_method_state = InputMethodManagerState::new::<Self, _>(dh, |_client| true);
         let virtual_keyboard_state =
             VirtualKeyboardManagerState::new::<Self, _>(dh, |_client| true);
+        let activation_state = XdgActivationState::new::<Self>(dh);
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_global = match &config.dmabuf {
             Some(dmabuf) => Some(create_dmabuf_global(dh, &mut dmabuf_state, dmabuf)?),
@@ -251,6 +254,7 @@ impl State {
             ime: ImeState::new(),
             menu_grab: None,
             color: ColorState::new(dh),
+            activation_state,
             events: Vec::new(),
             windows: Vec::new(),
             popups: Vec::new(),
@@ -509,16 +513,32 @@ impl State {
     pub fn window_info(&self, id: WindowId) -> Option<WindowInfo> {
         let window = self.window(id)?;
         let surface = window.toplevel.wl_surface();
-        let (title, app_id) = with_states(surface, |states| {
+        let (title, app_id, parent) = with_states(surface, |states| {
             states
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
                 .map(|data| {
                     let attributes = data.lock().unwrap_or_else(|e| e.into_inner());
-                    (attributes.title.clone(), attributes.app_id.clone())
+                    (
+                        attributes.title.clone(),
+                        attributes.app_id.clone(),
+                        attributes.parent.clone(),
+                    )
                 })
-                .unwrap_or((None, None))
+                .unwrap_or((None, None, None))
         });
+        let (min_size, max_size) = with_states(surface, |states| {
+            let mut cached = states.cached_state.get::<SurfaceCachedState>();
+            let current = cached.current();
+            (
+                (current.min_size.w, current.min_size.h),
+                (current.max_size.w, current.max_size.h),
+            )
+        });
+        let client_pid = surface
+            .client()
+            .and_then(|client| client.get_credentials(&self.display_handle).ok())
+            .map(|credentials| credentials.pid);
         let mapped = surface_size(surface) != (0, 0);
         let geometry = Self::geometry(surface);
         let has = |wanted: xdg_toplevel::State| {
@@ -537,6 +557,10 @@ impl State {
             activated,
             maximized: has(xdg_toplevel::State::Maximized),
             fullscreen: has(xdg_toplevel::State::Fullscreen),
+            parent: parent.and_then(|parent| self.window_for_root(&parent)),
+            min_size,
+            max_size,
+            client_pid,
         })
     }
 

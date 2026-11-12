@@ -323,6 +323,7 @@ const CALLBACKS: &[&str] = &[
     "pointer_button",
     "pointer_constraint",
     "pointer_constraint_changed",
+    "window_request",
 ];
 
 /// The VM, the GPU and the shared state. Held by the scene and by the window

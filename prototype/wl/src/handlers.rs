@@ -47,6 +47,9 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+};
 
 use crate::state::{ClientState, State, Window, apply_pending_state};
 use crate::surface::{init_surface, process_commit, surface_id};
@@ -671,6 +674,12 @@ impl XdgShellHandler for State {
             self.push_event(WlEvent::WindowChanged(id));
         }
     }
+
+    fn parent_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = self.window_for_root(surface.wl_surface()) {
+            self.push_event(WlEvent::WindowChanged(id));
+        }
+    }
 }
 
 impl XdgDecorationHandler for State {
@@ -701,6 +710,57 @@ fn set_server_side_decoration(toplevel: &ToplevelSurface) {
 impl FractionalScaleHandler for State {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
         self.announce_outputs(&surface);
+    }
+}
+
+/// Whether an activation token was made for an input event of the client
+/// that had the keyboard focus.
+struct TokenFromInput(bool);
+
+impl XdgActivationHandler for State {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.activation_state
+    }
+
+    fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        // Every token is handed out; what it was made for decides how the
+        // window manager may treat it. A serial counts when it came after
+        // the keyboard focus last moved, to the client that asks.
+        let keyboard = self.seat.get_keyboard();
+        let from_input = match (&data.serial, &keyboard) {
+            (Some((serial, seat)), Some(keyboard)) => {
+                let our_seat = self.seat.owns(seat);
+                let focused_client = keyboard
+                    .current_focus()
+                    .and_then(|surface| self.display_handle.get_client(surface.id()).ok())
+                    .map(|client| client.id());
+                let recent = keyboard
+                    .last_enter()
+                    .is_some_and(|enter| serial.is_no_older_than(&enter));
+                our_seat && recent && focused_client.is_some() && focused_client == data.client_id
+            }
+            _ => false,
+        };
+        data.user_data
+            .insert_if_missing(|| TokenFromInput(from_input));
+        true
+    }
+
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        let from_input = data.user_data.get::<TokenFromInput>().is_some_and(|t| t.0);
+        // A token is good for one activation.
+        self.activation_state.remove_token(&token);
+        if let Some(window) = self.window_for_root(&surface) {
+            self.push_event(WlEvent::WindowRequest {
+                window,
+                request: WindowRequest::Activate { from_input },
+            });
+        }
     }
 }
 

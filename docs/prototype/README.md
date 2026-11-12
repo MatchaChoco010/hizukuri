@@ -20,7 +20,7 @@
 | `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込みと書き出し。shader の実行時のコンパイル。SPIR-V で渡された shader の検証と検査 | `vulkan-rs`、`naga`、`spirv-tools`（SPIRV-Tools）、`rspirv` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
 | `prototype/slangc` | Slang のコンパイラー（`slangc`）を子のプロセスとして呼び、SPIR-V を得る。build script が使う | `rustix` |
-| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目と、その言葉（`wm`: `WindowId`、`OutputId`、`Placement`、`ConfigureHint`）、座標と矩形（`geometry`）、スクリプトの層（`script/`、`scripts/`）、スクリプトが動かないときと、誰も決めないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、取り込んだ画像とそのファイル（`image`: PNG と OpenEXR）、自己診断（`selftest`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて、`png` |
+| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目と、その言葉（`wm`: `WindowId`、`OutputId`、`Placement`、`ConfigureHint`）、座標と矩形（`geometry`）、スクリプトの層（`script/`、`scripts/`）、スクリプトが動かないときと、誰も決めないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、取り込んだ画像とそのファイル（`image`: PNG と OpenEXR）、自己診断（`selftest`）、X11 の display と xwayland-satellite の起動（`x11`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて、`png` |
 | `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
 | `tools/ci.sh` | 検査をまとめて走らせる | |
 | `tools/real-app-check.sh` | 実際のアプリ（weston-terminal）を headless の中で動かして、画面を取り込む | |
@@ -192,6 +192,9 @@ rm -rf "$RT"
 | `--kms-scanout` | `auto` | KMS: `auto`、`dmabuf`、`cpu` |
 | `--allow-real-hardware` | off | KMS: 仮想マシンではない機械で、画面を取ることを許す（[KMS のバックエンド](kms-backend.md#安全策)） |
 | `--watchdog` | `15` | KMS: メインループがこの秒数止まったら abort する。`0` で無効 |
+| `--xwayland-satellite` | なし | X11 の display を用意し、最初の X11 のクライアントがつないだときに、このプログラム（パスか、`PATH` の中の名前）を xwayland-satellite として起動する（[X11 のアプリ](#x11-のアプリ)）。無ければ、X11 の display は無い |
+| `--x11-root` | `/tmp` | `/tmp` の代わりのディレクトリ。X11 の socket を `DIR/.X11-unix/` に、lock を `DIR` に作る。テストが、機械の X11 の display に触れないためのもの |
+| `--xwayland-satellite-log` | なし | xwayland-satellite（と Xwayland）の出力を、このファイルに足す。無ければ捨てる |
 
 サブコマンド:
 
@@ -274,7 +277,9 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
 - `frame_time_ms`: 最近のフレームの、描画と present にかかった時間の統計
 - `composite_space`、`background`
 - `outputs`: 大きさ、論理的な大きさ、位置、scale、format、image description、`encode_pipeline`
-- `windows`（重なりの順。下から上）: 題名、app id、出力、位置、大きさ、`activated`、`visual`（見た目の位置と不透明度）、
+- `windows`（重なりの順。下から上）: 題名、app id、出力、位置、大きさ、`activated`、`maximized`、`fullscreen`、
+  `parent`（`xdg_toplevel.set_parent` の相手）、`min_size`、`max_size`、`client_pid`（クライアントのプロセス）、
+  `x11`（動いている xwayland-satellite のウィンドウか）、`visual`（見た目の位置と不透明度）、
   `surfaces`（役割、offset、大きさ、バッファの大きさ・種類・transform、`generation`、image description、その出どころ（`color_source`）と rendering intent、alpha mode、`decode_pipeline`）
 - `focus`: focus のあるウィンドウ、キーボードの focus のある表面、ポインターのある表面
 - `pointer`: 位置、クライアントが求めたカーソル
@@ -283,6 +288,8 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
   有効かどうか（`active`）、cursor position hint
 - `input_method`: 入力メソッドの有無（`bound`）、active か、キーボードを grab しているか、候補ウィンドウ（`popup`）の
   表面、見えているか、ウィンドウ、ウィンドウの中の位置、アプリが伝えたカーソルの矩形、IME に伝えた矩形
+- `x11`（`--xwayland-satellite` のとき）: `display`（`:N`）、`satellite_pid`（動いている xwayland-satellite）、
+  `satellite_starts`（起動した回数）、`satellite_exits`（最近の終わり方）
 - `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
 - `window_manager`: `script`（スクリプトのウィンドウ管理）か `fallback`（`--no-drawing`）
 - `script`: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計。`--no-drawing` では `null`
@@ -300,6 +307,35 @@ luminance:x(79.8/79.8) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf
 | --- | --- |
 | PNG | 出力の image description で符号化した値。8 bit か 16 bit の RGBA。色のメタデータは付けない |
 | OpenEXR | 合成用のバッファそのもの。linear light、premultiplied alpha、reference white が 1.0。half float。圧縮なし。`chromaticities` に合成用の原色を書く |
+
+## X11 のアプリ
+
+X11 のアプリは、xwayland-satellite が、Xwayland と compositor の間に立って動かす
+（[xwayland-satellite](../research/wayland/xwayland-satellite.md)）。compositor は、X11 のプロトコルを話さない。
+`--xwayland-satellite PROGRAM` で、有効になる。
+
+```sh
+target/debug/proto-compositor --backend headless --socket hz \
+    --xwayland-satellite xwayland-satellite
+proto-ctl --socket "$RT/hz.control" state     # x11.display が DISPLAY の値
+DISPLAY=:0 xterm &
+```
+
+- 起動の時点で、使われていない display の番号を選び（`:0` から）、lock（`/tmp/.X<N>-lock`）と、socket
+  （`/tmp/.X11-unix/X<N>` と、同じ名前の abstract socket）を作る。lock があっても、書かれたプロセスが無ければ、取り直す。
+- xwayland-satellite は、最初の X11 のクライアントが socket につないだときに起動する（`:N -listenfd FD -listenfd FD`）。
+  `WAYLAND_DISPLAY` で compositor の socket を、`DISPLAY` で display を渡す。動いている間、socket は、Xwayland が受け取る。
+- xwayland-satellite が終わると（落ちても）、そのウィンドウは消え、compositor と、ほかのクライアントは、そのまま動く。
+  待っていた接続を捨て、socket の見張りに戻る。次の X11 のクライアントで、起動し直す。起動に失敗したときも、待っていた接続を捨てる。
+- compositor が終わるときに、xwayland-satellite に SIGTERM を送り、socket と lock を消す。
+- X11 のウィンドウは、xwayland-satellite の、ふつうの toplevel と popup である。ダイアログは親のある toplevel、
+  メニューと tooltip は grab の無い popup として来る。compositor は、接続の相手のプロセスが、自分の起動した
+  xwayland-satellite であることで、X11 のウィンドウを見分ける（`state` と、スクリプトの `hz.windows()` の `x11`）。
+- コピーと貼り付けは、xwayland-satellite が、X11 の CLIPBOARD と PRIMARY を、Wayland の selection と primary selection に
+  つなぐ。X11 のアプリでコピーしたものが Wayland に渡るのは、その X11 のウィンドウにキーボードの focus があるときである。
+- pointer の lock と confine、relative motion のために、xwayland-satellite は、compositor の pointer-constraints と
+  relative-pointer を、そのまま Xwayland に通す。X11 のアプリでこれを確かめる検査は、無い。
+- `DISPLAY` は、`state` の `x11.display` で知る。compositor は、自分でアプリを起動しないので、`DISPLAY` を配らない。
 
 ## 検証用のクライアント
 
@@ -333,6 +369,12 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
   候補ウィンドウの代わりに、1 色の popup を出す。ほかのキーは、仮想キーボードで返す。
 - ライブラリは、入力欄の側（enable、カーソルの矩形、disable）と、入力メソッドの側（grab、preedit、commit、
   仮想キーボード、popup）を、1 つずつ操作できる（`ClientOptions::text_input`、`ClientOptions::input_method`）。
+- xwayland-satellite が送る要求も、同じ順で送れる: 親のある 2 つ目の toplevel（ダイアログ）、大きさの制限、
+  親の全体を anchor にした popup（X11 のメニュー）、xdg-activation の token での activate。
+- `proto-test-client --as-xwayland-satellite :N -listenfd FD ...` は、xwayland-satellite の代わりになる。Xwayland を
+  起動せず、受け取った引数と socket と環境変数と signal mask を JSON で書き、`XDG_RUNTIME_DIR` と `WAYLAND_DISPLAY` の
+  compositor につないでウィンドウを 1 つ出し、X11 の socket に来た接続に 1 行で答える（`exit CODE` を送ると、その終了コードで終わる）。
+  compositor が xwayland-satellite を起動する仕組みのテストに使う。
 
 ## 検査
 
@@ -389,6 +431,11 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
   指している環境変数（compositor の制御用の socket など）も、どのプログラムのものであっても、渡さない。
   `XDG_RUNTIME_DIR` は、テストごとの専用のディレクトリである。アプリには、空の `HOME` と設定のディレクトリを渡す。
 - 作業用のディレクトリ（`$XDG_RUNTIME_DIR/hzk-t-*`）は、テストが終わるときに消す。
+- **テストは、Xwayland も xwayland-satellite も起動しない。** X11 の socket は、機械の全体で共有の `/tmp/.X11-unix` と
+  abstract socket の名前空間にあり、作業用のディレクトリに閉じ込められないためである。X11 の display のテスト
+  （`xwayland_satellite.rs`）は、socket と lock を、テストの作業用のディレクトリ（`$XDG_RUNTIME_DIR/hzk-x-*`）に作らせ
+  （`--x11-root`）、xwayland-satellite の代わりに `proto-test-client --as-xwayland-satellite` を起動させる。
+  実物は、検証用の VM の中で動かす（`tools/vm-check.py` の `x11` の部）。
 
 ### 実際のアプリを見て確かめる
 
@@ -411,6 +458,7 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - KMS の dma-buf の経路で、GPU の完了を待たずに flip すること。いまは、scanout の画像に描いたフレームの完了を、
   CPU で待ってから flip する（`IN_FENCE_FD` を使わない）。
 - スクリプトから、SPIR-V の shader を渡すこと（`Gpu::create_shader_spirv` は、Rust の API にだけある）。
-- xwayland-satellite のための対応、タッチ、ジェスチャー。
+- タッチ、ジェスチャー。
 - data control を、信頼するクライアントにだけ見せること（`wp_security_context_v1`）。
 - 候補ウィンドウの位置を、スクリプトが決めること。text-input-v3 の version 2。
+- X11 の display を、compositor が起動するアプリへ渡すこと（compositor は、アプリを起動しない）。

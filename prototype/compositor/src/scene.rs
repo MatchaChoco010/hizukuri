@@ -131,6 +131,13 @@ pub struct WindowSnapshot {
     pub position: (i32, i32),
     /// The surfaces of the window, back to front.
     pub surfaces: Vec<proto_wl::SurfaceNode>,
+    /// The window this one belongs to (a dialog's main window).
+    pub parent: Option<WindowId>,
+    /// The size limits the client gave; zero on an axis is no limit.
+    pub min_size: (i32, i32),
+    pub max_size: (i32, i32),
+    /// The window is an X11 window, shown through xwayland-satellite.
+    pub x11: bool,
 }
 
 /// Everything the core knows that drawing or placing windows may depend on.

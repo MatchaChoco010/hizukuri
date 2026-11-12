@@ -952,6 +952,7 @@ version = "0.0.0"
 dependencies = [
  "calloop",
  "clap",
+ "libc",
  "mlua",
  "png",
  "proto-backend",

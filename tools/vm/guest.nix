@@ -190,8 +190,11 @@ let
 
       environment.systemPackages = [
         guestTools
-        # For uinput-touchpad.py.
-        (pkgs.python3.withPackages (python: [ python.libevdev ]))
+        # For uinput-touchpad.py and x11-test-client.py.
+        (pkgs.python3.withPackages (python: [
+          python.libevdev
+          python.python-xlib
+        ]))
       ]
       ++ (with pkgs; [
         # Applications the checks open.
@@ -203,6 +206,13 @@ let
         # The input method, and the session bus it wants.
         inputMethod
         dbus
+        # X11 applications, through xwayland-satellite (which brings Xwayland).
+        xwayland-satellite
+        xterm
+        xclip
+        xdotool
+        xprop
+        xwininfo
         # Clients that draw their own cursor show none without a theme.
         adwaita-icon-theme
         # Looking at devices and input.
