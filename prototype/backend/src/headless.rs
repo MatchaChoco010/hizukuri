@@ -7,7 +7,8 @@
 //!
 //! There are no input devices and no session. Input reaches the compositor
 //! through the control interface, which feeds the same handler that backend
-//! input events go to.
+//! input events go to. Since that input can include touches, the backend
+//! says at the start that a touchscreen is there.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -19,8 +20,8 @@ use calloop::timer::{TimeoutAction, Timer};
 use proto_color::{CompositeSpace, ImageDescription};
 
 use crate::{
-    Backend, BackendError, BackendEvent, BackendHost, OutputId, OutputInfo, Presentation,
-    monotonic_now,
+    Backend, BackendError, BackendEvent, BackendHost, InputEvent, OutputId, OutputInfo,
+    Presentation, monotonic_now,
 };
 
 /// Configuration of one virtual output.
@@ -174,6 +175,8 @@ impl HeadlessBackend {
                 frame_requested: false,
             });
         }
+        // The control interface stands in for a touchscreen.
+        events.push_back(BackendEvent::Input(InputEvent::TouchAvailable(true)));
         Ok(Self {
             shared: Rc::new(RefCell::new(Shared { outputs, events })),
         })
@@ -346,8 +349,13 @@ mod tests {
         };
         let mut backend = HeadlessBackend::new(&config, None).unwrap();
         let events = backend.drain_events();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         let (a, b) = (added(&events[0]), added(&events[1]));
+        // The control interface can touch, so a touchscreen is announced.
+        assert_eq!(
+            events[2],
+            BackendEvent::Input(InputEvent::TouchAvailable(true))
+        );
         assert_eq!(a.logical_size(), (960, 540));
         assert_eq!(a.position, (0, 0));
         assert_eq!(b.position, (960, 0));

@@ -112,6 +112,29 @@ pub struct ConstraintView {
     pub active: bool,
 }
 
+/// The start of a touchpad gesture, as the window manager sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GestureStart {
+    pub kind: proto_wl::GestureKind,
+    pub fingers: u32,
+    /// What the pointer is on: where the gesture goes when the window
+    /// manager does not take it.
+    pub hit: Option<Hit>,
+}
+
+/// A step of a gesture the window manager took.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GestureStep {
+    pub kind: proto_wl::GestureKind,
+    /// Motion of the fingers' center in logical pixels.
+    pub dx: f64,
+    pub dy: f64,
+    /// Pinch: scale since the start (1.0 at the start), rotation in degrees
+    /// since the previous step.
+    pub scale: f64,
+    pub rotation: f64,
+}
+
 /// See the module documentation.
 pub trait WindowManager {
     /// Short name for state dumps.
@@ -138,6 +161,26 @@ pub trait WindowManager {
     fn pointer_button(&mut self, _button: u32, _pressed: bool, _hit: Option<&Hit>) -> bool {
         false
     }
+    /// A finger touched the screen at `position` (global logical), over
+    /// `hit`. Returns `true` when the window manager decided the focus
+    /// itself; otherwise the core focuses the window that was touched. The
+    /// touch reaches the client either way.
+    fn touch_down(&mut self, _slot: u32, _position: (f64, f64), _hit: Option<&Hit>) -> bool {
+        false
+    }
+    /// A touchpad gesture starts. Returns `true` when the window manager
+    /// takes it: then the rest of it comes to [`Self::gesture_step`] and
+    /// [`Self::gesture_end`], and no client sees any of it. Otherwise it goes
+    /// to the client the pointer is on, and the window manager hears no more
+    /// of it.
+    fn gesture_begin(&mut self, _gesture: &GestureStart) -> bool {
+        false
+    }
+    /// The gesture the window manager took moved.
+    fn gesture_step(&mut self, _step: &GestureStep) {}
+    /// The gesture the window manager took ended; `cancelled` when the
+    /// fingers did not complete it.
+    fn gesture_end(&mut self, _kind: proto_wl::GestureKind, _cancelled: bool) {}
     /// The client of a window asked for it to be maximized, fullscreen,
     /// minimized, moved, resized, or for its window menu. Nothing has been
     /// done about it; a window manager that does nothing is within the

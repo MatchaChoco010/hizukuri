@@ -73,6 +73,48 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         v120_vertical: Option<i32>,
     },
+    /// A finger touches the screen at an absolute position. `slot` names
+    /// the finger until its `touch_up`. Touch events that happen together
+    /// are closed with `touch_frame`.
+    TouchDown {
+        slot: u32,
+        x: f64,
+        y: f64,
+    },
+    TouchMotion {
+        slot: u32,
+        x: f64,
+        y: f64,
+    },
+    TouchUp {
+        slot: u32,
+    },
+    TouchFrame,
+    /// Voids every touch in progress.
+    TouchCancel,
+    /// A touchpad gesture starts. `kind` is `swipe`, `pinch` or `hold`.
+    GestureBegin {
+        kind: String,
+        fingers: u32,
+    },
+    /// The gesture in progress moves: the fingers' center by `dx`, `dy`;
+    /// a pinch to `scale` of its start, turned by `rotation` degrees.
+    GestureUpdate {
+        kind: String,
+        #[serde(default)]
+        dx: f64,
+        #[serde(default)]
+        dy: f64,
+        #[serde(default = "unit_scale")]
+        scale: f64,
+        #[serde(default)]
+        rotation: f64,
+    },
+    GestureEnd {
+        kind: String,
+        #[serde(default)]
+        cancelled: bool,
+    },
     /// Moves a window (its logical position).
     MoveWindow {
         window: u64,
@@ -128,6 +170,10 @@ pub enum Request {
     },
     /// Stops the compositor.
     Quit,
+}
+
+fn unit_scale() -> f64 {
+    1.0
 }
 
 /// Builds a success response with extra fields.
@@ -245,6 +291,27 @@ mod tests {
         let request: Request =
             serde_json::from_str(r#"{"cmd":"focus_window","window":null}"#).unwrap();
         assert_eq!(request, Request::FocusWindow { window: None });
+        let request: Request =
+            serde_json::from_str(r#"{"cmd":"gesture_update","kind":"swipe","dx":4}"#).unwrap();
+        assert_eq!(
+            request,
+            Request::GestureUpdate {
+                kind: "swipe".into(),
+                dx: 4.0,
+                dy: 0.0,
+                scale: 1.0,
+                rotation: 0.0,
+            }
+        );
+        let request: Request =
+            serde_json::from_str(r#"{"cmd":"gesture_end","kind":"hold"}"#).unwrap();
+        assert_eq!(
+            request,
+            Request::GestureEnd {
+                kind: "hold".into(),
+                cancelled: false,
+            }
+        );
     }
 
     #[test]

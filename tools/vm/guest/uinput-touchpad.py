@@ -3,7 +3,7 @@
 plays gestures on it, so that a compositor can be tested with input that QMP
 cannot produce (multi-finger gestures, finger scrolling).
 
-    sudo uinput-touchpad.py [swipe] [scroll] [pinch]
+    sudo uinput-touchpad.py [swipe] [scroll] [pinch] [hold]
 
 The device stays for 1.5 s before the first gesture so that the compositor has
 time to notice it. Needs the Python libevdev module.
@@ -95,6 +95,8 @@ GESTURES = {
     "scroll": ([(500, 250), (650, 250)], [(0, 300)] * 2),
     # Two fingers moving apart: a pinch.
     "pinch": ([(550, 400), (650, 400)], [(-250, 0), (250, 0)]),
+    # Three fingers resting: a hold.
+    "hold": ([(400, 400), (600, 380), (800, 400)], [(0, 0)] * 3),
 }
 
 

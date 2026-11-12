@@ -23,14 +23,17 @@ use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Dispatcher, EventLoop, Interest, LoopHandle, Mode, PostAction};
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource as SmithayAxisSource, ButtonState, Event, InputEvent,
-    KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+    AbsolutePositionEvent, Axis, AxisSource as SmithayAxisSource, ButtonState, Event,
+    GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent, GestureSwipeUpdateEvent,
+    InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+    PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::session::libseat::{LibSeatSession, LibSeatSessionNotifier};
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev::{UdevBackend, UdevEvent, primary_gpu};
 use smithay::reexports::input::Libinput;
+use smithay::reexports::input::event::touch::TouchEventSlot;
 use smithay::reexports::rustix::fs::OFlags;
 
 use super::backend::{KmsBackend, KmsConfig};
@@ -38,7 +41,7 @@ use super::clock::MonotonicClock;
 use super::device::KmsDevice;
 use super::drm_device::DrmDevice;
 use super::input::{Hotkey, RawInput};
-use crate::{AxisSource, BackendError, BackendHost};
+use crate::{AxisSource, BackendError, BackendHost, GestureKind};
 
 /// The KMS backend on a real device.
 pub type RealKmsBackend = KmsBackend<DrmDevice, MonotonicClock>;
@@ -362,6 +365,82 @@ fn raw_input(event: InputEvent<LibinputInputBackend>) -> Option<RawInput> {
                 time_us: event.time().micros(),
             })
         }
+        InputEvent::DeviceAdded { device } => Some(RawInput::DeviceAdded {
+            touch: device.has_capability(smithay::reexports::input::DeviceCapability::Touch),
+        }),
+        InputEvent::DeviceRemoved { device } => Some(RawInput::DeviceRemoved {
+            touch: device.has_capability(smithay::reexports::input::DeviceCapability::Touch),
+        }),
+        // The seat slot: unique across the touchscreens of the seat, unlike
+        // the slot of the device.
+        InputEvent::TouchDown { event } => Some(RawInput::TouchDown {
+            slot: event.seat_slot(),
+            x: event.x_transformed(RANGE) / RANGE as f64,
+            y: event.y_transformed(RANGE) / RANGE as f64,
+            time_us: event.time().micros(),
+        }),
+        InputEvent::TouchMotion { event } => Some(RawInput::TouchMotion {
+            slot: event.seat_slot(),
+            x: event.x_transformed(RANGE) / RANGE as f64,
+            y: event.y_transformed(RANGE) / RANGE as f64,
+            time_us: event.time().micros(),
+        }),
+        InputEvent::TouchUp { event } => Some(RawInput::TouchUp {
+            slot: event.seat_slot(),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::TouchFrame { event } => Some(RawInput::TouchFrame {
+            time_us: event.time().micros(),
+        }),
+        InputEvent::TouchCancel { event } => Some(RawInput::TouchCancel {
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GestureSwipeBegin { event } => Some(RawInput::GestureBegin {
+            kind: GestureKind::Swipe,
+            fingers: event.fingers(),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GestureSwipeUpdate { event } => Some(RawInput::GestureUpdate {
+            kind: GestureKind::Swipe,
+            dx: GestureSwipeUpdateEvent::delta_x(&event),
+            dy: GestureSwipeUpdateEvent::delta_y(&event),
+            scale: 1.0,
+            rotation: 0.0,
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GestureSwipeEnd { event } => Some(RawInput::GestureEnd {
+            kind: GestureKind::Swipe,
+            cancelled: GestureEndEvent::cancelled(&event),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GesturePinchBegin { event } => Some(RawInput::GestureBegin {
+            kind: GestureKind::Pinch,
+            fingers: event.fingers(),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GesturePinchUpdate { event } => Some(RawInput::GestureUpdate {
+            kind: GestureKind::Pinch,
+            dx: GesturePinchUpdateEvent::delta_x(&event),
+            dy: GesturePinchUpdateEvent::delta_y(&event),
+            scale: GesturePinchUpdateEvent::scale(&event),
+            rotation: GesturePinchUpdateEvent::rotation(&event),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GesturePinchEnd { event } => Some(RawInput::GestureEnd {
+            kind: GestureKind::Pinch,
+            cancelled: GestureEndEvent::cancelled(&event),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GestureHoldBegin { event } => Some(RawInput::GestureBegin {
+            kind: GestureKind::Hold,
+            fingers: event.fingers(),
+            time_us: event.time().micros(),
+        }),
+        InputEvent::GestureHoldEnd { event } => Some(RawInput::GestureEnd {
+            kind: GestureKind::Hold,
+            cancelled: GestureEndEvent::cancelled(&event),
+            time_us: event.time().micros(),
+        }),
         _ => None,
     }
 }

@@ -6,6 +6,7 @@ use smithay::desktop::{
 use smithay::input::dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source};
 use smithay::input::pointer::{CursorImageStatus, Focus};
 use smithay::input::tablet::TabletSeatHandler;
+use smithay::input::touch::{GrabStartData as TouchGrabStartData, TouchGrab};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -53,6 +54,7 @@ use smithay::wayland::xdg_activation::{
 
 use crate::state::{ClientState, State, Window, apply_pending_state};
 use crate::surface::{init_surface, process_commit, surface_id};
+use crate::touch::TouchPointsGrab;
 use crate::{ResizeEdges, SurfaceId, WindowId, WindowRequest, WlEvent};
 
 impl State {
@@ -77,11 +79,16 @@ impl State {
     }
 
     /// Whether `serial` is that of a pointer button press that is still
-    /// held: the only thing an interactive move or resize may start from.
+    /// held, or of a touch that is still down (the first of the fingers on
+    /// the screen): the only things an interactive move or resize may start
+    /// from.
     fn is_held_press(&self, seat: &WlSeat, serial: Serial) -> bool {
-        Seat::<State>::from_resource(seat)
-            .and_then(|seat| seat.get_pointer())
+        let Some(seat) = Seat::<State>::from_resource(seat) else {
+            return false;
+        };
+        seat.get_pointer()
             .is_some_and(|pointer| pointer.has_grab(serial))
+            || seat.get_touch().is_some_and(|touch| touch.has_grab(serial))
     }
 
     fn popup_placement_event(&mut self, popup: &PopupSurface) {
@@ -315,6 +322,11 @@ impl SeatHandler for State {
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.set_cursor(image);
     }
+
+    fn touch_down_grab(&mut self, start_data: TouchGrabStartData<Self>) -> impl TouchGrab<Self> {
+        // Each finger keeps the surface it went down on.
+        TouchPointsGrab::new(start_data)
+    }
 }
 
 impl TabletSeatHandler for State {
@@ -431,7 +443,7 @@ impl WaylandDndGrabHandler for State {
         // own hit testing through `pointer_motion`.
         let pointer = match type_ {
             GrabType::Pointer => seat.get_pointer(),
-            // There is no touch input yet.
+            // Drag and drop by touch is not supported.
             GrabType::Touch => None,
         };
         let Some((pointer, start_data)) =
@@ -642,6 +654,9 @@ impl XdgShellHandler for State {
             }
             pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
         }
+        // Touches are not grabbed; a touch outside dismisses the popup
+        // (`State::touch_down`).
+        self.popup_grab = Some(grab);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {

@@ -21,6 +21,12 @@
 --   Escape         free the pointer from a lock or confinement (a game that
 --                  holds the pointer); it is not held again until the
 --                  focus moves or the pointer comes back onto the window
+--
+-- Touchpad: three fingers swiped right or left focus the tile to the right
+-- or left (floating and fullscreen windows are passed over; from a dialog
+-- the move starts at its parent). Those swipes are this script's:
+-- applications do not see them. Every other gesture (a two finger pinch, a four finger swipe)
+-- goes to the application under the pointer.
 
 local T = {}
 
@@ -299,6 +305,71 @@ function T.key(keycode, pressed, mods)
         end
     end
     return true
+end
+
+-- How far (logical pixels) three fingers have to travel sideways to move
+-- the focus.
+T.swipe_distance = 60
+-- The horizontal travel of the swipe this script took, or nil.
+local swipe = nil
+
+-- Takes three finger swipes; leaves every other gesture to the
+-- application.
+function T.gesture_begin(g)
+    if g.kind == "swipe" and g.fingers == 3 then
+        swipe = 0
+        return true
+    end
+    return false
+end
+
+function T.gesture_update(g)
+    if swipe and g.kind == "swipe" then
+        swipe += g.dx
+    end
+end
+
+-- Moves the focus to the next tile to the right (1) or left (-1). Only the
+-- tiles count: floating windows (dialogs) and fullscreen ones are passed
+-- over. From a floating window, the move starts at its parent's tile.
+local function step_tiles(direction)
+    local windows = {}
+    for _, window in hz.windows() do
+        windows[window.id] = window
+    end
+    local tiles = {}
+    for _, id in order do
+        local window = windows[id]
+        if window and not fullscreen[id] and not floats(window) then
+            table.insert(tiles, id)
+        end
+    end
+    local current = focused()
+    if current and windows[current] and windows[current].parent then
+        current = windows[current].parent
+    end
+    for i, id in tiles do
+        if id == current then
+            local target = tiles[i + direction]
+            if target then
+                hz.focus(target)
+            end
+            return
+        end
+    end
+end
+
+function T.gesture_end(g)
+    local travel = swipe
+    swipe = nil
+    if not travel or g.cancelled then
+        return
+    end
+    if travel >= T.swipe_distance then
+        step_tiles(1)
+    elseif travel <= -T.swipe_distance then
+        step_tiles(-1)
+    end
 end
 
 return T

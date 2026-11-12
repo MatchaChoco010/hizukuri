@@ -48,6 +48,9 @@ if tile then
     window_request = tile.window_request
     outputs_changed = tile.outputs_changed
     key = tile.key
+    gesture_begin = tile.gesture_begin
+    gesture_update = tile.gesture_update
+    gesture_end = tile.gesture_end
 end
 
 -- Hooks for tools and tests, reached through the control interface

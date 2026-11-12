@@ -191,7 +191,8 @@ pub(crate) fn write_text(fd: OwnedFd, text: &str) {
 // ---------------------------------------------------------------------------
 
 /// One of this client's surfaces.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SurfaceKind {
     Window,
     Subsurface,

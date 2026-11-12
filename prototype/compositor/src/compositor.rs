@@ -26,6 +26,7 @@
 //! that steps the compositor by hand.
 
 mod constraints;
+mod touch;
 
 use std::collections::HashMap;
 use std::io;
@@ -146,6 +147,8 @@ pub struct Compositor<B: Backend> {
     /// The X11 display and xwayland-satellite, when the compositor serves
     /// one (see [`crate::x11`]).
     x11: Option<X11Status>,
+    /// What the core remembers about touches and gestures.
+    touch: touch::TouchState,
     quit: bool,
 }
 
@@ -197,6 +200,7 @@ impl<B: Backend> Compositor<B> {
             frame_times: FrameTimes::new(),
             constraints: Default::default(),
             x11: None,
+            touch: Default::default(),
             quit: false,
         };
         // Pick up the outputs the backend announced at startup.
@@ -673,6 +677,40 @@ impl<B: Backend> Compositor<B> {
                     .pointer_axis(horizontal, vertical, v120, source, time_us);
                 self.wl.pointer_frame();
             }
+            InputEvent::TouchAvailable(available) => self.touch_available(available),
+            InputEvent::TouchDown {
+                slot,
+                x,
+                y,
+                time_us,
+            } => self.touch_down(slot, (x, y), time_us),
+            InputEvent::TouchMotion {
+                slot,
+                x,
+                y,
+                time_us,
+            } => self.touch_motion(slot, (x, y), time_us),
+            InputEvent::TouchUp { slot, time_us } => self.touch_up(slot, time_us),
+            InputEvent::TouchFrame { .. } => self.touch_frame(),
+            InputEvent::TouchCancel { time_us } => self.touch_cancel(time_us),
+            InputEvent::GestureBegin {
+                kind,
+                fingers,
+                time_us,
+            } => self.gesture_begin(kind, fingers, time_us),
+            InputEvent::GestureUpdate {
+                kind,
+                dx,
+                dy,
+                scale,
+                rotation,
+                time_us,
+            } => self.gesture_update(kind, (dx, dy), scale, rotation, time_us),
+            InputEvent::GestureEnd {
+                kind,
+                cancelled,
+                time_us,
+            } => self.gesture_end(kind, cancelled, time_us),
         }
     }
 
@@ -1096,6 +1134,72 @@ impl<B: Backend> Compositor<B> {
                 });
                 Ok(json!({}))
             }
+            Request::TouchDown { slot, x, y } => {
+                self.handle_input(InputEvent::TouchDown {
+                    slot: *slot,
+                    x: *x,
+                    y: *y,
+                    time_us,
+                });
+                Ok(json!({}))
+            }
+            Request::TouchMotion { slot, x, y } => {
+                self.handle_input(InputEvent::TouchMotion {
+                    slot: *slot,
+                    x: *x,
+                    y: *y,
+                    time_us,
+                });
+                Ok(json!({}))
+            }
+            Request::TouchUp { slot } => {
+                self.handle_input(InputEvent::TouchUp {
+                    slot: *slot,
+                    time_us,
+                });
+                Ok(json!({}))
+            }
+            Request::TouchFrame => {
+                self.handle_input(InputEvent::TouchFrame { time_us });
+                Ok(json!({}))
+            }
+            Request::TouchCancel => {
+                self.handle_input(InputEvent::TouchCancel { time_us });
+                Ok(json!({}))
+            }
+            Request::GestureBegin { kind, fingers } => {
+                self.handle_input(InputEvent::GestureBegin {
+                    kind: gesture_kind(kind)?,
+                    fingers: *fingers,
+                    time_us,
+                });
+                Ok(json!({}))
+            }
+            Request::GestureUpdate {
+                kind,
+                dx,
+                dy,
+                scale,
+                rotation,
+            } => {
+                self.handle_input(InputEvent::GestureUpdate {
+                    kind: gesture_kind(kind)?,
+                    dx: *dx,
+                    dy: *dy,
+                    scale: *scale,
+                    rotation: *rotation,
+                    time_us,
+                });
+                Ok(json!({}))
+            }
+            Request::GestureEnd { kind, cancelled } => {
+                self.handle_input(InputEvent::GestureEnd {
+                    kind: gesture_kind(kind)?,
+                    cancelled: *cancelled,
+                    time_us,
+                });
+                Ok(json!({}))
+            }
             Request::MoveWindow { window, x, y } => {
                 let id = crate::wm::WindowId(*window);
                 if self.wm.placement(id).is_none() {
@@ -1400,6 +1504,9 @@ impl<B: Backend> Compositor<B> {
                 "satellite_starts": x11.starts,
                 "satellite_exits": x11.exits,
             })),
+            // Whether touch is offered, the fingers on the screen, and the
+            // touchpad gesture in progress.
+            "touch": self.describe_touch(),
             "pointer": {
                 "position": self.pointer_active.then_some([self.pointer.0, self.pointer.1]),
                 "cursor": match self.wl.cursor() {
@@ -1411,6 +1518,12 @@ impl<B: Backend> Compositor<B> {
             "frames_rendered": scene["frames_rendered"],
         })
     }
+}
+
+fn gesture_kind(name: &str) -> Result<proto_backend::GestureKind, String> {
+    proto_backend::GestureKind::from_name(name).ok_or_else(|| {
+        format!("unknown gesture {name:?}; it is one of \"swipe\", \"pinch\", \"hold\"")
+    })
 }
 
 /// The input method part of `state`.
