@@ -2929,6 +2929,13 @@ def main():
              "-p", "proto-compositor", "-p", "proto-test-client"], cwd=ROOT, check=True)
     binaries = [os.path.join(target, name)
                 for name in ("proto-compositor", "proto-ctl", "proto-test-client")]
+    # The projects' shaders, as SPIR-V in each project's .build/ (sent along
+    # with the project): the guest has no Slang compiler, and the compositor
+    # reads only SPIR-V.
+    for project in ("scripts", os.path.join("projects", "draw-only")):
+        subprocess.run([binaries[0], "build-shaders",
+                        os.path.join(ROOT, "prototype", "compositor", project)],
+                       cwd=ROOT, check=True)
     results = []
     try:
         guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR} && rm -rf {DRAW_ONLY} && mkdir -p {DRAW_ONLY}")

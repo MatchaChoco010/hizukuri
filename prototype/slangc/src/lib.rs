@@ -67,14 +67,15 @@ pub struct Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.line == 0 {
-            write!(f, "{} {}: {}", self.severity, self.code, self.message)
+        if self.line != 0 {
+            write!(f, "{}:{}:{}: ", self.file, self.line, self.column)?;
+        } else if !self.file.is_empty() {
+            write!(f, "{}: ", self.file)?;
+        }
+        if self.code.is_empty() {
+            write!(f, "{}: {}", self.severity, self.message)
         } else {
-            write!(
-                f,
-                "{}:{}:{}: {} {}: {}",
-                self.file, self.line, self.column, self.severity, self.code, self.message
-            )
+            write!(f, "{} {}: {}", self.severity, self.code, self.message)
         }
     }
 }
@@ -254,6 +255,75 @@ impl Compiler {
             }
             Some(_) => Err(Error::Failed(diagnostics)),
         }
+    }
+
+    /// The entry points of a file (those with a `[shader("...")]`
+    /// attribute), in the order of the file. `scratch` is a file the
+    /// compiler writes its reflection to; it is removed afterwards.
+    pub fn entry_points(&self, file: &Path, scratch: &Path) -> Result<Vec<(String, Stage)>, Error> {
+        let mut args: Vec<String> = [
+            "-enable-machine-readable-diagnostics",
+            "-diagnostic-color",
+            "never",
+            "-target",
+            "spirv",
+            "-no-codegen",
+            "-reflection-json",
+        ]
+        .map(String::from)
+        .into();
+        args.push(scratch.display().to_string());
+        for dir in &self.include_dirs {
+            args.push("-I".into());
+            args.push(dir.display().to_string());
+        }
+        args.push("--".into());
+        args.push(file.display().to_string());
+        let run = self.run(&args, &[])?;
+        let read = std::fs::read(scratch);
+        let _ = std::fs::remove_file(scratch);
+        match run.status {
+            None => return Err(Error::Timeout(self.timeout)),
+            Some(status) if status.code().is_none() => {
+                return Err(Error::Crashed(format!("{status} (the compiler crashed)")));
+            }
+            Some(status) if !status.success() => {
+                let diagnostics = parse_diagnostics(&run.stderr);
+                return Err(if diagnostics.is_empty() {
+                    Error::Crashed(format!("{status}: {}", run.stderr.trim()))
+                } else {
+                    Error::Failed(diagnostics)
+                });
+            }
+            Some(_) => {}
+        }
+        let json: serde_json::Value = read
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or_else(|| Error::Crashed("it wrote no reflection".into()))?;
+        let mut entries = Vec::new();
+        for entry in json["entryPoints"].as_array().into_iter().flatten() {
+            let name = entry["name"].as_str().unwrap_or_default();
+            let stage = match entry["stage"].as_str() {
+                Some("vertex") => Stage::Vertex,
+                Some("fragment") => Stage::Fragment,
+                Some("compute") => Stage::Compute,
+                other => {
+                    return Err(Error::Failed(vec![Diagnostic {
+                        severity: "error".into(),
+                        code: String::new(),
+                        file: file.display().to_string(),
+                        line: 0,
+                        column: 0,
+                        message: format!(
+                            "entry point `{name}` is of stage {other:?}; only vertex, fragment and compute are supported"
+                        ),
+                    }]));
+                }
+            };
+            entries.push((name.to_owned(), stage));
+        }
+        Ok(entries)
     }
 
     fn run(&self, args: &[String], input: &[u8]) -> Result<Run, Error> {

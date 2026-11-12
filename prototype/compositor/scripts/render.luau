@@ -9,14 +9,15 @@
 --
 -- The working primaries are this script's choice (`R.working`). The numbers
 -- of the conversions come from the core (`hz.decode_transform`,
--- `hz.encode_transform`); applying them is done here, in the shaders.
+-- `hz.encode_transform`); applying them is done here, in the shaders
+-- (`shaders/surface.slang` and `shaders/encode.slang`, which import the
+-- core's `color` module).
 --
 -- Each window is drawn with a 2D affine transform. Without one set, that is
 -- the translation to the window's logical position. The same transform,
 -- inverted, answers where a point of the screen lies inside a window.
 
 local affine = hz.include("affine")
-local COLOR = hz.include("color")
 
 local R = {}
 
@@ -25,121 +26,6 @@ local R = {}
 -- (red x, y, green x, y, blue x, y, white x, y).
 R.working = "bt2020"
 local working_key = "bt2020"
-
-local SURFACE = COLOR .. [[
-const ALPHA_PREMULTIPLIED_ELECTRICAL: u32 = 0u;
-const ALPHA_PREMULTIPLIED_OPTICAL: u32 = 1u;
-
-struct Push {
-    ax: vec4<f32>,      // a, b, tx, quad width   (pixel = a*x + b*y + tx)
-    ay: vec4<f32>,      // c, d, ty, quad height  (pixel = c*x + d*y + ty)
-    uv_u: vec4<f32>,    // a, b, tx: u = a*s + b*t + tx over the unit square
-    uv_v: vec4<f32>,    // c, d, ty: v = c*s + d*t + ty
-    m0: vec4<f32>,      // rows of the color matrix (xyz); w: the luminance
-    m1: vec4<f32>,      // coefficients of the HLG OOTF (zero otherwise)
-    m2: vec4<f32>,
-    target_size: vec2<f32>,
-    tf_param: f32,
-    opacity: f32,
-    tf: u32,
-    alpha_mode: u32,
-}
-var<immediate> pc: Push;
-
-@group(0) @binding(0) var u_texture: texture_2d<f32>;
-@group(0) @binding(1) var u_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    // 4-vertex triangle strip.
-    let corner = vec2<f32>(f32(index & 1u), f32((index >> 1u) & 1u));
-    let local = corner * vec2<f32>(pc.ax.w, pc.ay.w);
-    let pixel = vec2<f32>(
-        dot(pc.ax.xy, local) + pc.ax.z,
-        dot(pc.ay.xy, local) + pc.ay.z,
-    );
-    var out: VertexOutput;
-    out.uv = vec2<f32>(
-        dot(pc.uv_u.xy, corner) + pc.uv_u.z,
-        dot(pc.uv_v.xy, corner) + pc.uv_v.z,
-    );
-    out.position = vec4<f32>(pixel / pc.target_size * 2.0 - vec2<f32>(1.0), 0.0, 1.0);
-    return out;
-}
-
-fn to_working(linear: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(dot(pc.m0.xyz, linear), dot(pc.m1.xyz, linear), dot(pc.m2.xyz, linear));
-}
-
-// Encoded values -> display light. HLG decodes to scene light, which its
-// OOTF turns into display light by the luminance of the scene light (the
-// system gamma is `tf_param`).
-fn decode(e: vec3<f32>) -> vec3<f32> {
-    let linear = tf_decode(e, pc.tf, pc.tf_param);
-    if pc.tf == TF_HLG {
-        let y = dot(vec3<f32>(pc.m0.w, pc.m1.w, pc.m2.w), linear);
-        if y <= 0.0 {
-            return vec3<f32>(0.0);
-        }
-        return linear * pow(y, pc.tf_param - 1.0);
-    }
-    return linear;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let texel = textureSampleLevel(u_texture, u_sampler, in.uv, 0.0);
-    let alpha = texel.a;
-    var premultiplied: vec3<f32>;
-    if pc.alpha_mode == ALPHA_PREMULTIPLIED_ELECTRICAL {
-        if alpha <= 0.0 {
-            premultiplied = vec3<f32>(0.0);
-        } else {
-            premultiplied = to_working(decode(texel.rgb / alpha)) * alpha;
-        }
-    } else if pc.alpha_mode == ALPHA_PREMULTIPLIED_OPTICAL {
-        premultiplied = to_working(decode(texel.rgb));
-    } else {
-        premultiplied = to_working(decode(texel.rgb)) * alpha;
-    }
-    return vec4<f32>(premultiplied, alpha) * pc.opacity;
-}
-]]
-
-local ENCODE = COLOR .. [[
-struct Push {
-    m0: vec4<f32>,
-    m1: vec4<f32>,
-    m2: vec4<f32>,
-    tf: u32,
-    tf_param: f32,
-    clip: u32,
-}
-var<immediate> pc: Push;
-
-@group(0) @binding(0) var u_composite: texture_2d<f32>;
-
-@vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let corner = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
-    return vec4<f32>(corner * 2.0 - vec2<f32>(1.0), 0.0, 1.0);
-}
-
-@fragment
-fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
-    let c = textureLoad(u_composite, vec2<i32>(frag_coord.xy), 0);
-    var linear = vec3<f32>(dot(pc.m0.xyz, c.rgb), dot(pc.m1.xyz, c.rgb), dot(pc.m2.xyz, c.rgb));
-    if pc.clip != 0u {
-        linear = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-    return vec4<f32>(tf_encode(linear, pc.tf, pc.tf_param), c.a);
-}
-]]
 
 local surface_pipeline, sampler
 local encode_shaders
@@ -154,14 +40,14 @@ local transforms = {}
 
 function R.init()
     surface_pipeline = gfx.create_render_pipeline({
-        vertex = gfx.create_shader({ stage = "vertex", source = SURFACE, entry = "vs_main" }),
-        fragment = gfx.create_shader({ stage = "fragment", source = SURFACE, entry = "fs_main" }),
+        vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/surface.slang", entry = "vs_main" }),
+        fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/surface.slang", entry = "fs_main" }),
         targets = { { format = "rgba16float", blend = "premultiplied" } },
         topology = "triangle-strip",
     })
     encode_shaders = {
-        vertex = gfx.create_shader({ stage = "vertex", source = ENCODE, entry = "vs_main" }),
-        fragment = gfx.create_shader({ stage = "fragment", source = ENCODE, entry = "fs_main" }),
+        vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/encode.slang", entry = "vs_main" }),
+        fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/encode.slang", entry = "fs_main" }),
     }
     sampler = gfx.create_sampler({ mag = "linear", min = "linear" })
 end

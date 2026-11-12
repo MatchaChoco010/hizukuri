@@ -107,6 +107,21 @@ fn classify(error: &mlua::Error) -> ScriptError {
     find(error).unwrap_or_else(|| ScriptError::Runtime(error.to_string()))
 }
 
+/// Finds the SPIR-V of a shader that a script names
+/// (`gfx.create_shader({ shader = name, entry = entry })`): `(name, entry)`
+/// to the bytes of a SPIR-V module. The host decides where names point.
+#[derive(Clone)]
+pub struct ShaderLoader(pub Rc<LoadShader>);
+
+/// `(name, entry point)` to SPIR-V, or a message for the script.
+pub type LoadShader = dyn Fn(&str, &str) -> Result<Vec<u8>, String>;
+
+impl std::fmt::Debug for ShaderLoader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ShaderLoader")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HostOptions {
     /// Upper bound for the VM heap, in bytes.
@@ -116,6 +131,9 @@ pub struct HostOptions {
     /// Luau only: make the standard library read-only and give the script its
     /// own global table.
     pub sandbox: bool,
+    /// Where shaders named by the script come from. Without one, a script
+    /// can only give shader source.
+    pub shader_loader: Option<ShaderLoader>,
 }
 
 impl Default for HostOptions {
@@ -124,6 +142,7 @@ impl Default for HostOptions {
             memory_limit: Some(256 << 20),
             time_budget: Some(Duration::from_secs(2)),
             sandbox: true,
+            shader_loader: None,
         }
     }
 }
@@ -246,7 +265,7 @@ impl ScriptHost {
         let libs = libs | mlua::StdLib::BUFFER | mlua::StdLib::VECTOR | mlua::StdLib::BIT;
         let lua = Lua::new_with(libs, mlua::LuaOptions::default()).map_err(|e| classify(&e))?;
         let gpu = Rc::new(RefCell::new(gpu));
-        api::register(&lua, &gpu).map_err(|e| classify(&e))?;
+        api::register(&lua, &gpu, options.shader_loader.clone()).map_err(|e| classify(&e))?;
         setup(&lua, &gpu).map_err(|e| classify(&e))?;
 
         let budget = Rc::new(Budget::default());

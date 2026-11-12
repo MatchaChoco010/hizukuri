@@ -7,3 +7,5 @@
 /.direnv/
 # Python bytecode caches.
 __pycache__/
+# What `proto-compositor build-shaders` writes into a project.
+.build/

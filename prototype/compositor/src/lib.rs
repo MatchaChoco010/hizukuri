@@ -18,6 +18,8 @@
 //! - [`targets`]: the output images on the GPU API of `proto-gfx-core`.
 //! - [`image`]: images read back from what draws, as PNG and OpenEXR.
 //! - [`geometry`]: integer logical geometry for window management.
+//! - [`shaders`] and [`project_shaders`]: a project's Slang shaders, the
+//!   SPIR-V the compositor reads for them, and `build-shaders`.
 //!
 //! - [`safety`]: telling a virtual machine from real hardware, and a
 //!   watchdog for a hung main loop.
@@ -32,10 +34,12 @@ pub mod control;
 pub mod fallback;
 pub mod geometry;
 pub mod image;
+pub mod project_shaders;
 pub mod safety;
 pub mod scene;
 pub mod script;
 pub mod selftest;
+pub mod shaders;
 pub mod targets;
 pub mod timing;
 pub mod wm;

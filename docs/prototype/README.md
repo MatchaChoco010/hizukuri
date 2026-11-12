@@ -20,7 +20,7 @@
 | `prototype/gfx-core` | スクリプトに見せる、検査つきの GPU の API（Vulkan 1.4 と `VK_EXT_descriptor_heap`）。dmabuf の取り込みと書き出し。shader の実行時のコンパイル。SPIR-V で渡された shader の検証と検査 | `vulkan-rs`、`naga`、`spirv-tools`（SPIRV-Tools）、`rspirv` |
 | `prototype/gfx-lua` | `proto-gfx-core` を Luau のスクリプトにつなぐ部分。時間とメモリの上限 | `mlua` |
 | `prototype/slangc` | Slang のコンパイラー（`slangc`）を子のプロセスとして呼び、SPIR-V を得る。build script が使う | `rustix` |
-| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目と、その言葉（`wm`: `WindowId`、`OutputId`、`Placement`、`ConfigureHint`）、座標と矩形（`geometry`）、スクリプトの層（`script/`、`scripts/`）、スクリプトが動かないときと、誰も決めないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、取り込んだ画像とそのファイル（`image`: PNG と OpenEXR）、自己診断（`selftest`）、X11 の display と xwayland-satellite の起動（`x11`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて、`png` |
+| `prototype/compositor` | 中核（`compositor`）、描画の継ぎ目（`scene`）、ウィンドウ管理の継ぎ目と、その言葉（`wm`: `WindowId`、`OutputId`、`Placement`、`ConfigureHint`）、座標と矩形（`geometry`）、スクリプトの層（`script/`、`scripts/`）、project の shader（`shaders`、`project_shaders`。SPIR-V を読む側と、道具 `proto-compositor build-shaders`）、スクリプトが動かないときと、誰も決めないときの、最小の描画とウィンドウの表（`fallback/`）、出力の画像（`targets`）、取り込んだ画像とそのファイル（`image`: PNG と OpenEXR）、自己診断（`selftest`）、X11 の display と xwayland-satellite の起動（`x11`）、制御口（`control`）、実行バイナリ `proto-compositor` と `proto-ctl` | 上のすべて、`png` |
 | `tools/test-client` | 検証用の Wayland クライアント。ライブラリと、バイナリ `proto-test-client` | `wayland-client` |
 | `tools/ci.sh` | 検査をまとめて走らせる | |
 | `tools/real-app-check.sh` | 実際のアプリ（weston-terminal）を headless の中で動かして、画面を取り込む | |
@@ -69,7 +69,7 @@
 
 - 合成の作業用の色空間は、スクリプトが選ぶ。組み込みのプロジェクトの既定は、BT.2020 の linear で、バッファは `RGBA16F` である。
 - 色の変換の数値（原色の行列、transfer function）は、`proto-color` が出し、スクリプトの shader が
-  `hz.decode_transform` と `hz.encode_transform` で受け取る。transfer function の番号は、`prototype/compositor/scripts/color.luau` と揃えてある。
+  `hz.decode_transform` と `hz.encode_transform` で受け取る。transfer function の番号は、コアの Slang の module `color`（`prototype/compositor/shaders/color.slang`）と揃えてある。
 - 表面も出力も、image description（原色、transfer function、輝度）を持つ。色の指定が無い表面は、
   BT.709 の原色と、指数 2.2 のべき乗として扱う（`srgb-gamma22`）。
 - 出力の既定も `srgb-gamma22` なので、既定の構成では、指定の無い表面の値が、そのまま出力に出る。
@@ -122,7 +122,7 @@ cargo build -j 8
   （`target/nix-<hash>/`）に入る。この文書の例の `target/debug/` は、`"$CARGO_TARGET_DIR/debug/"` に読み替える。
   devShell の中と外で、同じバイナリを使い回さない。
 - スクリプトの shader は、実行時に、`proto-gfx-core` が `naga` で SPIR-V にする。
-- `proto-compositor` のシェーダー（`prototype/compositor/shaders/`）は Slang で書き、ビルド時に `slangc` で SPIR-V にして、
+- `proto-compositor` のシェーダー（`prototype/compositor/shaders/` と、組み込みの project の `prototype/compositor/scripts/shaders/`）は Slang で書き、ビルド時に `slangc` で SPIR-V にして、
   バイナリに埋め込む。ビルドに `slangc` が要る（devShell には入っている。[開発環境](../dev/development-environment.md)）。
   無ければ、ビルドは、`nix develop` を使うように書いて失敗する。
 - `proto-gfx-core` は、SPIRV-Tools を、crate `spirv-tools` が C++ の源からビルドして、静的にリンクする。
@@ -474,7 +474,6 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - damage を使った部分的な描き直し（毎回、出力の全体を描く）。
 - KMS の dma-buf の経路で、GPU の完了を待たずに flip すること。いまは、scanout の画像に描いたフレームの完了を、
   CPU で待ってから flip する（`IN_FENCE_FD` を使わない）。
-- スクリプトから、SPIR-V の shader を渡すこと（`Gpu::create_shader_spirv` は、Rust の API にだけある）。
 - タブレット（`zwp_tablet_manager_v2`）。
 - タッチを、`wl_touch` を持たないクライアントに、ポインターの操作として送ること。タッチで始める drag and drop。
 - 複数の出力のうち、どれにタッチスクリーンを当てるかを決めること（KMS は、出力を 1 つだけ使う）。

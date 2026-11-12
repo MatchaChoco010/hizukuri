@@ -12,6 +12,7 @@ proto-wl.workspace = true
 proto-backend.workspace = true
 proto-gfx-core.workspace = true
 proto-gfx-lua.workspace = true
+proto-slangc.workspace = true
 mlua = { workspace = true, features = ["serde"] }
 calloop = { workspace = true, features = ["signals"] }
 tracing.workspace = true

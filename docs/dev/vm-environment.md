@@ -218,8 +218,11 @@ nix develop --command tools/vm/try-hizukuri [--gtk] [--skip-build]
 2. VM を起動する（`--gtk` なら、ウィンドウに出す。表示が違う VM が動いていれば、止めて起動し直す）。
 3. バイナリ（`proto-compositor`、`proto-ctl`、`proto-test-client`）を、ゲストの `~/bin/` へ送る。
    送ったバイナリが、ゲストで起動しなければ、その旨を出して止まる。
-4. 組み込みのプロジェクト（`prototype/compositor/scripts/`）を、ゲストの `~/hzk-scripts.orig/` へ送る。
-5. 描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）を、ゲストの `~/hzk-draw-only/` へ送る。
+4. 組み込みのプロジェクト（`prototype/compositor/scripts/`）と、描くだけのプロジェクトの shader を、機械の側で
+   `proto-compositor build-shaders` で SPIR-V にする（プロジェクトの `.build/` に入り、プロジェクトと一緒に送られる。
+   ゲストには、Slang のコンパイラーが無い）。
+5. 組み込みのプロジェクト（`prototype/compositor/scripts/`）を、ゲストの `~/hzk-scripts.orig/` へ送る。
+6. 描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）を、ゲストの `~/hzk-draw-only/` へ送る。
 
 ゲストは、起動のたびに最初の状態に戻る。VM を起動し直したら、`try-hizukuri` で、送り直す。
 
