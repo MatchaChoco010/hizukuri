@@ -214,6 +214,19 @@
         ci = mkDevShell {
           rust = rustToolchain [ ];
         };
+
+        # What the release report (a PDF of slides) is typeset with: Typst
+        # and the fonts it is told to use, and nothing else. A shell of its
+        # own, so that neither of the shells above fetches them. Typst is run
+        # with --ignore-system-fonts, so the fonts named here are the only
+        # ones it can find, on every machine.
+        slides = pkgs.mkShellNoCC {
+          packages = [ pkgs.typst ];
+          TYPST_FONT_PATHS = lib.concatStringsSep ":" [
+            "${pkgs.noto-fonts-cjk-sans-static}/share/fonts"
+            "${pkgs.jetbrains-mono}/share/fonts"
+          ];
+        };
       };
 
       # The verification VM (tools/vm): the guest system and the tools that
