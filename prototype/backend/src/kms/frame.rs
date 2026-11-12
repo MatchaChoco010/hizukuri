@@ -295,7 +295,10 @@ mod tests {
         // A flip in flight takes the next vblank.
         assert_eq!(next_vblank(last, refresh, at(1_000), true), at(32_000));
         // A clock behind the flip's timestamp is not a time before it.
-        assert_eq!(next_vblank(last, refresh, Duration::from_secs(9), false), at(16_000));
+        assert_eq!(
+            next_vblank(last, refresh, Duration::from_secs(9), false),
+            at(16_000)
+        );
     }
 
     #[test]

@@ -59,6 +59,7 @@
 - 描くだけのプロジェクトが、`prototype/compositor/projects/draw-only/` にある。`main.luau` は `hz.include("session")` の 1 行で、
   `session.luau` は、組み込みの session から、タイルを除いたもの（組み込みの描画だけで、ウィンドウ管理の関数を定義しない）である。
   ウィンドウは、コアの fallback が置く。テスト、`tools/vm-check.py`、VM の中の `hzk` が使う。
+- ウィンドウの動きをアニメーションで見せる例が、`prototype/compositor/projects/animation/` にある（[下](#アニメーションの例)）。
 
 ```sh
 target/debug/proto-compositor --backend headless --socket hz --dmabuf gpu
@@ -101,7 +102,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | --- | --- | --- | --- |
 | `init(saved)` | 読み込んだ直後。`saved` は、前のスクリプトの `unload` の戻り値 | なし | 失敗すると、fallback に切り替わる |
 | `unload()` | 読み直しの直前 | 引き継ぎたい値 | 引き継ぎなし |
-| `frame(output, target)` | コアが、その出力のフレームを描くと決めたとき | なし | fallback が描く、または直前のフレームを保つ |
+| `frame(output, target, time)` | コアが、その出力のフレームを描くと決めたとき。`time` は、このフレームが画面に出る予定の時刻（`hz.time()` と同じ時計の秒。下の「時刻」） | なし | fallback が描く、または直前のフレームを保つ |
 | `hit_test(x, y, accepts)` | ポインターの位置が変わるたび。フレームを描いた後にも | 表面の id と、その中の座標 | fallback が、変形なしの位置で判定する |
 | `locate(surface, x, y)` | ボタンを押している間の、ポインターの位置が変わるたび。触れている指が動くたび | その表面の中の座標 | 同上 |
 | `window_opened(id)` | ウィンドウができた | なし | fallback の配置で、ずらして置き、focus を与える |
@@ -120,6 +121,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `window_request(id, request)` | クライアントが、ウィンドウ管理の決めることを求めた（下） | なし | 何もしない（プロトコルの層が、内容の変わらない configure で答える） |
 
 - 毎フレーム必ず呼ばれる関数は、無い。アニメーションをするスクリプトは、`hz.request_frame()` で次のフレームを求める。
+  `frame` の中で求めると、その出力の次のフレームが描かれる。求めなければ、何かが変わるまで、描かれない。
 - `hit_test` の `accepts(surface, x, y)` は、その点が入力を受けるか（表面の input region）を答える、コアの関数である。
 - ボタンを押している間は、押した表面にイベントを送り続ける。そのときの座標を、`locate` が答える。
   指が触れている間も同じで、指が触れた表面に、その指のイベントを送り続ける。
@@ -141,13 +143,15 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | --- | --- |
 | `hz.outputs()` | 出力の一覧。id、名前、画素の大きさ、倍率、論理座標での位置と大きさ、リフレッシュレート、画像の形式、色 |
 | `hz.windows()` | ウィンドウの一覧（重なりの順）。id、title、app_id、位置、大きさ、focus、opacity、`parent`（親のウィンドウの id）、`min_width`・`min_height`・`max_width`・`max_height`（0 は制限なし）、`x11`（xwayland-satellite のウィンドウか） |
-| `hz.surfaces(window)` | ウィンドウの表面の一覧（subsurface、popup、入力メソッドの候補ウィンドウを含む。奥から手前） |
+| `hz.surfaces(window)` | ウィンドウの表面の一覧（subsurface、popup、入力メソッドの候補ウィンドウを含む。奥から手前）。持ち続けている閉じたウィンドウ（下の「閉じたウィンドウ」）の id では、最後に見せていた表面 |
 | `hz.damage(surface)` | 直前の更新で、クライアントが変わったと伝えた矩形（バッファの画素） |
 | `hz.color_info(color)` | 表面の値の意味。image description の名前、原色、伝達関数、輝度、alpha の持ち方 |
 | `hz.pointer()` | ポインターの位置 |
 | `hz.cursor()` | 描くべきカーソル。組み込みの矢印のテクスチャ、またはクライアントの表面 |
 | `hz.drag_icon()` | drag 中のアイコンの表面 |
-| `hz.background()`、`hz.time()` | 背景色、起動からの秒数 |
+| `hz.background()` | 背景色 |
+| `hz.time()` | いまの時刻。スクリプトの層が起動してからの秒数（下の「時刻」） |
+| `hz.closed_windows()` | 持ち続けている閉じたウィンドウの一覧（閉じた順）。id、title、app_id、最後の位置と大きさ、閉じた時刻（`closed_at`。`hz.time()` の秒） |
 | `hz.manages_windows()` | この session が、ウィンドウ管理をスクリプトに任せているか（`proto-compositor` では、いつも真）。読み込みの途中でも使える |
 | `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号と定数、HLG の OOTF の輝度の係数、alpha の扱い） |
 | `hz.encode_transform(working, output)` | 作業用の値を、出力の符号の値にする変換 |
@@ -190,6 +194,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.release_pointer_constraint()` | 有効な制約を、クライアントの意向に関わらず解く（下） |
 | `hz.review_pointer_constraints()` | 有効になりうる制約について、`pointer_constraint` に、もう一度尋ねさせる |
 | `hz.set_states(id, { maximized = bool, fullscreen = bool })` | ウィンドウに、最大化されているか、fullscreen かを伝える（無い項目は偽）。位置と大きさは、`hz.place` と `hz.configure` で別に決める |
+| `hz.keep_closed(id, keep)` | このウィンドウが閉じたとき、最後に見せていた内容を持ち続ける（`keep` を省くと真）。ウィンドウがあるうちに求める |
+| `hz.forget_closed(id)` | 持ち続けている閉じたウィンドウを手放す。あったかどうかを返す |
 | `hz.include(name)` | プロジェクトのモジュールを読む |
 | `hz.debug_composite(image, working)` | 検証用に、合成用のバッファを差し出す（画面の取り込みで EXR に書かれる） |
 | `hz.log(text)` | ログ |
@@ -246,6 +252,61 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 
 関数の一覧は、`prototype/gfx-lua/src/api.rs` にある。
 
+### 時刻
+
+- 時刻は、フレームの時刻を測る時計（ふだんは `CLOCK_MONOTONIC`）の秒である。`hz.time()` は、いまの時刻を返す。
+  `frame` の `time` は、そのフレームが画面に出る予定の時刻である。動くものは、`time` の時点の位置に描くと、
+  描いた時刻と画面に出る時刻のずれが、動きに出ない。
+- 画面に出る予定の時刻は、バックエンドが見積もる（`Backend::next_presentation`）。KMS では、最後の page flip の時刻から、
+  リフレッシュの周期で数えた、いまより後の最初の vblank（flip が待っている間は、その次）である。描くのが遅れて vblank に
+  間に合わなければ、実際には 1 周期遅れて出る。VRR は、考えていない。headless では、present したフレームは、すぐ出たものとして扱うので、いまの時刻である。
+  見積もれないとき（まだ 1 枚も出していない）は、いまの時刻である。
+- 時刻は、同じ時計から、コア、バックエンドの presentation の時刻、スクリプトに渡る。
+- `--clock manual`（headless だけ）では、時計は、制御口の `advance_clock` で進めるまで止まっている。
+  フレームの許可は、実時間の周期のまま来る（時計が止まっている間に描くフレームは、どれも同じ時刻のものになる）。
+  時刻から描くものを、テストで、決まった時刻の画面として確かめるためにある。
+
+### 閉じたウィンドウ
+
+閉じるアニメーションのように、閉じたウィンドウを、しばらく描き続けるための口である。
+
+- クライアントがウィンドウを壊すと、表面と、その内容も無くなる。スクリプトが、前もって `hz.keep_closed(id)` で求めておくと、
+  コアは、ウィンドウが無くなるときに、その表面の一覧と、テクスチャ（取り込んだ dmabuf なら、その import と、クライアントのバッファ）を、
+  生きている表から外して、持ち続ける。最後の位置と大きさも持つ。
+- 持ち続けているウィンドウは、`hz.closed_windows()` に並び、`hz.surfaces(id)` で、最後の表面を、ふつうのウィンドウと同じ形で返す。
+  `hz.windows()` には入らない。入力は、届かない（当たり判定で返しても、コアは使わない）。
+- スクリプトが `hz.forget_closed(id)` で手放すまで、持ち続ける。手放したテクスチャは、それを使ったフレームを GPU が終えた後で消える。
+  dmabuf のバッファは、そのときにクライアントへ返す。
+- 持つのは、多くて 32 個である。超えると、古いものから手放す。読み直しのときと、fallback が描くときには、すべて手放す。
+  `keep_closed` の求めも、読み直しで消える（新しいスクリプトが、改めて求める）。
+- 持ち続けている数と、その大きさ（バイト数）は、制御口の `state` の `script.closed_windows` に出る。
+- 持つのは、ウィンドウが壊れたときだけである。クライアントが、壊さずに内容を外したとき（null の buffer を commit したとき）は、持たない。
+
+## アニメーションの例
+
+`prototype/compositor/projects/animation/` は、組み込みのタイルの配置をそのまま使い、ウィンドウが、そこへ動いていく様子を、
+スクリプトだけで描く例である。`main.luau`（設定と、関数のつなぎ方）と `animate.luau`（アニメーションの計算）の 2 つで、
+`render`、`tile`、`affine` は、組み込みのものを使う（プロジェクトに無いモジュールは、組み込みのものになる）。
+例は、shader を持たない。組み込みの `render` が名前で指す shader も、組み込みのもの（バイナリに埋め込まれた SPIR-V）になる。
+
+- logo+shift+H、logo+shift+L での入れ替え、ウィンドウが開く、閉じる、タイルの並びが変わる、のどれでも、ウィンドウは、
+  いま描かれている位置から、新しい位置へ、easing をかけて動く。開くときは、小さく透明な状態から、閉じるときは、小さく透明な状態へ動く。
+- タイルが、位置と大きさを、すぐに決める（`hz.place`、`hz.configure`）。例は、毎フレーム、`hz.windows()` の位置と大きさを目標として、
+  ウィンドウごとに、始まりの状態、終わりの状態、始まりの時刻、長さを持ち、`frame` の `time` の状態を計算して描く
+  （`render.frame` に、描くものの一覧として渡す）。目標が変われば、その時刻の状態から、新しい目標へ動き直す。
+- 動いている間だけ、`hz.request_frame()` で次のフレームを求める。止まれば、描かない。
+- 大きさの目標は、クライアントが描いた大きさである。configure した大きさの内容が届くまでは、古い内容を、描く矩形に合わせて引き伸ばす。
+- 当たり判定は、直前のフレームで描いた変換の逆をかける（`render.hit_test` に、変換を渡す）。動いている途中でも、見えている場所に入力が届く。
+- 閉じるアニメーションのために、ウィンドウができたときに `hz.keep_closed` を求め、アニメーションが終わったら `hz.forget_closed` で手放す。
+- 長さと easing の種類は、`main.luau` の先頭の `animate.settings` にある。
+
+```sh
+target/debug/proto-compositor --backend headless --socket hz --script prototype/compositor/projects/animation
+proto-ctl --socket "$RT/hz.control" script-call animation_state   # 各ウィンドウを描いている位置、不透明度、動いているか
+```
+
+VM の中で動かす手順は、[検証用の VM](../dev/vm-environment.md#自分のプロジェクトを動かすhzk-project)にある。
+
 ## project の shader
 
 project（`--script` で渡すディレクトリ）は、スクリプトと、shader の Slang の源を持つ。源は、project の中の `shaders/` に置く。
@@ -298,7 +359,8 @@ shader を書くときの決まり:
 | --- | --- |
 | クライアントのバッファを、テクスチャにすること（`wl_shm` の upload、dmabuf の取り込み、クライアントへの release） | バッファの寿命は、プロトコルの決まりである。スクリプトが壊れても、テクスチャが残っていれば、fallback が描ける。スクリプトは、コアのテクスチャを壊せない（`gfx.destroy` がエラーを返す） |
 | 出力の画像を作り、バックエンドに渡すこと | KMS の dma-buf の経路では、画像の作り方が、ディスプレイの側の制約で決まる。失敗したフレームを画面に出さないために、画像を 2 枚持つのもコアである |
-| フレームを描く時機 | バックエンドの page flip と、session の状態に結び付いている。止まったスクリプトが、描く時機まで止めてはいけない |
+| フレームを描く時機と、フレームが画面に出る予定の時刻の見積もり | バックエンドの page flip と、session の状態に結び付いている。止まったスクリプトが、描く時機まで止めてはいけない。何をいつ動かすかは、スクリプトが決める |
+| 閉じたウィンドウの内容を持ち続けること（スクリプトが求めたときだけ） | 表面が壊れた時点で、内容を持てるのは、テクスチャを持つコアだけである。いつまで持ち、どう描くかは、スクリプトが決める |
 | フレームの完了を、クライアントへ知らせること（frame callback、presentation feedback） | スクリプトが描けない間も、クライアントは、次のフレームを描いてよい時機を知らされる必要がある |
 | configure を送ること、focus を適用すること | 何を求めるかは、スクリプトが決める。送る手順は、コアが受け持つ |
 | ウィンドウの表（位置、configure で求める大きさ、focus、重なりの順）。fallback の表（`fallback::Windows`）で、スクリプトのウィンドウ管理は、これを書き換える | スクリプトが何も言わないとき、失敗したとき、fallback の間にも、新しいウィンドウに居場所と focus があるように |

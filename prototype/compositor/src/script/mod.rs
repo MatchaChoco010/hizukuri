@@ -29,8 +29,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::wm::WindowId;
-use proto_backend::{OutputInfo, TimeSource};
 use proto_backend::{DmabufPlane, TargetDesc, TargetError, TargetId, TargetProvider, Targets};
+use proto_backend::{OutputInfo, TimeSource};
 use proto_color::{AlphaMode, CompositeSpace, ImageDescription, Primaries};
 use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, GpuConfig, Handle, ImageDesc, ImageUsage};
 use proto_gfx_lua::{HostOptions, ScriptError, ScriptHost, ShaderLoader};

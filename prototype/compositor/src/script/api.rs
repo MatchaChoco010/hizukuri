@@ -457,19 +457,22 @@ pub fn register(
     // what the window last showed stays, until the script lets go.
 
     // Keeps what a window shows once it closes (`keep` defaults to true).
-    def!("keep_closed", |lua, shared, (window, keep): (u64, Option<bool>)| {
-        let mut shared = shared.borrow_mut();
-        let id = WindowId(window);
-        if !shared.world.windows.iter().any(|w| w.window == id) {
-            return Err(arg_error(format!("unknown window {window}")));
+    def!(
+        "keep_closed",
+        |lua, shared, (window, keep): (u64, Option<bool>)| {
+            let mut shared = shared.borrow_mut();
+            let id = WindowId(window);
+            if !shared.world.windows.iter().any(|w| w.window == id) {
+                return Err(arg_error(format!("unknown window {window}")));
+            }
+            if keep.unwrap_or(true) {
+                shared.keep_closed.insert(id);
+            } else {
+                shared.keep_closed.remove(&id);
+            }
+            Ok(())
         }
-        if keep.unwrap_or(true) {
-            shared.keep_closed.insert(id);
-        } else {
-            shared.keep_closed.remove(&id);
-        }
-        Ok(())
-    });
+    );
 
     // The closed windows that are kept, oldest first: id, title, app_id,
     // x, y, width, height as they last were, and `closed_at` (`hz.time()`).

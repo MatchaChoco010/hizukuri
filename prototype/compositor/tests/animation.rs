@@ -106,7 +106,9 @@ fn drawn(session: &mut Session, id: u64) -> Value {
 
 #[track_caller]
 fn assert_near(actual: &Value, expected: f64, what: &str) {
-    let actual = actual.as_f64().unwrap_or_else(|| panic!("{what}: not a number"));
+    let actual = actual
+        .as_f64()
+        .unwrap_or_else(|| panic!("{what}: not a number"));
     assert!(
         (actual - expected).abs() < 1e-3,
         "{what}: {actual}, expected {expected}"
@@ -165,7 +167,11 @@ fn settle(session: &mut Session, clients: &mut [&mut TestClient]) -> Value {
     session.screenshot_png("settle");
     let state = session.script("animation_state", json!([]));
     assert!(
-        state.as_array().unwrap().iter().all(|w| w["moving"] == false),
+        state
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| w["moving"] == false),
         "still moving: {state:#}"
     );
     // A call into the script through the control interface asks for a
@@ -224,10 +230,22 @@ fn a_swap_moves_the_windows_over_time(device: Device) {
     assert_near(&drawn(&mut session, ida)["x"], ax, "a half way");
     assert_near(&drawn(&mut session, idb)["x"], bx, "b half way");
     // a (284.5..592.5) is on top of b (47.5..355.5).
-    assert_rgb(&image, 20, 200, BACKGROUND, "left of b, which has left the edge");
+    assert_rgb(
+        &image,
+        20,
+        200,
+        BACKGROUND,
+        "left of b, which has left the edge",
+    );
     assert_rgb(&image, 200, 200, GREEN, "b on its way left");
     assert_rgb(&image, 450, 200, RED, "a on its way right");
-    assert_rgb(&image, 610, 200, BACKGROUND, "right of a, which is not there yet");
+    assert_rgb(
+        &image,
+        610,
+        200,
+        BACKGROUND,
+        "right of a, which is not there yet",
+    );
 
     // Past the end: the new places, and nothing more to draw.
     advance(&mut session, MOVE_SECONDS);
@@ -260,7 +278,11 @@ fn a_second_swap_carries_on_from_where_the_windows_are(device: Device) {
     // b, still focused, goes back to the right.
     logo_key(&mut session, KEY_L, true);
     let image = session.screenshot_png("turned");
-    assert_near(&drawn(&mut session, ida)["x"], middle, "a right after the turn");
+    assert_near(
+        &drawn(&mut session, ida)["x"],
+        middle,
+        "a right after the turn",
+    );
     // Where a was drawn, not where either swap would have put it.
     assert_rgb(&image, 450, 200, RED, "a where it was drawn");
     assert_rgb(&image, 610, 200, BACKGROUND, "a not at the right end");

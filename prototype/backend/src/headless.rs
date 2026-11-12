@@ -322,7 +322,12 @@ impl Backend for HeadlessBackend {
 
     fn next_presentation(&self, output: OutputId) -> Option<Duration> {
         // A presented frame counts as shown at once.
-        let known = self.shared.borrow().outputs.iter().any(|o| o.info.id == output);
+        let known = self
+            .shared
+            .borrow()
+            .outputs
+            .iter()
+            .any(|o| o.info.id == output);
         known.then(|| self.clock.now())
     }
 
