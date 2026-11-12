@@ -122,6 +122,31 @@ jobs:
             echo "\`HIZUKURI_TEST_SKIP_UDMABUF=1\` was set for this run."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # tools/ci.sh runs the tests through tools/ci-watch.sh, which reports
+      # tests that got stuck and processes that crashed. For the first, gdb
+      # has to attach to processes that are not its children; for the second,
+      # the kernel has to write cores where the script looks. Both are
+      # settings of the runner's kernel, and the runner exists for this job
+      # only. The kernel stacks of stuck threads are read with sudo.
+      - name: Let the checks inspect stuck and crashed tests
+        if: matrix.part == 'test'
+        run: |
+          echo "kernel.yama.ptrace_scope was: $(cat /proc/sys/kernel/yama/ptrace_scope 2> /dev/null || echo "not there")"
+          echo "kernel.core_pattern was: $(cat /proc/sys/kernel/core_pattern)"
+          echo "the limits of the core size are: $(ulimit -S -c) (soft), $(ulimit -H -c) (hard)"
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
+          cores="$RUNNER_TEMP/cores"
+          mkdir -p "$cores"
+          if sudo sysctl -w "kernel.core_pattern=$cores/core.%p.%E"; then
+            echo "HIZUKURI_TEST_CORE_DIR=$cores" >> "$GITHUB_ENV"
+          fi
+          echo "HIZUKURI_TEST_INSPECT_AS_ROOT=1" >> "$GITHUB_ENV"
+
+      # Shows that both reports work on this runner, before one is needed.
+      - name: Check that stuck and crashed tests are reported
+        if: matrix.part == 'test'
+        run: nix develop .#ci --command tools/ci-watch.sh --self-test
+
       # The cargo registry, the git dependencies (Smithay, vulkan-rs) and the
       # build results. The two parts build different things, so each has its
       # own cache. The target directory is named after the libraries of the

@@ -296,6 +296,29 @@ jobs:
             echo "\`HIZUKURI_TEST_SKIP_UDMABUF=1\` was set for this run."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # As in the CI workflow: tools/ci-watch.sh reports tests that got stuck
+      # (gdb attaches to them) and processes that crashed (from their cores).
+      # Both need settings of the instance's kernel; the kernel stacks of
+      # stuck threads are read with sudo.
+      - name: Let the checks inspect stuck and crashed tests
+        run: |
+          echo "kernel.yama.ptrace_scope was: $(cat /proc/sys/kernel/yama/ptrace_scope 2> /dev/null || echo "not there")"
+          echo "kernel.core_pattern was: $(cat /proc/sys/kernel/core_pattern)"
+          echo "the limits of the core size are: $(ulimit -S -c) (soft), $(ulimit -H -c) (hard)"
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
+          cores="$RUNNER_TEMP/cores"
+          mkdir -p "$cores"
+          if sudo sysctl -w "kernel.core_pattern=$cores/core.%p.%E"; then
+            echo "HIZUKURI_TEST_CORE_DIR=$cores" >> "$GITHUB_ENV"
+          fi
+          echo "HIZUKURI_TEST_INSPECT_AS_ROOT=1" >> "$GITHUB_ENV"
+
+      # Shows whether both reports work on this instance. The tests run
+      # either way.
+      - name: Check that stuck and crashed tests are reported
+        continue-on-error: true
+        run: nix develop .#ci --command tools/ci-watch.sh --self-test
+
       # With the profile of the tests, so that the tests below reuse what is
       # built here.
       - name: Build the compositor

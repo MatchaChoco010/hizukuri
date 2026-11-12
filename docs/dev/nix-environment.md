@@ -94,6 +94,7 @@ HIZUKURI_TEST_DEVICES=gpu,lavapipe tools/ci.sh
 | ビルドの道具 | `pkg-config`、gcc、`cargo-nextest`、Slang のコンパイラー（`shader-slang` 2026.21。`slangc`） | 同じ |
 | ライブラリ | wayland、libxkbcommon、libinput、libseat、libudev、libdrm、libgbm、libdisplay-info 0.3、vulkan-loader | 同じ |
 | Vulkan | Mesa、validation layer、`vulkaninfo`、`vkcube` | 同じ |
+| 検査の道具 | `gdb`（`tools/ci-watch.sh` が、止まったテストと、落ちたプロセスの backtrace を取る） | 同じ |
 | テストが既定で使うアプリ | weston（`weston-terminal`）、wl-clipboard、foot | 同じ |
 | そのほかのアプリ | alacritty、`wayland-info`、wev、Xwayland、xwayland-satellite、xeyes、xterm、fcitx5 と mozc、`drm_info` | なし |
 | そのほか | python3（`tools/real-app-check.sh` が使う）、nixfmt、actionlint | なし |
