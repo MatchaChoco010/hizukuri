@@ -4,7 +4,7 @@
 # Starts the compositor as a DRM/KMS session, opens a few applications in it,
 # and cleans up when the compositor ends.
 #
-#   hzk [lavapipe|script] [--seconds N] [--mode WxH] [--no-apps]
+#   hzk [lavapipe|script|project] [--seconds N] [--mode WxH] [--no-apps]
 #       [--reset-scripts]
 #
 #   lavapipe  the built-in renderer draws on the CPU, frames are copied into
@@ -13,12 +13,16 @@
 #   script    drawing and window management by the scripts in ~/hzk-scripts,
 #             rendered on the CPU. Edit the files and press Ctrl+Alt+Shift+R
 #             to load them again.
+#   project   the script project in ~/hzk-project, sent from outside with
+#             `tools/vm/try-hizukuri --project DIR` (for example the
+#             animation example). Edit it outside, send it again, and press
+#             Ctrl+Alt+Shift+R.
 #
 #   --reset-scripts  with `script`: start again from the scripts as they were
 #                    sent (the edited ones are kept in ~/hzk-scripts.bak)
 #
 # The binaries and the scripts are sent by tools/vm/try-hizukuri, to ~/bin,
-# ~/hzk-scripts.orig and ~/hzk-draw-only.
+# ~/hzk-scripts.orig, ~/hzk-draw-only and ~/hzk-project.
 set -euo pipefail
 
 path="lavapipe"
@@ -29,12 +33,12 @@ reset_scripts=0
 scripts="$HOME/hzk-scripts"
 while (($#)); do
     case "$1" in
-        lavapipe | script) path="$1" ;;
+        lavapipe | script | project) path="$1" ;;
         --seconds) seconds="$2"; shift ;;
         --mode) mode="$2"; shift ;;
         --no-apps) apps=0 ;;
         --reset-scripts) reset_scripts=1 ;;
-        -h | --help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h | --help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "hzk: unknown argument: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
@@ -91,6 +95,14 @@ if [[ "$path" == "script" ]]; then
     args+=(--script "$scripts")
 fi
 
+if [[ "$path" == "project" ]]; then
+    if [[ ! -f "$HOME/hzk-project/main.luau" ]]; then
+        echo "hzk: $HOME/hzk-project is missing. Outside the VM, run: tools/vm/try-hizukuri --project DIR" >&2
+        exit 1
+    fi
+    args+=(--script "$HOME/hzk-project")
+fi
+
 cat <<TEXT
 proto-compositor ($path) starts now and ends by itself after $seconds s.
 
@@ -102,7 +114,18 @@ X11 applications run through xwayland-satellite: the terminals have DISPLAY
 set; try "xterm &".
 
 TEXT
-if [[ "$path" == "script" ]]; then
+if [[ "$path" == "project" ]]; then
+    cat <<TEXT
+The project in ~/hzk-project draws the screen and manages the windows.
+The keys are the project's; with the animation example they are those of
+\`hzk script\` (logo+H, logo+L, logo+shift+H, logo+shift+L, logo+Q).
+
+  Ctrl+Alt+Shift+R             load the project again (after sending it anew)
+  Ctrl+Alt+Shift+F             leave the scripts: the built-in fallback draws
+
+What failed:  ~/bin/proto-ctl --socket $control state | grep -A8 last_failures
+TEXT
+elif [[ "$path" == "script" ]]; then
     cat <<TEXT
 The scripts in $scripts draw the screen and tile the windows.
 
@@ -182,8 +205,10 @@ open_at() {
         kill -0 "$compositor" 2>/dev/null || return 0
         for id in $(window_ids); do
             if [[ "$before" != *" $id "* ]]; then
-                # With the script layer, the tiling script places the window.
-                [[ "$path" == "script" ]] || "${ctl[@]}" move-window "$id" "$x" "$y" >/dev/null 2>&1 || true
+                # Where a script manages the windows, it places them.
+                if [[ "$path" == "lavapipe" ]]; then
+                    "${ctl[@]}" move-window "$id" "$x" "$y" >/dev/null 2>&1 || true
+                fi
                 return 0
             fi
         done
@@ -192,7 +217,7 @@ open_at() {
     echo "hzk: no window appeared for: $*" >>"$log"
 }
 
-if ((apps)) && [[ "$path" == "script" ]]; then
+if ((apps)) && [[ "$path" != "lavapipe" ]]; then
     command -v foot >/dev/null && open_at 0 0 foot
     command -v weston-terminal >/dev/null && open_at 0 0 weston-terminal
     command -v alacritty >/dev/null && open_at 0 0 alacritty
