@@ -129,7 +129,7 @@ look() {
         return
     fi
     STATE=passed
-    DETAIL="$(wc -l <<< "$jobs") jobs succeeded"
+    DETAIL="every job succeeded ($(wc -l <<< "$jobs"))"
 }
 
 errors="$(mktemp)"
@@ -176,8 +176,8 @@ echo "branch: $branch"
 echo "commit: $commit"
 status=0
 for file in $workflows; do
-    printf '%-12s %-12s %s\n' "$file" "${state[$file]}" "${detail[$file]}"
-    [ -z "${url[$file]}" ] || printf '%-12s %-12s %s\n' "" "" "${url[$file]}"
+    printf '%-16s %-12s %s\n' "$file" "${state[$file]}" "${detail[$file]}"
+    [ -z "${url[$file]}" ] || printf '%-16s %-12s %s\n' "" "" "${url[$file]}"
     [ "${state[$file]}" = passed ] || status=1
 done
 if ((status == 0)); then

@@ -165,8 +165,8 @@ workflow は、4 つある。
 
 | workflow | 契機 | 内容 | runner |
 | --- | --- | --- | --- |
-| `.github/workflows/ci.yml` | PR、`develop`・`release`・`main` への push | `tools/ci.sh`（書式、lint、テスト） | GitHub の標準の runner |
-| `.github/workflows/vm.yml` | `develop`・`release` への push（文書だけの変更を除く）、毎晩、手動 | VM の中の試験（`tools/vm-check.py`） | GitHub の標準の runner |
+| `.github/workflows/ci.yml` | PR、`develop`・`release`・`main`・`release-candidate/**` への push | `tools/ci.sh`（書式、lint、テスト） | GitHub の標準の runner |
+| `.github/workflows/vm.yml` | `develop`・`release`・`release-candidate/**` への push、毎晩、手動 | VM の中の試験（`tools/vm-check.py`） | GitHub の標準の runner |
 | `.github/workflows/gpu.yml` | 毎晩、`release-candidate/**` への push、手動 | GPU の付いたインスタンスの上で、ハードウェアのドライバーを使って、`tools/ci.sh test` と、vkms での自己診断を走らせる。合否を判定する | GPU の付いた、クラウドのインスタンス |
 | `.github/workflows/gpu-probe.yml` | 手動 | GPU の付いたインスタンスの上で、ドライバー、Vulkan、KMS の状態を調べる。合否は、判定しない | GPU の付いた、クラウドのインスタンス |
 
@@ -176,16 +176,73 @@ workflow は、4 つある。
   PR では、起動しない。fork からの PR が、GPU のインスタンスを起動できないようにするためである。
   fork には、その runner が無い。`gpu.yml` のジョブは、このリポジトリでだけ走り、fork では飛ばされる。`gpu-probe.yml` のジョブは、fork では、待ったままになる。
 
+### 文書だけの変更と、候補のブランチ
+
+`ci.yml` と `vm.yml` は、文書（`docs/**`、`*.md`）だけの変更では、重い検査（`ci.yml` の `check`、`vm.yml` の `session`）を飛ばす。
+飛ばすかどうかは、workflow の契機の `paths` の条件ではなく、各 workflow の最初のジョブ `changes` が、`tools/ci-changes.sh` で決める。
+飛ばしたときは、そのことと、変わったファイルの一覧が、`changes` のジョブの要約に出る。
+
+**候補のブランチ（`release-candidate/**`）への push では、変わったファイルによらず、すべての検査を回す。**
+候補のブランチは、`develop` の先頭から切るだけで、新しい commit を持たない。`release` に取り込む前に、すべての検査が通ることを確かめる場所である。
+契機の `paths-ignore` は、ブランチごとに変えられない。また、新しい commit を持たないブランチの push を、GitHub が、どう判定するかは、
+[文書](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons)に定められていない。
+そのため、契機では絞らず、ジョブの側で判定する。
+
+| event と ref | `ci.yml` | `vm.yml` |
+| --- | --- | --- |
+| `pull_request` | PR の 3 点の差分（`base...HEAD`）が文書だけなら、`check` を飛ばす | 起動しない |
+| `develop`・`release` への push | push の 2 点の差分（`before..HEAD`）が文書だけなら、`check` を飛ばす | 同じ判定で、`session` を飛ばす |
+| `main` への push | `develop` と同じ | 起動しない |
+| `release-candidate/**` への push | 必ず、すべてを回す | 必ず、すべてを回す |
+| ブランチを作った push、差分が取れない push（force push で、前の commit が無い） | すべてを回す | すべてを回す |
+| `schedule`、`workflow_dispatch` | 契機に無い | すべてを回す |
+
+- `release` への push は、候補を取り込んだ merge commit である。差分は、前回のリリースから今回までの全体になる。
+  そこが文書だけのときに飛ばしても、同じ内容の tree を、候補のブランチで、すべての検査が通している。
+- `ci.yml` の `result` は、`release-candidate/**` では、`check` が飛ばされていれば、失敗する。
+
+### 候補のブランチの検査の結果を確かめる
+
+`tools/ci-status.sh` は、ある branch のある commit について、検査の workflow の結果を一覧にする。
+`gh`（ログインしたもの）で、GitHub の API を読むだけで、workflow を起動しない。
+
+```sh
+tools/ci-status.sh release-candidate/<名前>          # いまの結果
+tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終わるまで待ってから
+```
+
+- 見るのは、その branch への push で、その commit について起動した run のうち、いちばん新しいものである。
+  workflow は、表示の名前ではなく、ファイルの名前で引く。
+- **すべての workflow が `passed` のときだけ、0 で終わる。** そうでなければ 1、引数の誤りや API の失敗では 2 で終わる。
+
+| 状態 | 意味 |
+| --- | --- |
+| `passed` | run が成功し、その run（いちばん新しい試行）のジョブが、すべて成功した |
+| `failed` | run が、成功以外で終わった（失敗、取り消し、時間切れなど） |
+| `incomplete` | run は成功したが、飛ばされたか、成功しなかったジョブがある（fork で飛ばされた `gpu.yml` のジョブ、文書だけの変更で飛ばした `check` など） |
+| `running` | run が、終わっていない |
+| `not-started` | その branch への push で、その commit について起動した run が無い |
+| `missing` | リポジトリに、その workflow が無い |
+
+| 指定 | 既定 | 内容 |
+| --- | --- | --- |
+| `--commit SHA` | GitHub の上の、branch の先頭 | 見る commit |
+| `--workflows "A B"` | `ci.yml vm.yml gpu.yml` | 見る workflow のファイルの名前 |
+| `--wait` | なし | 終わっていない run があれば、終わるまで待つ |
+| `--interval 秒` | `30` | 待つあいだに、見直す間隔 |
+| `--start-timeout 秒` | `300` | 待つあいだに、run の無い workflow（`not-started`、`missing`）を、起動するまで待つ時間 |
+| `--timeout 秒` | `14400` | 待つ時間の上限。超えたら、その時点の結果を出す |
+
 ### `ci.yml`
 
 検査の本体は、`ci` の devShell の中で走らせる `tools/ci.sh` である。devShell の中で走らせる検査と、CI の検査は、同じものである。
 
 | ジョブ | 内容 |
 | --- | --- |
-| `changes` | 変わったファイルを調べる。文書（`docs/**`、`*.md`）だけの変更なら、`check` を飛ばす。差分が取れないときは、すべてを走らせる |
+| `changes` | `tools/ci-changes.sh` で、`check` を飛ばすかどうかを決める（上の節） |
 | `check (lint)` | Nix を入れ、`nix flake check`（devShell と、VM のゲストの定義の評価）と、`nix develop .#ci --command tools/ci.sh lint` を走らせる |
 | `check (test)` | Nix を入れ、`nix develop .#ci --command tools/ci.sh test` を走らせる。デバイスは、lavapipe である |
-| `result` | 全体の合否をまとめる。`check` の 2 つが成功か、飛ばされていれば、通る。**必須の検査にするのは、これ 1 つである** |
+| `result` | 全体の合否をまとめる。`check` の 2 つが成功か、飛ばされていれば、通る。`release-candidate/**` では、成功だけが通る。**必須の検査にするのは、これ 1 つである** |
 
 - `check` の 2 つは、並んで走る。かかる時間は、長いほうの 1 つ分である。
 - runner は、`ubuntu-24.04` である。GPU は無い。Mesa も、テストが起動するアプリも、runner のものではなく、devShell のものを使う。
@@ -197,7 +254,9 @@ workflow は、4 つある。
 
 ### `vm.yml`
 
-ジョブは、`session` の 1 つである。PR では、走らない（かかる時間が長いためである）。
+ジョブは、`changes` と `session` の 2 つである。PR では、走らない（かかる時間が長いためである）。
+`changes` は、`ci.yml` と同じく、`tools/ci-changes.sh` で、`session` を飛ばすかどうかを決める（上の節）。
+`session` は、次のことを行う。
 
 1. runner の `/dev/kvm` を、使えるようにする。
 2. Nix を入れ、`ci` の devShell と、ゲストと QEMU を用意する（`tools/vm/vm build`）。
