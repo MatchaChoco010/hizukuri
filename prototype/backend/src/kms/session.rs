@@ -317,9 +317,13 @@ fn raw_input(event: InputEvent<LibinputInputBackend>) -> Option<RawInput> {
             pressed: event.state() == KeyState::Pressed,
             time_us: event.time().micros(),
         }),
+        // Both: the accelerated motion moves the pointer, the
+        // unaccelerated one is what relative-pointer clients (games) use.
         InputEvent::PointerMotion { event } => Some(RawInput::PointerMotion {
             dx: event.delta_x(),
             dy: event.delta_y(),
+            dx_unaccel: event.delta_x_unaccel(),
+            dy_unaccel: event.delta_y_unaccel(),
             time_us: event.time().micros(),
         }),
         InputEvent::PointerMotionAbsolute { event } => Some(RawInput::PointerMotionAbsolute {

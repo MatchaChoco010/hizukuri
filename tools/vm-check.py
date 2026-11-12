@@ -883,9 +883,7 @@ class Run:
             copy_pid = spawn(f"{env} wl-copy --foreground 'copied in the guest'",
                              "protocols-wl-copy.log")
             # Wait for wl-copy to own the selection by asking the
-            # compositor. Trying with wl-paste instead would take the
-            # keyboard focus from wl-copy while it needs it, and its request
-            # would be dropped for good.
+            # compositor, not by trying with wl-paste.
             wait_for("wl-copy to own the selection",
                      lambda: self.state().get("selection"), seconds=10)
             pasted = guest(f"{env} timeout 5 wl-paste --no-newline 2>/dev/null || true")
@@ -1102,6 +1100,89 @@ class Run:
 
     # -- the sequence ---------------------------------------------------------
 
+    def check_input_protocols(self):
+        """What a game and a clipboard manager ask of the session:
+        relative motion from libinput and a pointer lock, the primary
+        selection and data control with wl-clipboard."""
+        self.start("--exit-after", "120")
+        notes = []
+
+        # 1. A game: it asks for relative motion and a lock. The Rust layout
+        # focuses the new window; the lock starts once the pointer is on it.
+        before = {w["id"] for w in self.state()["windows"]}
+        spawn(f"{GUEST_BIN}/proto-test-client --socket {self.runtime}/{SOCKET} "
+              f"--title hzk-game --size 300x200 --duration 100 "
+              f"--relative-pointer --lock-pointer", "input-game.log")
+        window = wait_for("the game's window", lambda: next(
+            (w for w in self.state()["windows"]
+             if w["id"] not in before and w["mapped"] and w["title"] == "hzk-game"), None),
+            seconds=10)
+        self.ctl("move-window", str(window["id"]), "100", "100")
+        game_events = lambda: [json.loads(line) for line in
+                               self.fetch(f"{GUEST_DIR}/input-game.log", "input-game.log")
+                               .splitlines() if line.startswith("{")]
+        self.move_pointer(250, 200)
+        wait_for("the lock", lambda: any(e["event"] == "pointer_locked" for e in game_events()),
+                 seconds=8)
+        held_at = self.state()["pointer"]["position"]
+        # Relative motion from the virtual mouse, through the kernel and
+        # libinput. While locked, the pointer stays and no wl_pointer.motion
+        # is sent; the motion arrives as relative motion, before and after
+        # libinput's acceleration.
+        for _ in range(3):
+            vm("rel", "40", "0")
+            time.sleep(0.1)
+
+        def moved():
+            events = game_events()
+            locked = next(i for i, e in enumerate(events) if e["event"] == "pointer_locked")
+            relative = [e for e in events[locked:] if e["event"] == "relative_motion"]
+            return (relative, events[locked:]) if len(relative) >= 3 else None
+
+        relative, after = wait_for("relative motion at the game", moved, seconds=8)
+        if any(e["event"] == "pointer_motion" for e in after):
+            raise Failed("wl_pointer.motion arrived while the pointer was locked")
+        if self.state()["pointer"]["position"] != held_at:
+            raise Failed(f"the locked pointer moved from {held_at} to "
+                         f"{self.state()['pointer']['position']}")
+        unaccelerated = sum(e["dx_unaccel"] for e in relative)
+        accelerated = sum(e["dx"] for e in relative)
+        notes.append(f"libinput to a locked game: {len(relative)} relative motions, "
+                     f"dx {accelerated:.1f} after acceleration, {unaccelerated:.1f} before, "
+                     f"no wl_pointer.motion, the pointer held at {held_at}")
+        self.ctl("close-window", str(window["id"]))
+        stop_spawned()
+
+        # 2. wl-clipboard: with data control it reads and replaces the
+        # selections without a window of its own.
+        if guest("command -v wl-copy && command -v wl-paste || true").count("\n") >= 2:
+            env = f"env -u DISPLAY XDG_RUNTIME_DIR={self.runtime} WAYLAND_DISPLAY={SOCKET}"
+            windows = len(self.state()["windows"])
+            for primary, text in ((False, "clipboard via data control"),
+                                  (True, "primary via data control")):
+                flag = "--primary " if primary else ""
+                key = "primary_selection" if primary else "selection"
+                copy_pid = spawn(f"{env} wl-copy {flag}--foreground {shlex.quote(text)}",
+                                 "input-wl-copy.log")
+                wait_for(f"wl-copy to own the {key}", lambda: self.state().get(key), seconds=10)
+                if len(self.state()["windows"]) != windows:
+                    raise Failed("wl-copy opened a window: it did not use data control")
+                pasted = guest(f"{env} timeout 5 wl-paste {flag}--no-newline 2>/dev/null || true")
+                stop_spawned(copy_pid)
+                if pasted != text:
+                    raise Failed(f"wl-paste {flag}read {pasted!r}, expected {text!r}")
+                # The owner is gone, and so is the selection.
+                wait_for(f"the {key} to go with wl-copy",
+                         lambda: self.state().get(key) is None, seconds=10)
+            notes.append("wl-copy and wl-paste read and replace the clipboard and the primary "
+                         "selection without a window")
+        else:
+            notes.append("wl-clipboard is not installed")
+
+        self.ctl("quit")
+        wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
+        return "; ".join(notes)
+
     def run(self):
         self.stop()
         if self.item("start", self.check_start):
@@ -1133,6 +1214,8 @@ class Run:
         self.item("launcher", self.check_launcher)
         self.stop()
         self.item("protocols", self.check_protocols)
+        self.stop()
+        self.item("input-protocols", self.check_input_protocols)
         self.stop()
         self.item("script-layer", self.check_script_layer)
         self.stop()

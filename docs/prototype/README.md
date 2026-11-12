@@ -217,7 +217,7 @@ target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LA
 | `screenshot` | `path`、`composite_path`（省略可）、`output`（省略可） | いまの状態を描いて、ファイルに書く。`path` は符号化後の画像（PNG）、`composite_path` は合成用の浮動小数点バッファ（OpenEXR）。`output` は出力の名前 |
 | `key` | `keycode`、`pressed` | キーを押す、離す |
 | `pointer_motion` | `x`、`y` | ポインターを絶対位置へ動かす |
-| `pointer_motion_relative` | `dx`、`dy` | ポインターを相対的に動かす。出力の範囲に収める |
+| `pointer_motion_relative` | `dx`、`dy`、`dx_unaccel`、`dy_unaccel`（後の 2 つは省略可） | ポインターを相対的に動かす。出力の範囲に収める。`dx`、`dy` は加速を掛けた後の値、`*_unaccel` は掛ける前の値（省略すると、`dx`、`dy` と同じ）。どちらも、相対的な動きとしてクライアントに届く |
 | `pointer_button` | `button`、`pressed` | ボタンを押す、離す |
 | `pointer_axis` | `horizontal`、`vertical`、`v120_horizontal`、`v120_vertical`（どれも省略可） | スクロール。`v120_*` を付けると、ホイールとして送る |
 | `move_window` | `window`、`x`、`y` | ウィンドウの論理的な位置を変える |
@@ -237,6 +237,7 @@ proto-ctl --socket PATH state
 proto-ctl --socket PATH screenshot out.png --composite out.exr
 proto-ctl --socket PATH key 30 press
 proto-ctl --socket PATH pointer-motion 100 80
+proto-ctl --socket PATH pointer-motion-relative 10 0 --dx-unaccel 6 --dy-unaccel 0
 proto-ctl --socket PATH pointer-button 272 press
 proto-ctl --socket PATH pointer-axis --vertical 15 --v120-vertical 120
 proto-ctl --socket PATH move-window 3 40 30
@@ -257,7 +258,9 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
   `surfaces`（役割、offset、大きさ、バッファの大きさ・種類・transform、`generation`、image description、alpha mode、`decode_pipeline`）
 - `focus`: focus のあるウィンドウ、キーボードの focus のある表面、ポインターのある表面
 - `pointer`: 位置、クライアントが求めたカーソル
-- `selection`: クリップボードの持ち主が出している MIME type
+- `selection`、`primary_selection`: クリップボードと primary selection の持ち主が出している MIME type
+- `pointer_constraints`: クライアントが求めているポインターの制約。表面、ウィンドウ、種類（`lock`、`confine`）、
+  有効かどうか（`active`）、cursor position hint
 - `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
 - `window_manager`: `script`（`--wm script`）、`fallback`（`--no-renderer`）、`rust-floating`（`--wm rust`）
 - `script`（`--renderer script` のとき）: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計
@@ -283,15 +286,18 @@ luminance:x(80/80) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srg
 ```sh
 proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
                   [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888]
-                  [--duration 秒]
+                  [--duration 秒] [--relative-pointer] [--lock-pointer | --confine-pointer]
 ```
 
 - `--socket` は必須である。`WAYLAND_DISPLAY` を見ない。
+- `--relative-pointer` は、相対的な動きを求める。`--lock-pointer`、`--confine-pointer` は、ウィンドウに、
+  persistent の lock か confine を求める（ゲームのように）。
 - `--color` は、バッファに書く値そのものである。`wl_shm` は premultiplied なので、半透明の色は掛け算した値を渡す
   （50% の赤は `80000080`）。
 - テストからは、ライブラリ（`proto_test_client::TestClient`）として使う。自分ではブロックせず、`pump` を呼んだときだけ進む。
   ライブラリは、バッファの模様、dmabuf での送付、buffer transform、viewport、fractional-scale、presentation の feedback、
-  popup、selection、drag and drop、ウィンドウ管理への要求も話す。
+  popup、selection、drag and drop、ウィンドウ管理への要求、相対的な動き、ポインターの制約、primary selection、
+  data control も話す。ウィンドウを持たないクライアント（クリップボードの履歴の道具の役）にもなれる。
 
 ## 検査
 
@@ -314,7 +320,7 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 | 名前 | 要るプログラム | 内容 | 条件 |
 | --- | --- | --- | --- |
 | `weston-terminal` | `weston-terminal` | toolkit のメニューが popup として開き、外を押すと閉じる | |
-| `wl-clipboard` | `wl-copy`、`wl-paste` | selection の受け渡し | |
+| `wl-clipboard` | `wl-copy`、`wl-paste` | selection の受け渡し。wl-clipboard は data control を使い、ウィンドウを出さない | |
 | `foot` | `foot` | fractional-scale と viewport に従う端末 | |
 | `alacritty` | `alacritty` | 同じことを、GL で描く端末で | 既定に入っていない |
 | `script-tiles` | `weston-terminal` | スクリプトのウィンドウ管理が、端末をタイルに並べる | |
@@ -366,8 +372,8 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - KMS での複数の出力、direct scanout、overlay plane、cursor plane、VRR、ティアリング。
 - damage を使った部分的な描き直し（毎回、出力の全体を描く）。
 - Rust のレンダラーでの、dmabuf の Vulkan への取り込み（スクリプトの描画には、ある）。
-- IME（text-input、input-method）、xwayland-satellite のための対応、pointer-constraints、relative-pointer、
-  primary selection、data-control、タッチ、ジェスチャー。
+- IME（text-input、input-method）、xwayland-satellite のための対応、タッチ、ジェスチャー。
+- data control を、信頼するクライアントにだけ見せること（`wp_security_context_v1`）。
 - Rust のレンダラーは、GPU の完了を CPU で待つ（表面の内容を取り込むたびと、フレームを描くたびに 1 回ずつ）。
   KMS でも、待ってから flip する（`IN_FENCE_FD` を使わない）。完了の通知が遅い環境では、
   更新のあるクライアントの数に比例して、フレームが遅くなる。

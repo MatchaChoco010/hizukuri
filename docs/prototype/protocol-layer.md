@@ -26,6 +26,8 @@
 | `CursorChanged` | ポインターの下のクライアントが求めるカーソルが変わった |
 | `WindowRequest { window, request }` | クライアントが、ウィンドウ管理の決めることを求めた（下） |
 | `PopupPlacement { window, popup }` | popup ができた、または置き直しを求められた（下） |
+| `PointerConstraintsChanged` | ポインターの制約（lock、confine）が求められた、取り下げられた、領域が commit された（下） |
+| `PointerLockWithdrawn { surface, hint }` | 有効だった lock を、クライアントが取り下げた。`hint` は cursor position hint（下） |
 
 ## 公開しているプロトコル
 
@@ -44,10 +46,14 @@
 | `wp_presentation` | 2 | |
 | `wp_fractional_scale_manager_v1` | 1 | |
 | `wp_cursor_shape_manager_v1` | 2 | |
+| `zwp_relative_pointer_manager_v1` | 1 | |
+| `zwp_pointer_constraints_v1` | 1 | lock と confine。いつ有効にするかは、中核が決める（下） |
+| `zwp_primary_selection_device_manager_v1` | 1 | |
+| `ext_data_control_manager_v1` | 1 | primary selection も扱う。どのクライアントにも見せる（下） |
+| `zwlr_data_control_manager_v1` | 2 | 同じ |
 | `zwp_linux_dmabuf_v1` | 6 または 3 | `--dmabuf` で公開したときだけ（下） |
 
-未実装: `wp_color_management_v1`、`zwp_relative_pointer_manager_v1`、`zwp_pointer_constraints_v1`、
-primary selection、data-control、text-input と input-method、タッチとジェスチャー。
+未実装: `wp_color_management_v1`、text-input と input-method、タッチとジェスチャー。
 
 ## バッファ
 
@@ -145,14 +151,48 @@ transform だけを変えて、バッファを付け直さない commit は、�
 - selection（コピーと貼り付け）: キーボードの focus を持つクライアントだけが、offer を受け取る。
 - **selection を設定できるのは、要求を処理する時点で、キーボードの focus を持つクライアントだけである**
   （Smithay の決まり。serial では判定しない）。入力のイベントを受けてから、要求が届くまでの間に focus を失った
-  クライアントの要求は、捨てられる。小さなウィンドウを出して focus を得る種類の道具（wl-clipboard）は、
-  同時に別のウィンドウが開くと、コピーに失敗することがある。
+  クライアントの要求は、捨てられる。小さなウィンドウを出して focus を得る種類の道具は、
+  同時に別のウィンドウが開くと、コピーに失敗することがある。wl-clipboard は、data control（下）があれば、
+  ウィンドウを出さずに、それを使う。
 - いまの selection の MIME type は、`selection_mime_types` で読める（focus に関わらずに調べるため）。
 - drag and drop: 相手の表面は、中核の当たり判定の結果で決まる（`pointer_motion` に渡した表面が、offer の相手になる）。
   drag のアイコンの表面は、`drag_icon_surfaces` で取り出せる。スクリプトの描画は、アイコンを描く。
   Rust のレンダラーは、描かない。
 - `wl_data_source.target`（相手が受け入れた MIME type を、source に伝えるイベント）は、送られない
   （固定した版の Smithay が、送らない）。
+
+### primary selection と data control
+
+- primary selection（選んだ文字列を、中ボタンで貼り付ける）は、selection と同じ決まりで動く。
+  キーボードの focus を持つクライアントだけが、offer を受け取り、設定できる。
+  いまの MIME type は、`primary_selection_mime_types` で読める。
+- data control（`ext_data_control_manager_v1`、`zwlr_data_control_manager_v1`）は、focus と関係なく、
+  selection と primary selection を読み、置き換える口である。クリップボードの履歴の道具が使う
+  （wl-clipboard は、これがあると、自分のウィンドウを開かずに読み書きする）。
+- **data control は、どのクライアントにも見せている。** どのクライアントも、focus なしに、クリップボードを読み、
+  置き換えられる。sandbox の中のクライアントを見分ける仕組み（`wp_security_context_v1`）は、未実装である。
+- selection の持ち主が source を消したとき、または切断したとき、Smithay は selection を消すが、
+  `SelectionHandler::new_selection` を呼ばない。`selection_mime_types` と `primary_selection_mime_types` は、
+  そのため、覚えておいた値を返す前に、selection がまだあるかを Smithay に確かめる
+  （どの source も持てない MIME type で読み出しを求めると、送らずに、「selection が無い」か「その型は無い」で失敗する）。
+
+## 相対的な動きと、ポインターの制約
+
+- 相対的な動き（`zwp_relative_pointer_v1.relative_motion`）は、`pointer_relative_motion` で送る。
+  加速を掛けた後の値と、掛ける前の値を、両方受け取る。送り先は、ポインターのある表面のクライアントである。
+  出力の端で、ポインターが止まっても、動きは、そのまま送る。
+- ポインターの制約（`zwp_pointer_constraints_v1` の lock と confine）は、Smithay が、表面ごとに、プロトコルの状態を持つ
+  （表面に 1 つだけ、double-buffered の領域と cursor position hint、`locked` を 1 度だけ送ること、
+  oneshot は 1 度解けたら消えること）。この層は、それを id で見せる。
+
+| 口 | 内容 |
+| --- | --- |
+| `pointer_constraints`、`pointer_constraint` | 求められている制約。表面、ウィンドウ、種類（lock、confine）、有効かどうか、cursor position hint |
+| `pointer_constraint_region_contains` | 表面の中の点が、制約の領域（指定が無ければ表面の全体）と input region の、両方の中にあるか |
+| `set_pointer_constraint_active` | 有効にする、解く。有効にできるのは、ポインターが、その表面にあるときだけである（プロトコルが、クライアントに約束していること） |
+
+- **いつ有効にし、いつ解くかは、この層は決めない。** 例外は 1 つで、ポインターが表面を離れると、Smithay が解く。
+- 中核が、それを決める（[スクリプトの層](script-layer.md#ポインターの制約)）。
 
 ## 入力
 

@@ -24,6 +24,7 @@
 //! laid out flat or placed in 3D.
 
 mod buffer;
+mod constraints;
 mod handlers;
 mod state;
 mod surface;
@@ -149,7 +150,7 @@ pub enum SocketConfig {
 }
 
 /// Something that happened on the protocol side.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WlEvent {
     /// A client created a toplevel. It has no contents yet.
     WindowCreated(WindowId),
@@ -180,6 +181,17 @@ pub enum WlEvent {
     /// ([`WlServer::place_popup_within`], [`WlServer::set_popup_geometry`]):
     /// that is when the client is told.
     PopupPlacement { window: WindowId, popup: SurfaceId },
+    /// A pointer constraint was asked for, withdrawn, or had its region
+    /// committed. Look at [`WlServer::pointer_constraints`] again.
+    PointerConstraintsChanged,
+    /// The client withdrew a lock that was in effect (it destroyed the
+    /// `zwp_locked_pointer_v1`). The pointer is free again; `hint` is the
+    /// cursor position hint it had, in surface-local coordinates, for
+    /// putting the pointer where the client last drew its cursor.
+    PointerLockWithdrawn {
+        surface: SurfaceId,
+        hint: Option<(f64, f64)>,
+    },
 }
 
 /// What a client asked for with a request of `xdg_toplevel`.
@@ -552,6 +564,47 @@ pub struct OutputConfig {
     pub scale: f64,
     /// Position of the top left corner in the global logical space.
     pub position: (i32, i32),
+}
+
+/// What a pointer constraint (`zwp_pointer_constraints_v1`) asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerConstraintKind {
+    /// `lock_pointer`: the pointer stays where it is. Only relative
+    /// motion reaches the client.
+    Lock,
+    /// `confine_pointer`: the pointer stays inside a region of the surface.
+    Confine,
+}
+
+impl PointerConstraintKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Lock => "lock",
+            Self::Confine => "confine",
+        }
+    }
+}
+
+/// A pointer constraint a client asked for on one of its surfaces.
+///
+/// The protocol leaves it to the compositor when a constraint is turned
+/// on and off. This layer keeps the protocol's side of it (one constraint
+/// per surface, the double-buffered region and hint, `locked` and
+/// `unlocked` sent once each way, oneshot constraints gone after their
+/// first deactivation) and turns a constraint on only while the pointer is
+/// on its surface. Everything else is the caller's to decide.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointerConstraint {
+    pub surface: SurfaceId,
+    /// The window the surface belongs to, if any.
+    pub window: Option<WindowId>,
+    pub kind: PointerConstraintKind,
+    /// Whether the constraint is in effect (`locked` or `confined` was
+    /// sent, and no `unlocked` or `unconfined` since).
+    pub active: bool,
+    /// For a lock: where the client draws its own cursor, in surface-local
+    /// coordinates (`set_cursor_position_hint`), once committed.
+    pub cursor_hint: Option<(f64, f64)>,
 }
 
 /// The cursor a client asked for.
@@ -936,7 +989,58 @@ impl WlServer {
     /// The MIME types of the selection (the clipboard), when a client owns
     /// it. For inspection: reading it this way does not involve the focus.
     pub fn selection_mime_types(&self) -> Option<Vec<String>> {
-        self.state.selection.clone()
+        self.state.selection_mime_types(false)
+    }
+
+    /// The MIME types of the primary selection (what middle click pastes),
+    /// when a client owns it.
+    pub fn primary_selection_mime_types(&self) -> Option<Vec<String>> {
+        self.state.selection_mime_types(true)
+    }
+
+    // -- relative motion and pointer constraints --------------------------------
+
+    /// Reports a relative motion of the pointer to the client the pointer
+    /// is on (`zwp_relative_pointer_v1.relative_motion`). `delta` is after
+    /// pointer acceleration, `unaccelerated` before it, both in logical
+    /// pixels. It is not clipped at the edges of the outputs, and it is
+    /// sent while the pointer is locked, when `wl_pointer.motion` is not.
+    pub fn pointer_relative_motion(
+        &mut self,
+        delta: (f64, f64),
+        unaccelerated: (f64, f64),
+        time_us: u64,
+    ) {
+        self.state
+            .pointer_relative_motion(delta, unaccelerated, time_us);
+    }
+
+    /// The pointer constraints clients asked for, in effect or not.
+    pub fn pointer_constraints(&self) -> Vec<PointerConstraint> {
+        self.state.pointer_constraints()
+    }
+
+    /// The constraint on a surface, if there is one.
+    pub fn pointer_constraint(&self, surface: SurfaceId) -> Option<PointerConstraint> {
+        self.state.pointer_constraint(surface)
+    }
+
+    /// Whether a surface-local point is where the constraint on the surface
+    /// applies: inside the region the client gave (the whole surface
+    /// without one), and inside the surface's input region. A lock may
+    /// only start there, and a confinement keeps the pointer there.
+    pub fn pointer_constraint_region_contains(&self, surface: SurfaceId, x: f64, y: f64) -> bool {
+        self.state.pointer_constraint_region_contains(surface, x, y)
+    }
+
+    /// Turns the constraint on a surface on or off, and tells the client.
+    ///
+    /// Turning one on only works while the pointer is on the surface (the
+    /// protocol promises that to the client); `false` otherwise, and when
+    /// there is no constraint. Turning a oneshot constraint off ends it.
+    /// The pointer leaving the surface turns its constraint off by itself.
+    pub fn set_pointer_constraint_active(&mut self, surface: SurfaceId, active: bool) -> bool {
+        self.state.set_pointer_constraint_active(surface, active)
     }
 
     /// The cursor requested by the client under the pointer.

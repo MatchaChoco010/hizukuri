@@ -429,17 +429,26 @@ fn relative_motion_moves_the_pointer_and_stays_on_the_output() {
     f.clients[client].clear_events();
 
     f.control(Request::PointerMotion { x: 10.0, y: 10.0 });
-    let moved = f.control(Request::PointerMotionRelative { dx: 5.0, dy: 2.5 });
+    let moved = f.control(Request::PointerMotionRelative {
+        dx: 5.0,
+        dy: 2.5,
+        dx_unaccel: None,
+        dy_unaccel: None,
+    });
     assert_eq!(moved["position"], serde_json::json!([15.0, 12.5]));
     // Far beyond the 1280x720 output: clamped to its last pixel.
     let clamped = f.control(Request::PointerMotionRelative {
         dx: 100000.0,
         dy: 100000.0,
+        dx_unaccel: None,
+        dy_unaccel: None,
     });
     assert_eq!(clamped["position"], serde_json::json!([1279.0, 719.0]));
     let clamped = f.control(Request::PointerMotionRelative {
         dx: -100000.0,
         dy: -100000.0,
+        dx_unaccel: None,
+        dy_unaccel: None,
     });
     assert_eq!(clamped["position"], serde_json::json!([0.0, 0.0]));
 

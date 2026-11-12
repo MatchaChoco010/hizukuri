@@ -180,6 +180,12 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for St
     }
 }
 
+/// Writes a small text into the write end of a transfer. Small texts fit
+/// into the pipe; the reader may not be reading yet.
+pub(crate) fn write_text(fd: OwnedFd, text: &str) {
+    let _ = File::from(fd).write_all(text.as_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // Which surface
 // ---------------------------------------------------------------------------
@@ -696,6 +702,29 @@ impl State {
             pipe: File::from(read),
             bytes: Vec::new(),
             finish,
+        });
+        Ok(())
+    }
+
+    /// Starts reading one transfer: `ask` sends the request that hands the
+    /// write end to the other side. What arrives becomes a
+    /// [`ClientEvent::Received`].
+    pub(crate) fn read_into_event(
+        &mut self,
+        mime_type: &str,
+        ask: impl FnOnce(std::os::fd::BorrowedFd<'_>),
+    ) -> Result<(), ClientError> {
+        let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+            .map_err(|e| ClientError::Io(e.into()))?;
+        rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK)
+            .map_err(|e| ClientError::Io(e.into()))?;
+        ask(write.as_fd());
+        drop(write);
+        self.data.reads.push(Read_ {
+            mime_type: mime_type.to_string(),
+            pipe: File::from(read),
+            bytes: Vec::new(),
+            finish: None,
         });
         Ok(())
     }

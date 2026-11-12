@@ -24,7 +24,7 @@ use proto_layout::{ConfigureHint, OutputId, Placement, Point, Rect, Size, Window
 use super::{Mode, ScriptRuntime, Shared};
 use crate::fallback;
 use crate::scene::Hit;
-use crate::wm::{Modifiers, WindowManager, WmRequest};
+use crate::wm::{ConstraintView, Modifiers, WindowManager, WmRequest};
 
 /// Something that happened, waiting to be told to the script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,8 @@ pub(crate) struct WmState {
     events: Vec<Event>,
     /// The revision of the table the core last applied.
     applied: u64,
+    /// The pointer lock or confinement in effect.
+    constraint: Option<ConstraintView>,
 }
 
 impl WmState {
@@ -55,6 +57,17 @@ impl WmState {
             ..Self::default()
         }
     }
+}
+
+/// A pointer constraint as the script sees it: `{ surface, window, kind,
+/// active }`, `kind` being `"lock"` or `"confine"`.
+fn constraint_table(lua: &Lua, constraint: &ConstraintView) -> mlua::Result<Table> {
+    let t = lua.create_table()?;
+    t.set("surface", constraint.surface.0)?;
+    t.set("window", constraint.window.map(|w| w.0))?;
+    t.set("kind", constraint.kind.name())?;
+    t.set("active", constraint.active)?;
+    Ok(t)
 }
 
 fn wm_error(message: impl Into<String>) -> mlua::Error {
@@ -171,6 +184,39 @@ pub(crate) fn register(
         table.request_close(WindowId(id));
         Ok(())
     });
+
+    // Ends the pointer lock or confinement in effect, whatever the client
+    // wants. The way out for the person at the keyboard; the core does not
+    // offer the constraint again until the focus moves or the pointer
+    // leaves the surface and comes back.
+    def!("release_pointer_constraint", |table, (): ()| {
+        table.request(WmRequest::ReleasePointerConstraint);
+        Ok(())
+    });
+
+    // Asks `pointer_constraint` again about every constraint that could be
+    // in effect now: for a script that changed its mind.
+    def!("review_pointer_constraints", |table, (): ()| {
+        table.request(WmRequest::ReviewPointerConstraints);
+        Ok(())
+    });
+
+    // The pointer lock or confinement in effect, or nil.
+    {
+        let state = Rc::clone(shared);
+        hz.set(
+            "pointer_constraint",
+            lua.create_function(move |lua, (): ()| {
+                let shared = state.borrow();
+                match &shared.wm.constraint {
+                    Some(constraint) if shared.wm.active => {
+                        Ok(mlua::Value::Table(constraint_table(lua, constraint)?))
+                    }
+                    _ => Ok(mlua::Value::Nil),
+                }
+            })?,
+        )?;
+    }
     Ok(())
 }
 
@@ -263,6 +309,31 @@ impl WindowManager for ScriptWm {
                 .call::<_, Option<bool>>("pointer_button", (button, pressed, window, surface)),
             Some(Ok(Some(true)))
         )
+    }
+
+    fn pointer_constraint(&mut self, constraint: &ConstraintView) -> Option<bool> {
+        let table = constraint_table(self.runtime.host.lua(), constraint).ok()?;
+        // Not defined, failed, or nil: the core's default.
+        match self
+            .runtime
+            .call::<_, Option<bool>>("pointer_constraint", table)
+        {
+            Some(Ok(answer)) => answer,
+            _ => None,
+        }
+    }
+
+    fn pointer_constraint_changed(&mut self, active: Option<&ConstraintView>) {
+        self.runtime.shared.borrow_mut().wm.constraint = active.copied();
+        let table = match active {
+            Some(constraint) => match constraint_table(self.runtime.host.lua(), constraint) {
+                Ok(table) => Some(table),
+                Err(_) => return,
+            },
+            None => None,
+        };
+        self.runtime
+            .call::<_, ()>("pointer_constraint_changed", table);
     }
 
     fn dispatch(&mut self) -> bool {

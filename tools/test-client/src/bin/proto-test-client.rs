@@ -3,6 +3,7 @@
 //! ```text
 //! proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
 //!                   [--color RRGGBBAA] [--layout argb8888] [--duration SECONDS]
+//!                   [--relative-pointer] [--lock-pointer | --confine-pointer]
 //! ```
 //!
 //! Shows a solid window and prints every event it receives as one JSON
@@ -16,7 +17,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use proto_test_client::{ClientOptions, PixelLayout, TestClient};
+use proto_test_client::{ClientOptions, ConstraintRequest, PixelLayout, TestClient};
 
 fn main() -> ExitCode {
     match run() {
@@ -32,6 +33,11 @@ fn run() -> Result<(), String> {
     let mut options = ClientOptions::default();
     let mut socket: Option<PathBuf> = None;
     let mut duration: Option<Duration> = None;
+    // What a game asks for: relative motion, and the pointer held in place
+    // (or inside the window). Asked for once the window and the pointer
+    // exist.
+    let mut relative = false;
+    let mut constraint: Option<ConstraintRequest> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -68,11 +74,14 @@ fn run() -> Result<(), String> {
                     .map_err(|_| format!("invalid duration {text:?}"))?;
                 duration = Some(Duration::from_secs_f64(seconds));
             }
+            "--relative-pointer" => relative = true,
+            "--lock-pointer" => constraint = Some(ConstraintRequest::Lock),
+            "--confine-pointer" => constraint = Some(ConstraintRequest::Confine),
             "--help" | "-h" => {
                 println!(
                     "usage: proto-test-client --socket PATH [--title T] [--app-id ID] \
                      [--size WxH] [--color RRGGBBAA] [--layout argb8888|xrgb8888|abgr8888|xbgr8888] \
-                     [--duration SECONDS]"
+                     [--duration SECONDS] [--relative-pointer] [--lock-pointer | --confine-pointer]"
                 );
                 return Ok(());
             }
@@ -90,6 +99,16 @@ fn run() -> Result<(), String> {
         client
             .pump(Some(Duration::from_millis(100)))
             .map_err(|e| e.to_string())?;
+        // Not there yet until the globals, the pointer and the window are.
+        if relative && client.request_relative_pointer().is_ok() {
+            relative = false;
+        }
+        if let Some(request) = constraint
+            && client.is_drawn()
+            && client.constrain_pointer(request, None, true).is_ok()
+        {
+            constraint = None;
+        }
         let events = client.events();
         if printed < events.len() {
             let mut out = stdout.lock();

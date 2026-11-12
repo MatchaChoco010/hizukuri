@@ -1,6 +1,6 @@
 # ゲーム向け: tearing-control、async page flip、VRR、ポインターとキーボードの制御
 
-- 確認した版: wayland-protocols 1.50（`3eab2dccf4bf`）、Smithay（`8fd9fe0c74e5`）、Linux kernel 7.4-rc2、Mesa 26.2.6
+- 確認した版: wayland-protocols 1.50（`3eab2dccf4bf`）、Smithay（`8fd9fe0c74e5`）、Linux kernel 7.4-rc2、Mesa 26.2.6、libinput 1.31.3
 
 | プロトコル | interface の版 | Smithay（`8fd9fe0c`） |
 | --- | --- | --- |
@@ -142,6 +142,10 @@ kernel の実装（`drivers/gpu/drm/drm_atomic_uapi.c` の `drm_atomic_set_prope
   compositor は、固定を解くときに、ポインターをその位置へ移してよい。
   移した場合、relative-pointer のイベントは出さない。
 - `set_region`: 領域を変える。double-buffered である。
+  confine の間に、新しい領域の外にポインターが出たら、compositor は、ポインターを領域の中へ移す（`wl_pointer.motion` を送り、
+  relative motion は送らない）か、confine を解いてよい。
+- `zwp_confined_pointer_v1` の interface の説明は、「compositor が confine を解いたら、object は defunct」と書く。
+  `unconfined` の event の説明は、寿命が `persistent` なら、また有効になりうると書く。寿命の説明と合うのは、後者である。
 - **いつ有効にするか、いつ解くかは、compositor が決める。**
   プロトコルは、要求がいつか有効になることを保証していない。
 
@@ -154,11 +158,14 @@ kernel の実装（`drivers/gpu/drm/drm_atomic_uapi.c` の `drm_atomic_set_prope
 | --- | --- |
 | 時刻 | マイクロ秒。64 bit を、上位と下位に分けて送る |
 | `dx`、`dy` | 相対的な移動量。ポインターの加速を適用した後の値 |
-| `dx_unaccel`、`dy_unaccel` | 加速を適用する前の値 |
+| `dx_unaccel`、`dy_unaccel` | 加速と、正規化などの変換を適用する前の値。デバイスの生の値そのものという意味ではない |
 
 - 画面の端でポインターが止まっても、相対的な移動量は、止まらずに届く。
 - `wl_pointer.motion` と対になっているわけではない。lock している間は、`relative_motion` だけが届く。
 - ゲームは、ふつう、加速なしの値を使う。libinput が、両方の値を出す。
+  libinput 1.31 の説明（`libinput.h`）では、加速ありの値は「標準化したマウスの画素の動き」、
+  加速なしの値は「デバイスの生の座標」で、デバイスの解像度に依存する。
+- `relative_motion` は、`wl_pointer` と focus を共有する。ポインターのある表面のクライアントにだけ届く。
 
 ### プロトコルが、compositor に任せていること
 
@@ -213,3 +220,5 @@ kernel の実装（`drivers/gpu/drm/drm_atomic_uapi.c` の `drm_atomic_set_prope
 - Smithay（`8fd9fe0c74e5`）: `src/wayland/pointer_constraints.rs`、`src/wayland/relative_pointer.rs`、
   `src/wayland/keyboard_shortcuts_inhibit/`
   https://github.com/Smithay/smithay
+- libinput 1.31.3: `include/libinput.h`（`libinput_event_pointer_get_dx`、`libinput_event_pointer_get_dx_unaccelerated`）
+  https://gitlab.freedesktop.org/libinput/libinput

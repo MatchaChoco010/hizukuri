@@ -29,8 +29,13 @@ use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState};
 use smithay::wayland::fractional_scale::{FractionalScaleManagerState, with_fractional_scale};
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::{PresentationFeedbackCachedState, PresentationState, Refresh};
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::ext_data_control::DataControlState as ExtDataControlState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::selection::wlr_data_control::DataControlState as WlrDataControlState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface, XdgShellState,
@@ -88,6 +93,9 @@ pub(crate) struct State {
     pub shm_state: ShmState,
     pub seat_state: SeatState<State>,
     pub data_device_state: DataDeviceState,
+    pub primary_selection_state: PrimarySelectionState,
+    pub ext_data_control_state: ExtDataControlState,
+    pub wlr_data_control_state: WlrDataControlState,
     pub dmabuf_state: DmabufState,
     /// Present when `zwp_linux_dmabuf_v1` is offered.
     pub _dmabuf_global: Option<DmabufGlobal>,
@@ -101,6 +109,8 @@ pub(crate) struct State {
     pub _presentation_state: PresentationState,
     pub _fractional_scale_state: FractionalScaleManagerState,
     pub _cursor_shape_state: CursorShapeManagerState,
+    pub _relative_pointer_state: RelativePointerManagerState,
+    pub _pointer_constraints_state: PointerConstraintsState,
 
     pub events: Vec<WlEvent>,
     pub windows: Vec<Window>,
@@ -122,6 +132,13 @@ pub(crate) struct State {
     /// The MIME types of the current selection (clipboard), if a client
     /// owns it.
     pub selection: Option<Vec<String>>,
+    /// The same for the primary selection.
+    pub primary_selection: Option<Vec<String>>,
+    /// Surfaces that have, or had, a pointer constraint. Smithay keeps the
+    /// constraints in the surfaces' data; this is where to look.
+    pub constrained_surfaces: Vec<WlSurface>,
+    /// The surface the caller last said the pointer is on.
+    pub pointer_target: Option<WlSurface>,
     /// Popups that committed for the first time and were not told their
     /// place yet. They are told at the next flush.
     pub popups_awaiting_configure: Vec<PopupSurface>,
@@ -153,6 +170,16 @@ impl State {
         let presentation_state = PresentationState::new::<Self>(dh, CLOCK_MONOTONIC);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(dh);
         let cursor_shape_state = CursorShapeManagerState::new::<Self>(dh);
+        let relative_pointer_state = RelativePointerManagerState::new::<Self>(dh);
+        let pointer_constraints_state = PointerConstraintsState::new::<Self>(dh);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
+        // Clipboard managers read and replace the selections through these
+        // without having the keyboard focus. Every client may bind them:
+        // there is nothing yet to tell a trusted client from another.
+        let ext_data_control_state =
+            ExtDataControlState::new::<Self, _>(dh, Some(&primary_selection_state), |_| true);
+        let wlr_data_control_state =
+            WlrDataControlState::new::<Self, _>(dh, Some(&primary_selection_state), |_| true);
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_global = match &config.dmabuf {
             Some(dmabuf) => Some(create_dmabuf_global(dh, &mut dmabuf_state, dmabuf)?),
@@ -173,6 +200,9 @@ impl State {
             shm_state,
             seat_state,
             data_device_state,
+            primary_selection_state,
+            ext_data_control_state,
+            wlr_data_control_state,
             dmabuf_state,
             _dmabuf_global: dmabuf_global,
             dmabuf_formats: config
@@ -188,6 +218,8 @@ impl State {
             _presentation_state: presentation_state,
             _fractional_scale_state: fractional_scale_state,
             _cursor_shape_state: cursor_shape_state,
+            _relative_pointer_state: relative_pointer_state,
+            _pointer_constraints_state: pointer_constraints_state,
             events: Vec::new(),
             windows: Vec::new(),
             popups: Vec::new(),
@@ -197,6 +229,9 @@ impl State {
             popup_bounds: HashMap::new(),
             drag_icon: None,
             selection: None,
+            primary_selection: None,
+            constrained_surfaces: Vec::new(),
+            pointer_target: None,
             popups_awaiting_configure: Vec::new(),
             repositions: Vec::new(),
             dragging: false,
@@ -886,6 +921,7 @@ impl State {
             },
             None => (None, Point::from((0.0, 0.0))),
         };
+        self.pointer_target = focus.as_ref().map(|(surface, _)| surface.clone());
         pointer.motion(
             self,
             focus,

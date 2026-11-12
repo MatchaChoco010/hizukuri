@@ -79,7 +79,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。
 - タイル（`tile.luau`）: `--wm script` のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
-  logo+Q で閉じる。キーの割り当ても、スクリプトの中にある。
+  logo+Q で閉じる。logo+Escape で、ポインターの lock と confine を解く。キーの割り当ても、スクリプトの中にある。
 
 ## コアがスクリプトに見せる口
 
@@ -102,6 +102,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `outputs_changed()` | 出力が増えた、減った、変わった | なし | 何もしない |
 | `key(keycode, pressed, mods)` | キーが押された、離された | `true` なら、クライアントに渡さない | クライアントに渡す |
 | `pointer_button(button, pressed, window, surface)` | ポインターのボタン | `true` なら、コアの「クリックで focus」をしない | クリックで focus |
+| `pointer_constraint(c)` | ポインターの制約が、有効になりうるとき（下の「ポインターの制約」） | `true` なら有効にする、`false` なら有効にしない（有効なら解く） | 制約のウィンドウが focus を持つ間、有効 |
+| `pointer_constraint_changed(c)` | 有効な制約が変わった。`c` は、有効になった制約か、`nil`（解けた） | なし | 何もしない |
 
 - 毎フレーム必ず呼ばれる関数は、無い。アニメーションをするスクリプトは、`hz.request_frame()` で次のフレームを求める。
 - `hit_test` の `accepts(surface, x, y)` は、その点が入力を受けるか（表面の input region）を答える、コアの関数である。
@@ -150,6 +152,9 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.focus(id)` | キーボードの focus |
 | `hz.raise(id)`、`hz.restack(ids)` | 重なりの順 |
 | `hz.close(id)` | 閉じるように求める |
+| `hz.pointer_constraint()` | 有効な制約（`{ surface, window, kind, active }`。`kind` は `"lock"` か `"confine"`）、または `nil` |
+| `hz.release_pointer_constraint()` | 有効な制約を、クライアントの意向に関わらず解く（下） |
+| `hz.review_pointer_constraints()` | 有効になりうる制約について、`pointer_constraint` に、もう一度尋ねさせる |
 | `hz.include(name)` | プロジェクトのモジュールを読む |
 | `hz.debug_composite(image, working)` | 検証用に、合成用のバッファを差し出す（画面の取り込みで EXR に書かれる） |
 | `hz.log(text)` | ログ |
@@ -197,10 +202,38 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | 色の変換の数値（`proto-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
 | popup の位置（positioner の計算）、popup の grab、drag and drop | `proto-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く |
+| ポインターの制約の働き（lock の間、ポインターを動かさないこと、confine の間、領域の中に留めること）と、プロトコルの状態 | プロトコルの約束（有効になる時点で、ポインターが表面と領域の中にあること、lock の間は `wl_pointer.motion` を送らないこと）は、スクリプトに任せられない。認めるかどうかと、抜け出し方は、スクリプトが決める |
 
 - カーソルを描くのは、スクリプトである。どのカーソルを描くか（組み込みの矢印、クライアントの表面、隠す）は、
   コアが決めて、テクスチャとして渡す。
 - 描くものが無ければ、フレームを描かない。
+
+## ポインターの制約
+
+ゲームや 3D のツールは、ポインターを、ウィンドウの中に閉じ込める（confine）か、その場に固定して（lock）、
+相対的な動き（`zwp_relative_pointer_v1`）だけを受け取る。プロトコルは、いつ有効にするか、
+どう抜け出すかを、compositor に任せている。ここでは、それをスクリプトが決める。
+
+- コアは、ポインターが制約の表面の上にあり、領域の中にあるとき、`pointer_constraint(c)` を呼ぶ。
+  `c` は `{ surface, window, kind, active }` である。尋ねるのは、前に答えてから、何かが変わったときだけである
+  （制約が新しく求められた、ポインターが表面か領域を離れて、戻ってきた、キーボードの focus が動いた）。
+  ポインターが動くたびには、尋ねない。
+- 戻り値が `true` なら有効にし、`false` なら有効にしない（有効なら解く）。定義しない、`nil` を返す、失敗したときは、
+  コアの既定に従う: 制約のウィンドウがキーボードの focus を持つ間、有効にする。
+- **抜け出し方**: `hz.release_pointer_constraint()` は、有効な制約を、すぐに解く。解いた制約は、何かが変わるまで
+  （focus が動く、ポインターが表面を離れて戻る）、尋ねられない。組み込みのタイルは、logo+Escape に割り当てている。
+- 考えを変えたスクリプトは、`hz.review_pointer_constraints()` で、もう一度尋ねさせる。
+- ポインターが表面を離れると（ウィンドウが閉じた、別のウィンドウがポインターの下に来た）、制約は解ける。
+  有効な制約がある間は、ポインターは、その表面に留まり、上に何が描かれていても、ほかの表面に移らない。
+- lock の間、ポインターは動かない。動きは、相対的な動きとしてだけ、クライアントに届く。
+  confine の間、領域の外へ向かう動きは、届く軸だけ動く（縁に沿って滑る）。どちらの軸も外に出るなら、動かない。
+  領域の判定は、`locate` を通すので、変形して描いたウィンドウでも、そのウィンドウの座標で閉じ込める。
+- lock が解けたとき、クライアントが cursor position hint を出していれば、ポインターを、そこへ移す。
+  移すのは、ウィンドウの論理的な位置で計算した点を、`locate` が、同じ点だと答えたときだけである。
+  変形して描いたウィンドウでは、移さない（表面の座標から画面の座標へ戻す口が、無いため）。
+- カーソルは、lock の間も、`hz.cursor()` のとおりに描く（ふつう、クライアントは、カーソルを隠す）。
+  見せ方を変えるスクリプトは、`hz.pointer_constraint()` を見る。
+- ウィンドウ管理の関数なので、`--wm script` のときだけ使える。`--wm rust`、`--no-renderer`、fallback の間と、プロジェクトが `pointer_constraint` を定義しないときは、コアの既定に従う。
 
 ## dmabuf の取り込み
 

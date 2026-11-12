@@ -8,10 +8,13 @@
 --   L / H          focus the window to the right / left
 --   Shift+L / H    swap the focused window with its right / left neighbour
 --   Q              ask the focused window to close
+--   Escape         free the pointer from a lock or confinement (a game that
+--                  holds the pointer); it is not held again until the
+--                  focus moves or the pointer comes back onto the window
 
 local T = {}
 
-local KEY_Q, KEY_H, KEY_L = 16, 35, 38
+local KEY_ESC, KEY_Q, KEY_H, KEY_L = 1, 16, 35, 38
 
 -- Window ids, left to right.
 local order = {}
@@ -153,11 +156,13 @@ function T.key(keycode, pressed, mods)
     if not mods.logo then
         return false
     end
-    if keycode ~= KEY_H and keycode ~= KEY_L and keycode ~= KEY_Q then
+    if keycode ~= KEY_H and keycode ~= KEY_L and keycode ~= KEY_Q and keycode ~= KEY_ESC then
         return false
     end
     if pressed then
-        if keycode == KEY_L then
+        if keycode == KEY_ESC then
+            hz.release_pointer_constraint()
+        elseif keycode == KEY_L then
             step(1, mods.shift)
         elseif keycode == KEY_H then
             step(-1, mods.shift)
