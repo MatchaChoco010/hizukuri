@@ -78,7 +78,9 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。入力メソッドの候補ウィンドウも、同じである。
 - タイル（`tile.luau`）: `hz.manages_windows()` が真のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
-  logo+Q で閉じる。logo+Escape で、ポインターの lock と confine を解く。キーの割り当ても、スクリプトの中にある。
+  logo+Q で閉じる。logo+Escape で、ポインターの lock と confine を解く。タッチパッドを 3 本指で右か左へ swipe すると
+  （60 論理画素以上）、focus を右か左のタイルへ移す（浮いているウィンドウと fullscreen のウィンドウは飛ばし、ダイアログからは、その親のタイルから数える）。3 本指の swipe はスクリプトが取り、アプリには届かない。
+  ほかのジェスチャーは、アプリに届く。キーとジェスチャーの割り当ても、スクリプトの中にある。
   - 親のあるウィンドウ（ダイアログ）と、大きさが固定のウィンドウ（最小と最大が同じ）は、並べずに、クライアントの決めた大きさで、
     親（無ければ出力）の中央に、タイルの上に浮かせる。
   - fullscreen を求めたウィンドウは、出力の全体を覆い、いちばん上に置く。求めが取り消されると、タイルに戻す。
@@ -99,7 +101,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `unload()` | 読み直しの直前 | 引き継ぎたい値 | 引き継ぎなし |
 | `frame(output, target)` | コアが、その出力のフレームを描くと決めたとき | なし | fallback が描く、または直前のフレームを保つ |
 | `hit_test(x, y, accepts)` | ポインターの位置が変わるたび。フレームを描いた後にも | 表面の id と、その中の座標 | fallback が、変形なしの位置で判定する |
-| `locate(surface, x, y)` | ボタンを押している間の、ポインターの位置が変わるたび | その表面の中の座標 | 同上 |
+| `locate(surface, x, y)` | ボタンを押している間の、ポインターの位置が変わるたび。触れている指が動くたび | その表面の中の座標 | 同上 |
 | `window_opened(id)` | ウィンドウができた | なし | fallback の配置で、ずらして置き、focus を与える |
 | `window_changed(id)` | ウィンドウの大きさが変わった | なし | 何もしない |
 | `window_closed(id)` | ウィンドウが無くなった | なし | コアが、いちばん上のウィンドウに focus を移す |
@@ -107,6 +109,10 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `outputs_changed()` | 出力が増えた、減った、変わった | なし | 何もしない |
 | `key(keycode, pressed, mods)` | キーが押された、離された | `true` なら、クライアントに渡さない | クライアントに渡す |
 | `pointer_button(button, pressed, window, surface)` | ポインターのボタン | `true` なら、コアの「クリックで focus」をしない | クリックで focus |
+| `touch_down(slot, x, y, window, surface)` | 指が画面に触れた（`x`、`y` は全体の論理座標） | `true` なら、コアの「触れたウィンドウに focus」をしない。タッチは、どちらでもアプリに届く | 触れたウィンドウに focus |
+| `gesture_begin(g)` | タッチパッドのジェスチャーが始まった。`g` は `{ kind, fingers, window, surface }`（`kind` は `"swipe"`、`"pinch"`、`"hold"`。`window` と `surface` はポインターの下のもの） | `true` なら、スクリプトが取る（下の「タッチとジェスチャー」） | ポインターの下のアプリに届く |
+| `gesture_update(g)` | スクリプトが取ったジェスチャーが動いた。`g` は `{ kind, dx, dy, scale, rotation }` | なし | 何もしない |
+| `gesture_end(g)` | スクリプトが取ったジェスチャーが終わった。`g` は `{ kind, cancelled }` | なし | 何もしない |
 | `pointer_constraint(c)` | ポインターの制約が、有効になりうるとき（下の「ポインターの制約」） | `true` なら有効にする、`false` なら有効にしない（有効なら解く） | 制約のウィンドウが focus を持つ間、有効 |
 | `pointer_constraint_changed(c)` | 有効な制約が変わった。`c` は、有効になった制約か、`nil`（解けた） | なし | 何もしない |
 | `window_request(id, request)` | クライアントが、ウィンドウ管理の決めることを求めた（下） | なし | 何もしない（プロトコルの層が、内容の変わらない configure で答える） |
@@ -114,6 +120,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - 毎フレーム必ず呼ばれる関数は、無い。アニメーションをするスクリプトは、`hz.request_frame()` で次のフレームを求める。
 - `hit_test` の `accepts(surface, x, y)` は、その点が入力を受けるか（表面の input region）を答える、コアの関数である。
 - ボタンを押している間は、押した表面にイベントを送り続ける。そのときの座標を、`locate` が答える。
+  指が触れている間も同じで、指が触れた表面に、その指のイベントを送り続ける。
 - `window_request` の `request` は、`kind` と、それに付く値の表である。
 
 | `kind` | 元の要求 | 付く値 |
@@ -121,7 +128,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `maximize`、`unmaximize` | `xdg_toplevel.set_maximized`、`unset_maximized` | |
 | `fullscreen`、`unfullscreen` | `set_fullscreen`、`unset_fullscreen` | `output`（クライアントが出力を指定したとき、その id） |
 | `minimize` | `set_minimized` | |
-| `move` | `move`（ボタンが押されている間だけ） | |
+| `move` | `move`（ボタンが押されている間か、そのタッチの指が触れている間だけ） | |
 | `resize` | `resize`（同じ） | `top`、`bottom`、`left`、`right` |
 | `show_menu` | `show_window_menu` | `x`、`y`（ウィンドウの geometry からの位置） |
 | `activate` | `xdg_activation_v1.activate` | `from_input`（token が、focus を持つクライアントの入力から作られたか） |
@@ -246,7 +253,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | configure を送ること、focus を適用すること | 何を求めるかは、スクリプトが決める。送る手順は、コアが受け持つ |
 | ウィンドウの表（位置、configure で求める大きさ、focus、重なりの順）。fallback の表（`fallback::Windows`）で、スクリプトのウィンドウ管理は、これを書き換える | スクリプトが何も言わないとき、失敗したとき、fallback の間にも、新しいウィンドウに居場所と focus があるように |
 | fallback（`prototype/compositor/src/fallback/`）: スクリプトが使えないときの、最小の描画（`draw.rs`）と当たり判定（`hit_test.rs`）。誰も決めないときの、ウィンドウの表の決まり（`windows.rs`、`placement.rs`） | スクリプトが壊れても、画面を出し、入力を届け続けるため。色の変換も、変形も、装飾もしない。コンポジターの機能ではない（下の「故障したときの動き」） |
-| 入力の配り方と、緊急用のキー | ボタンを押している間の行き先、スクリプトが使ったキーの「離す」を渡さないこと。緊急用のキーは、スクリプトの `key` より先に、コアが見る |
+| 入力の配り方と、緊急用のキー | ボタンを押している間の行き先、指が触れている間の行き先（指ごと）、スクリプトが使ったキーの「離す」を渡さないこと、スクリプトが取ったジェスチャーの残りを渡さないこと。緊急用のキーは、スクリプトの `key` より先に、コアが見る |
+| タッチスクリーンと出力の対応づけ | KMS のバックエンドが、タッチスクリーンの座標を、使っている 1 つの出力に当てる（[KMS のバックエンド](kms-backend.md)） |
 | 色の変換の数値（`proto-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
 | popup の位置（positioner の計算）、popup の grab、drag and drop | `proto-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く |
@@ -283,6 +291,25 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - カーソルは、lock の間も、`hz.cursor()` のとおりに描く（ふつう、クライアントは、カーソルを隠す）。
   見せ方を変えるスクリプトは、`hz.pointer_constraint()` を見る。
 - ウィンドウ管理の関数なので、`hz.manages_windows()` が真のときだけ呼ばれる。`--no-drawing`、fallback の間と、プロジェクトが `pointer_constraint` を定義しないときは、コアの既定に従う。
+
+## タッチとジェスチャー
+
+タッチパッドのジェスチャーは、アプリ（ブラウザーの pinch でのズームなど）も、コンポジターの作者（3 本指の swipe で
+ワークスペースを切り替える、など）も、使いたいものである。どちらのものにするかを、スクリプトが決める。
+
+- コアは、ジェスチャーが始まるとき、`gesture_begin(g)` を呼ぶ。`true` を返すと、そのジェスチャーは、終わりまでスクリプトのものになる。
+  動きは `gesture_update`、終わりは `gesture_end` で届き、どのアプリにも、begin を含めて、何も届かない。
+- `true` 以外（`false`、`nil`、定義しない、失敗した）なら、そのジェスチャーは、終わりまで、ポインターの下のアプリのものになる。
+  スクリプトには、その後の動きも終わりも届かない。
+- 途中で持ち主を替えることは、しない。アプリが、begin の無いジェスチャーや、end の無いジェスチャーを見ないようにするためである。
+  そのため、決められるのは、始まりに分かること（種類と、指の数と、ポインターの下のウィンドウ）だけである。動く向きでは決められない。
+- スクリプトが、取ったジェスチャーの途中で外されても（fallback に切り替わっても）、そのジェスチャーの残りは、アプリに渡さない。
+- 指が触れたときは、`touch_down(slot, x, y, window, surface)` を呼ぶ。`true` を返すと、コアは focus を動かさない。
+  返さなければ、触れたウィンドウに focus を与える（クリックと同じ）。タッチそのものは、どちらでも、触れた表面に届く。
+  スクリプトが、タッチを自分で使う（取り消して、アプリに渡さない）口は、無い。
+- `touch_down` とジェスチャーの関数は、ウィンドウ管理の関数なので、`hz.manages_windows()` が真のときだけ呼ばれる。`--no-drawing` と fallback の間は、コアの既定に従う。
+- 状態の `touch` に、touch を出しているか（`available`）、いま触れている指（`points`。slot と表面）、
+  進行中のジェスチャー（`gesture`。種類と、持ち主 `window_manager` か `client`）が出る。
 
 ## dmabuf の取り込み
 

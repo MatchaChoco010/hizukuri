@@ -3,11 +3,12 @@
 //! libinput events are first reduced to [`RawInput`], a plain value with
 //! just what is needed. [`InputTranslator`] then does the part that needs
 //! thought: the emergency key combinations, which are handled here before
-//! anything else sees the key, and mapping absolute positions onto the
-//! output. Both steps are free of devices; the second holds all the logic
-//! and is unit tested.
+//! anything else sees the key, mapping absolute positions and touches onto
+//! the output, keeping touches and gestures whole across a pause of the
+//! session, and telling whether a touchscreen is there. Both steps are free
+//! of devices; the second holds all the logic and is unit tested.
 
-use crate::{AxisSource, InputEvent};
+use crate::{AxisSource, GestureKind, InputEvent};
 
 // evdev key codes (linux/input-event-codes.h).
 const KEY_BACKSPACE: u32 = 14;
@@ -41,7 +42,11 @@ pub enum RawInput {
     },
     /// Absolute position, each axis normalized to `0.0..1.0` of the
     /// device's range.
-    PointerMotionAbsolute { x: f64, y: f64, time_us: u64 },
+    PointerMotionAbsolute {
+        x: f64,
+        y: f64,
+        time_us: u64,
+    },
     PointerButton {
         /// evdev button code.
         button: u32,
@@ -53,6 +58,57 @@ pub enum RawInput {
         horizontal: f64,
         vertical: f64,
         v120: Option<(i32, i32)>,
+        time_us: u64,
+    },
+    /// An input device appeared or went away; `touch` when it is a
+    /// touchscreen.
+    DeviceAdded {
+        touch: bool,
+    },
+    DeviceRemoved {
+        touch: bool,
+    },
+    /// A touch, at a position normalized to `0.0..1.0` of the device's
+    /// range on each axis (after the device's calibration). `slot` is the
+    /// seat-wide slot.
+    TouchDown {
+        slot: u32,
+        x: f64,
+        y: f64,
+        time_us: u64,
+    },
+    TouchMotion {
+        slot: u32,
+        x: f64,
+        y: f64,
+        time_us: u64,
+    },
+    TouchUp {
+        slot: u32,
+        time_us: u64,
+    },
+    TouchFrame {
+        time_us: u64,
+    },
+    TouchCancel {
+        time_us: u64,
+    },
+    GestureBegin {
+        kind: GestureKind,
+        fingers: u32,
+        time_us: u64,
+    },
+    GestureUpdate {
+        kind: GestureKind,
+        dx: f64,
+        dy: f64,
+        scale: f64,
+        rotation: f64,
+        time_us: u64,
+    },
+    GestureEnd {
+        kind: GestureKind,
+        cancelled: bool,
         time_us: u64,
     },
 }
@@ -98,6 +154,15 @@ pub struct InputTranslator {
     /// not yet.
     held_keys: Vec<u32>,
     held_buttons: Vec<u32>,
+    /// Touches that went down and did not come up yet.
+    held_touches: Vec<u32>,
+    /// A touch event was passed on since the last frame.
+    touch_frame_owed: bool,
+    /// The gesture that began and did not end yet.
+    gesture: Option<GestureKind>,
+    /// How many touchscreens there are. Kept across pauses: libinput
+    /// reports its devices as removed and added again by itself.
+    touch_devices: u32,
 }
 
 impl InputTranslator {
@@ -121,7 +186,10 @@ impl InputTranslator {
     /// Forgets which keys are held. Call when the session resumes: keys
     /// released while it was paused never reported their release.
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            touch_devices: self.touch_devices,
+            ..Self::default()
+        };
     }
 
     /// Releases everything that is held, as events to pass on, and forgets
@@ -130,10 +198,21 @@ impl InputTranslator {
     /// nobody is listening, and without this the compositor and its
     /// clients would see Ctrl and Alt held forever after coming back.
     /// Releases that do arrive later are dropped.
+    ///
+    /// Touches in progress are cancelled, and a gesture in progress ends as
+    /// cancelled, for the same reason.
     pub fn release_all(&mut self, time_us: u64) -> Vec<InputEvent> {
         let keys = std::mem::take(&mut self.held_keys);
         let buttons = std::mem::take(&mut self.held_buttons);
+        let touching = !self.held_touches.is_empty();
+        let gesture = self.gesture.take();
         self.reset();
+        let touch = touching.then_some(InputEvent::TouchCancel { time_us });
+        let gesture = gesture.map(|kind| InputEvent::GestureEnd {
+            kind,
+            cancelled: true,
+            time_us,
+        });
         keys.into_iter()
             .map(|keycode| InputEvent::Key {
                 keycode,
@@ -145,7 +224,18 @@ impl InputTranslator {
                 pressed: false,
                 time_us,
             }))
+            .chain(touch)
+            .chain(gesture)
             .collect()
+    }
+
+    /// Where a normalized position of an absolute device lands on the
+    /// output.
+    fn on_output(area: OutputArea, x: f64, y: f64) -> (f64, f64) {
+        (
+            area.position.0 as f64 + x.clamp(0.0, 1.0) * area.logical_size.0 as f64,
+            area.position.1 as f64 + y.clamp(0.0, 1.0) * area.logical_size.1 as f64,
+        )
     }
 
     /// Keeps the list of held keys or buttons. Returns whether the event
@@ -218,11 +308,10 @@ impl InputTranslator {
                 time_us,
             }),
             RawInput::PointerMotionAbsolute { x, y, time_us } => match output {
-                Some(area) => Translated::Event(InputEvent::PointerMotionAbsolute {
-                    x: area.position.0 as f64 + x.clamp(0.0, 1.0) * area.logical_size.0 as f64,
-                    y: area.position.1 as f64 + y.clamp(0.0, 1.0) * area.logical_size.1 as f64,
-                    time_us,
-                }),
+                Some(area) => {
+                    let (x, y) = Self::on_output(area, x, y);
+                    Translated::Event(InputEvent::PointerMotionAbsolute { x, y, time_us })
+                }
                 None => Translated::Nothing,
             },
             RawInput::PointerButton {
@@ -252,6 +341,141 @@ impl InputTranslator {
                 v120,
                 time_us,
             }),
+            RawInput::DeviceAdded { touch } => {
+                if !touch {
+                    return Translated::Nothing;
+                }
+                self.touch_devices += 1;
+                if self.touch_devices == 1 {
+                    Translated::Event(InputEvent::TouchAvailable(true))
+                } else {
+                    Translated::Nothing
+                }
+            }
+            RawInput::DeviceRemoved { touch } => {
+                if !touch || self.touch_devices == 0 {
+                    return Translated::Nothing;
+                }
+                self.touch_devices -= 1;
+                if self.touch_devices == 0 {
+                    Translated::Event(InputEvent::TouchAvailable(false))
+                } else {
+                    Translated::Nothing
+                }
+            }
+            // A touchscreen covers the output, as an absolute pointer does.
+            // With several outputs it would have to be decided which one a
+            // touchscreen belongs to; this backend drives only one.
+            RawInput::TouchDown {
+                slot,
+                x,
+                y,
+                time_us,
+            } => {
+                let Some(area) = output else {
+                    return Translated::Nothing;
+                };
+                if !self.held_touches.contains(&slot) {
+                    self.held_touches.push(slot);
+                }
+                self.touch_frame_owed = true;
+                let (x, y) = Self::on_output(area, x, y);
+                Translated::Event(InputEvent::TouchDown {
+                    slot,
+                    x,
+                    y,
+                    time_us,
+                })
+            }
+            RawInput::TouchMotion {
+                slot,
+                x,
+                y,
+                time_us,
+            } => match output {
+                // Only for a touch whose down was passed on.
+                Some(area) if self.held_touches.contains(&slot) => {
+                    self.touch_frame_owed = true;
+                    let (x, y) = Self::on_output(area, x, y);
+                    Translated::Event(InputEvent::TouchMotion {
+                        slot,
+                        x,
+                        y,
+                        time_us,
+                    })
+                }
+                _ => Translated::Nothing,
+            },
+            RawInput::TouchUp { slot, time_us } => {
+                if !Self::track(&mut self.held_touches, slot, false) {
+                    return Translated::Nothing;
+                }
+                self.touch_frame_owed = true;
+                Translated::Event(InputEvent::TouchUp { slot, time_us })
+            }
+            RawInput::TouchFrame { time_us } => {
+                if std::mem::take(&mut self.touch_frame_owed) {
+                    Translated::Event(InputEvent::TouchFrame { time_us })
+                } else {
+                    Translated::Nothing
+                }
+            }
+            RawInput::TouchCancel { time_us } => {
+                self.touch_frame_owed = false;
+                if self.held_touches.is_empty() {
+                    return Translated::Nothing;
+                }
+                self.held_touches.clear();
+                Translated::Event(InputEvent::TouchCancel { time_us })
+            }
+            RawInput::GestureBegin {
+                kind,
+                fingers,
+                time_us,
+            } => {
+                self.gesture = Some(kind);
+                Translated::Event(InputEvent::GestureBegin {
+                    kind,
+                    fingers,
+                    time_us,
+                })
+            }
+            RawInput::GestureUpdate {
+                kind,
+                dx,
+                dy,
+                scale,
+                rotation,
+                time_us,
+            } => {
+                // Only for the gesture whose begin was passed on.
+                if self.gesture != Some(kind) {
+                    return Translated::Nothing;
+                }
+                Translated::Event(InputEvent::GestureUpdate {
+                    kind,
+                    dx,
+                    dy,
+                    scale,
+                    rotation,
+                    time_us,
+                })
+            }
+            RawInput::GestureEnd {
+                kind,
+                cancelled,
+                time_us,
+            } => {
+                if self.gesture != Some(kind) {
+                    return Translated::Nothing;
+                }
+                self.gesture = None;
+                Translated::Event(InputEvent::GestureEnd {
+                    kind,
+                    cancelled,
+                    time_us,
+                })
+            }
         }
     }
 }
@@ -484,6 +708,279 @@ mod tests {
             ),
             Translated::Nothing
         );
+    }
+
+    const AREA: OutputArea = OutputArea {
+        position: (100, 50),
+        logical_size: (1000, 500),
+    };
+
+    fn touch_down(slot: u32, x: f64, y: f64) -> RawInput {
+        RawInput::TouchDown {
+            slot,
+            x,
+            y,
+            time_us: 9,
+        }
+    }
+
+    #[test]
+    fn touchscreens_are_announced_when_the_first_comes_and_the_last_goes() {
+        let mut t = InputTranslator::new();
+        let added = |touch| RawInput::DeviceAdded { touch };
+        let removed = |touch| RawInput::DeviceRemoved { touch };
+        // A keyboard or a mouse says nothing.
+        assert_eq!(t.translate(added(false), None), Translated::Nothing);
+        assert_eq!(
+            t.translate(added(true), None),
+            Translated::Event(InputEvent::TouchAvailable(true))
+        );
+        assert_eq!(t.translate(added(true), None), Translated::Nothing);
+        assert_eq!(t.translate(removed(true), None), Translated::Nothing);
+        // A pause does not forget the devices: libinput removes and adds
+        // them itself.
+        t.release_all(1);
+        t.reset();
+        assert_eq!(
+            t.translate(removed(true), None),
+            Translated::Event(InputEvent::TouchAvailable(false))
+        );
+        // More removals than there were devices.
+        assert_eq!(t.translate(removed(true), None), Translated::Nothing);
+        assert_eq!(t.translate(removed(false), None), Translated::Nothing);
+    }
+
+    #[test]
+    fn touches_map_onto_the_output_and_need_their_down() {
+        let mut t = InputTranslator::new();
+        // No output: nowhere to touch.
+        assert_eq!(
+            t.translate(touch_down(0, 0.5, 0.5), None),
+            Translated::Nothing
+        );
+        // Without its down, a motion or an up is dropped, and so is a frame
+        // that would close nothing.
+        let motion = RawInput::TouchMotion {
+            slot: 0,
+            x: 0.1,
+            y: 0.1,
+            time_us: 9,
+        };
+        assert_eq!(t.translate(motion, Some(AREA)), Translated::Nothing);
+        assert_eq!(
+            t.translate(
+                RawInput::TouchUp {
+                    slot: 0,
+                    time_us: 9
+                },
+                Some(AREA)
+            ),
+            Translated::Nothing
+        );
+        assert_eq!(
+            t.translate(RawInput::TouchFrame { time_us: 9 }, Some(AREA)),
+            Translated::Nothing
+        );
+
+        assert_eq!(
+            t.translate(touch_down(3, 0.5, 0.25), Some(AREA)),
+            Translated::Event(InputEvent::TouchDown {
+                slot: 3,
+                x: 600.0,
+                y: 175.0,
+                time_us: 9
+            })
+        );
+        assert_eq!(
+            t.translate(touch_down(4, 1.5, -1.0), Some(AREA)),
+            Translated::Event(InputEvent::TouchDown {
+                slot: 4,
+                x: 1100.0,
+                y: 50.0,
+                time_us: 9
+            })
+        );
+        assert_eq!(
+            t.translate(RawInput::TouchFrame { time_us: 10 }, Some(AREA)),
+            Translated::Event(InputEvent::TouchFrame { time_us: 10 })
+        );
+        // One frame per set of events.
+        assert_eq!(
+            t.translate(RawInput::TouchFrame { time_us: 10 }, Some(AREA)),
+            Translated::Nothing
+        );
+        assert_eq!(
+            t.translate(
+                RawInput::TouchMotion {
+                    slot: 3,
+                    x: 0.0,
+                    y: 1.0,
+                    time_us: 11
+                },
+                Some(AREA)
+            ),
+            Translated::Event(InputEvent::TouchMotion {
+                slot: 3,
+                x: 100.0,
+                y: 550.0,
+                time_us: 11
+            })
+        );
+        assert_eq!(
+            t.translate(
+                RawInput::TouchUp {
+                    slot: 3,
+                    time_us: 12
+                },
+                Some(AREA)
+            ),
+            Translated::Event(InputEvent::TouchUp {
+                slot: 3,
+                time_us: 12
+            })
+        );
+        // Once up, the slot is free again.
+        assert_eq!(
+            t.translate(
+                RawInput::TouchUp {
+                    slot: 3,
+                    time_us: 12
+                },
+                Some(AREA)
+            ),
+            Translated::Nothing
+        );
+        // A cancel voids what is still down, once.
+        assert_eq!(
+            t.translate(RawInput::TouchCancel { time_us: 13 }, Some(AREA)),
+            Translated::Event(InputEvent::TouchCancel { time_us: 13 })
+        );
+        assert_eq!(
+            t.translate(RawInput::TouchCancel { time_us: 13 }, Some(AREA)),
+            Translated::Nothing
+        );
+        assert_eq!(
+            t.translate(
+                RawInput::TouchUp {
+                    slot: 4,
+                    time_us: 14
+                },
+                Some(AREA)
+            ),
+            Translated::Nothing
+        );
+    }
+
+    #[test]
+    fn gestures_pass_from_begin_to_end() {
+        let mut t = InputTranslator::new();
+        let update = |kind| RawInput::GestureUpdate {
+            kind,
+            dx: 2.0,
+            dy: -1.0,
+            scale: 1.5,
+            rotation: 3.0,
+            time_us: 2,
+        };
+        // Nothing began: dropped.
+        assert_eq!(
+            t.translate(update(GestureKind::Swipe), None),
+            Translated::Nothing
+        );
+        assert_eq!(
+            t.translate(
+                RawInput::GestureBegin {
+                    kind: GestureKind::Pinch,
+                    fingers: 2,
+                    time_us: 1
+                },
+                None
+            ),
+            Translated::Event(InputEvent::GestureBegin {
+                kind: GestureKind::Pinch,
+                fingers: 2,
+                time_us: 1
+            })
+        );
+        assert_eq!(
+            t.translate(update(GestureKind::Pinch), None),
+            Translated::Event(InputEvent::GestureUpdate {
+                kind: GestureKind::Pinch,
+                dx: 2.0,
+                dy: -1.0,
+                scale: 1.5,
+                rotation: 3.0,
+                time_us: 2
+            })
+        );
+        // Not the gesture in progress.
+        assert_eq!(
+            t.translate(update(GestureKind::Swipe), None),
+            Translated::Nothing
+        );
+        let end = RawInput::GestureEnd {
+            kind: GestureKind::Pinch,
+            cancelled: false,
+            time_us: 3,
+        };
+        assert_eq!(
+            t.translate(end, None),
+            Translated::Event(InputEvent::GestureEnd {
+                kind: GestureKind::Pinch,
+                cancelled: false,
+                time_us: 3
+            })
+        );
+        assert_eq!(t.translate(end, None), Translated::Nothing);
+    }
+
+    #[test]
+    fn pausing_cancels_touches_and_the_gesture() {
+        let mut t = InputTranslator::new();
+        t.translate(touch_down(0, 0.5, 0.5), Some(AREA));
+        t.translate(touch_down(1, 0.6, 0.5), Some(AREA));
+        t.translate(
+            RawInput::GestureBegin {
+                kind: GestureKind::Swipe,
+                fingers: 3,
+                time_us: 1,
+            },
+            None,
+        );
+        assert_eq!(
+            t.release_all(5),
+            [
+                InputEvent::TouchCancel { time_us: 5 },
+                InputEvent::GestureEnd {
+                    kind: GestureKind::Swipe,
+                    cancelled: true,
+                    time_us: 5
+                },
+            ]
+        );
+        // What arrives of them afterwards is dropped.
+        assert_eq!(
+            t.translate(
+                RawInput::TouchUp {
+                    slot: 0,
+                    time_us: 6
+                },
+                Some(AREA)
+            ),
+            Translated::Nothing
+        );
+        assert_eq!(
+            t.translate(
+                RawInput::GestureEnd {
+                    kind: GestureKind::Swipe,
+                    cancelled: false,
+                    time_us: 6
+                },
+                None
+            ),
+            Translated::Nothing
+        );
+        assert!(t.release_all(7).is_empty());
     }
 
     #[test]

@@ -11,7 +11,8 @@ prototype/backend/src/kms/
   plan.rs        純粋な関数。connector、mode、CRTC、primary plane の選び方、atomic commit の組み立て、
                  scanout の経路の選び方
   frame.rs       フレームを描く時機（FramePacer）。flip の統計
-  input.rs       libinput のイベントから、共通の入力イベントへの変換。終了と VT 切り替えのキー
+  input.rs       libinput のイベントから、共通の入力イベントへの変換。終了と VT 切り替えのキー。
+                 タッチの出力への当てはめ、タッチスクリーンの有無
   blob.rs        IN_FORMATS、EDID の読み取り。EDID から、機器を特定する情報を消す処理
   clock.rs       差し替えられる時計
   device.rs      trait KmsDevice。ハードウェアに触る口は、これだけ
@@ -48,6 +49,14 @@ prototype/compositor/src/
   想定している動作である。再開したら、デバイスを読み直して、modeset からやり直す。
 - 一時停止のとき、押されているキーとボタンを、離したものとしてクライアントに伝える（VT を切り替えるキーの
   「離す」は届かないため）。押したことを伝えていないキーの「離す」は、捨てる。
+  触れている指は取り消し（touch cancel）、進行中のタッチパッドのジェスチャーは、取り消しとして終える。
+- タッチスクリーン: libinput の touch のイベントを、seat 全体で一意の slot（seat slot）で渡す。座標は、
+  デバイスの範囲（calibration の後）を、使っている 1 つの出力に当てる。絶対座標のポインターと同じである。
+  down を伝えていない指の motion と up、何も伝えていない区切り（frame）は、捨てる。
+  タッチスクリーンの数を数え、1 つ目が来たときと、最後の 1 つが無くなったときに、中核に伝える。中核は、ある間だけ、
+  seat の capability に touch を出す。数は、libinput が報告するデバイスの追加と削除だけで変わり、一時停止では忘れない。
+- タッチパッドのジェスチャー: libinput の swipe、pinch、hold を、そのまま渡す。begin を伝えていないジェスチャーの
+  update と end は、捨てる。タッチパッドの設定（tap、自然なスクロール、加速など）は、libinput の既定のままである。
 - hotplug は、udev の通知でデバイスを読み直す。使っている connector が抜ければ出力を外し、出力が無いときに
   何かがつながれば出力を作る。
 - 終了時に、出力を止め、framebuffer とバッファを解放する。
@@ -178,7 +187,7 @@ libinput からの相対的な動きと pointer lock（加速を掛けた後と�
 wl-clipboard が data control でクリップボードと primary selection を読み書きすること、
 `wp_color_management_v1`（wayland-info が公開の内容と出力の image description を読めること、Mesa の Vulkan の WSI（vkcube）が
 manager を bind すること、検証用のクライアントが設定した BT.2100 PQ が表面の記述になること。どのクライアントも `WAYLAND_DEBUG` の記録を残す）、
-スクリプトの層、自己診断。
+uinput で作った仮想のタッチスクリーンとタッチパッドからの、タッチとジェスチャー、スクリプトの層、自己診断。
 
 - compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目のほかは、
   描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）で動かし、ウィンドウを、項目が置いた場所に保つ。
@@ -191,7 +200,8 @@ manager を bind すること、検証用のクライアントが設定した BT
 
 ## 未実装のもの
 
-- 複数の出力を同時に使うこと。
+- 複数の出力を同時に使うこと。複数の出力があるときに、タッチスクリーンをどの出力に当てるかを決めること。
+- タッチパッドの設定を変えること（libinput の既定のまま）。
 - direct scanout、overlay plane、cursor plane。virtio-gpu の cursor plane は、`DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT` を
   宣言しないクライアントには見えない（検証用の compositor は宣言していない）。
 - HDR の出力、10 bit 以上の scanout、VRR、ティアリング（async page flip）。

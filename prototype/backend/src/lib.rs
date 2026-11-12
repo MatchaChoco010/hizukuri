@@ -139,7 +139,11 @@ pub enum InputEvent {
     },
     /// Absolute pointer position in the global logical coordinate space
     /// (tablets, virtual pointers, injected input).
-    PointerMotionAbsolute { x: f64, y: f64, time_us: u64 },
+    PointerMotionAbsolute {
+        x: f64,
+        y: f64,
+        time_us: u64,
+    },
     PointerButton {
         button: u32,
         pressed: bool,
@@ -154,6 +158,96 @@ pub enum InputEvent {
         v120: Option<(i32, i32)>,
         time_us: u64,
     },
+    /// Whether a touchscreen is there. Sent when the first one appears and
+    /// when the last one goes; a backend whose input can always include
+    /// touches (the headless one, through its control interface) sends
+    /// `true` at the start.
+    TouchAvailable(bool),
+    /// A finger touched the screen at a position of the global logical
+    /// space. `slot` names the finger until its `TouchUp`; slots are unique
+    /// across the touchscreens of the seat.
+    TouchDown {
+        slot: u32,
+        x: f64,
+        y: f64,
+        time_us: u64,
+    },
+    TouchMotion {
+        slot: u32,
+        x: f64,
+        y: f64,
+        time_us: u64,
+    },
+    TouchUp {
+        slot: u32,
+        time_us: u64,
+    },
+    /// The end of a set of touch events that belong together (fingers that
+    /// went down or moved at the same time).
+    TouchFrame {
+        time_us: u64,
+    },
+    /// Every touch in progress is void: the device decided they were not
+    /// meant (a palm), or the session went away. No `TouchUp` follows.
+    TouchCancel {
+        time_us: u64,
+    },
+    /// A touchpad gesture started with this many fingers.
+    GestureBegin {
+        kind: GestureKind,
+        fingers: u32,
+        time_us: u64,
+    },
+    /// The gesture in progress moved. `dx`, `dy` is the motion of the
+    /// fingers' center in logical pixels (after acceleration). A pinch also
+    /// has `scale`, relative to the start (1.0 at the start), and
+    /// `rotation`, in degrees clockwise since the previous update. A hold
+    /// has no updates.
+    GestureUpdate {
+        kind: GestureKind,
+        dx: f64,
+        dy: f64,
+        scale: f64,
+        rotation: f64,
+        time_us: u64,
+    },
+    /// The gesture in progress ended. `cancelled`: the fingers did not
+    /// complete it (a hold that turned into a swipe, a finger added).
+    GestureEnd {
+        kind: GestureKind,
+        cancelled: bool,
+        time_us: u64,
+    },
+}
+
+/// The touchpad gestures libinput recognizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GestureKind {
+    /// Several fingers moving the same way.
+    Swipe,
+    /// Fingers moving apart or together, or turning.
+    Pinch,
+    /// Fingers resting on the touchpad without moving.
+    Hold,
+}
+
+impl GestureKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Swipe => "swipe",
+            Self::Pinch => "pinch",
+            Self::Hold => "hold",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "swipe" => Some(Self::Swipe),
+            "pinch" => Some(Self::Pinch),
+            "hold" => Some(Self::Hold),
+            _ => None,
+        }
+    }
 }
 
 /// When a frame reached the output.

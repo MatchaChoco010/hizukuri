@@ -14,7 +14,7 @@
 3. ウィンドウごとに、表面の一覧（`window_surfaces`）と、commit されたバッファ（`take_buffer_update`）を取り出して描く。
 4. フレームの完了を伝え（`send_frame_callbacks`、`send_presented`）、`flush_clients` を呼ぶ。
 
-ポインターの入力は、表面と、その中の座標で渡す（`pointer_motion`）。当たり判定は、呼び出す側の仕事である。
+ポインターとタッチの入力は、表面と、その中の座標で渡す（`pointer_motion`、`touch_down`）。当たり判定は、呼び出す側の仕事である。
 ウィンドウを平らに並べても、変形して描いても、同じ口で届く。
 
 出来事（`WlEvent`）:
@@ -36,7 +36,7 @@
 | `wl_compositor` | 6 | |
 | `wl_subcompositor` | 1 | |
 | `wl_shm` | 2 | `argb8888`、`xrgb8888`、`abgr8888`、`xbgr8888` |
-| `wl_seat` | 9 | キーボードとポインター。タッチは未実装 |
+| `wl_seat` | 9 | キーボードとポインター。タッチは、中核がタッチスクリーンがあると伝えている間だけ（下） |
 | `wl_output` | 4 | 出力ごとに 1 つ |
 | `wl_data_device_manager` | 3 | selection と drag and drop |
 | `xdg_wm_base` | 7 | |
@@ -48,6 +48,7 @@
 | `wp_cursor_shape_manager_v1` | 2 | |
 | `zwp_relative_pointer_manager_v1` | 1 | |
 | `zwp_pointer_constraints_v1` | 1 | lock と confine。いつ有効にするかは、中核が決める（下） |
+| `zwp_pointer_gestures_v1` | 3 | swipe、pinch、hold。ポインターのある表面に届く（下） |
 | `zwp_primary_selection_device_manager_v1` | 1 | |
 | `ext_data_control_manager_v1` | 1 | primary selection も扱う。どのクライアントにも見せる（下） |
 | `zwlr_data_control_manager_v1` | 2 | 同じ |
@@ -58,7 +59,7 @@
 | `zwp_linux_dmabuf_v1` | 6 または 3 | `--dmabuf` で公開したときだけ（下） |
 | `wp_color_manager_v1` | 3 | parametric な image description だけ。ICC は公開しない（下） |
 
-未実装: `wp_color_representation_v1`、タッチとジェスチャー。
+未実装: `wp_color_representation_v1`、`zwp_tablet_manager_v2`。
 
 ## バッファ
 
@@ -120,7 +121,7 @@ transform だけを変えて、バッファを付け直さない commit は、�
 | `Maximize`、`Unmaximize` | `set_maximized`、`unset_maximized` | |
 | `Fullscreen { output }`、`Unfullscreen` | `set_fullscreen`、`unset_fullscreen` | クライアントが出力を指定したら、その id |
 | `Minimize` | `set_minimized` | |
-| `Move` | `move` | その serial のボタンが、まだ押されているときだけ出す |
+| `Move` | `move` | その serial のボタンが、まだ押されているとき、またはその serial のタッチ（画面に触れている指のうち、最初の指）が、まだ離れていないときだけ出す |
 | `Resize { edges }` | `resize` | 同じ |
 | `ShowMenu { position }` | `show_window_menu` | ウィンドウの geometry からの位置 |
 | `Activate { from_input }` | `xdg_activation_v1.activate` | token が、キーボードの focus を持つクライアントの、focus が移った後の入力の serial で作られたなら、`from_input` が真 |
@@ -160,6 +161,8 @@ transform だけを変えて、バッファを付け直さない commit は、�
   ウィンドウを変形して描く側が、画面に出ている範囲に合わせて置くための口である。スクリプトへは、未接続である。
 - `xdg_popup.grab` を扱う。grab の間、キーボードは popup に向き、ポインターのイベントは、popup のクライアントにだけ届く。
   そのクライアント以外の場所を押すと、popup を閉じる（`popup_done`）。押した操作は、そのまま続く。
+  タッチは grab されない。popup のクライアントの表面へのタッチは、そのまま届く。ほかのクライアントの表面か、
+  表面の無い所に触れると、popup を閉じ、そのタッチは、触れた表面に届く。
 - grab の間に中核が求めた focus の変更は、grab が終わったときに適用する。
 - 入力メソッドがキーボードを grab しているときに開いた popup の grab は、キーボードの grab を取らない（下の
   [入力メソッド](#入力メソッド)）。
@@ -174,6 +177,7 @@ transform だけを変えて、バッファを付け直さない commit は、�
   ウィンドウを出さずに、それを使う。
 - いまの selection の MIME type は、`selection_mime_types` で読める（focus に関わらずに調べるため）。
 - drag and drop: 相手の表面は、中核の当たり判定の結果で決まる（`pointer_motion` に渡した表面が、offer の相手になる）。
+  タッチで始める drag and drop（タッチの serial での `start_drag`）は、受け付けない（source を取り消す）。
   drag のアイコンの表面は、`drag_icon_surfaces` で取り出せる。スクリプトの描画は、アイコンを描く。
 - `wl_data_source.target`（相手が受け入れた MIME type を、source に伝えるイベント）は、送られない
   （固定した版の Smithay が、送らない）。
@@ -298,6 +302,39 @@ text-input-v3（アプリ）、input-method-v2（IME）、virtual-keyboard-v1（
   （version 2 以上では `preferred_changed2`）を送る。
 - `wp_image_description_info_v1` の中身は、要求を処理した dispatch の後で送る（`done` が object を消すので、
   作った要求の処理の中では送れない）。
+
+## タッチ
+
+| 口 | 内容 |
+| --- | --- |
+| `set_touch_available` | seat の capability に touch を出す、取り下げる。中核は、タッチスクリーンがある間だけ出す。取り下げると、触れている指は忘れる |
+| `touch_down` | 指が、表面の中の座標に触れた（表面が無い所なら `None`）。`slot` は、離れるまで、その指の名前である |
+| `touch_motion` | 指が動いた。座標は、触れた表面の座標である |
+| `touch_up`、`touch_frame`、`touch_cancel` | 指が離れた。同時に起きたタッチの区切り（`wl_touch.frame`）。進行中のすべてのタッチを取り消す（`wl_touch.cancel`） |
+| `touch_points` | いま触れている指。slot と、触れた表面 |
+
+- **タッチは、触れた表面のものである。** 指が離れるまで、その指の動きは、その表面に届く。指がほかのウィンドウの上や、
+  ウィンドウの無い所へ動いても、変わらない。どの表面か、表面の中のどこかは、呼び出す側の当たり判定が決める。
+- **指ごとに、表面が決まる。** 2 本の指が、2 つのウィンドウに触れれば、それぞれのウィンドウに届く。
+  `frame` は、その区切りのイベントを受け取ったクライアントのそれぞれに、1 度ずつ送る。
+- `touch_cancel` は、それまでの区切りのイベントを受けた指も含めて、すべての指を取り消す。取り消した指の up は、送らない。
+  取り消す前に、各指に、いまの位置への motion を 1 つ送る（固定した版の Smithay が、組み立て中の区切りに入っている指しか
+  取り消さないため）。
+- 触れた表面が消えても、その指の up は、クライアントに届く。motion は、呼び出す側が座標を出せないので、届かない。
+- タッチでの move と resize（`xdg_toplevel.move` をタッチの serial で求める）は、ボタンと同じく、ウィンドウ管理への要求として出す。
+- pointer の emulation（`wl_touch` を持たないクライアントに、タッチをポインターの操作として送ること）は、しない。
+  タッチの shape と orientation は、送らない。
+
+## タッチパッドのジェスチャー
+
+- `gesture_begin`、`gesture_update`、`gesture_end` で、swipe、pinch、hold を送る。送り先は、ポインターのある表面の
+  クライアントである。
+- swipe の `update` は、指の中心の動き。pinch の `update` は、それに加えて、始めからの scale と、前の update からの回転（度）。
+  hold には、update が無い。
+- 進行中のジェスチャーの表面から、ポインターが離れると（ほかのウィンドウが下に来た、ウィンドウが動いた）、
+  そのクライアントには `end(cancelled)` が届き、残りは、どのクライアントにも届かない（Smithay の振る舞い）。
+- 誰に送るか（コンポジターが自分で使うか）は、この層は決めない。中核が、送るものだけを渡す
+  （[スクリプトの層](script-layer.md#タッチとジェスチャー)）。
 
 ## 入力
 

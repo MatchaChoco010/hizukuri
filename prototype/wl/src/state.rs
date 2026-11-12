@@ -32,6 +32,7 @@ use smithay::wayland::fractional_scale::{FractionalScaleManagerState, with_fract
 use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
+use smithay::wayland::pointer_gestures::PointerGesturesState;
 use smithay::wayland::presentation::{PresentationFeedbackCachedState, PresentationState, Refresh};
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -132,6 +133,7 @@ pub(crate) struct State {
     /// color-management-v1.
     pub color: ColorState,
     pub activation_state: XdgActivationState,
+    pub _pointer_gestures_state: PointerGesturesState,
 
     pub events: Vec<WlEvent>,
     pub windows: Vec<Window>,
@@ -160,6 +162,13 @@ pub(crate) struct State {
     pub constrained_surfaces: Vec<WlSurface>,
     /// The surface the caller last said the pointer is on.
     pub pointer_target: Option<WlSurface>,
+    /// The fingers on the screen, by slot.
+    pub touch_points: HashMap<u32, crate::touch::TouchPoint>,
+    /// A touch event was sent since the last `wl_touch.frame`.
+    pub touch_frame_owed: bool,
+    /// The popup grab in effect, for touches to dismiss it (Smithay's
+    /// popup grab only watches the pointer and the keyboard).
+    pub popup_grab: Option<smithay::desktop::PopupGrab<State>>,
     /// Popups that committed for the first time and were not told their
     /// place yet. They are told at the next flush.
     pub popups_awaiting_configure: Vec<PopupSurface>,
@@ -193,6 +202,7 @@ impl State {
         let cursor_shape_state = CursorShapeManagerState::new::<Self>(dh);
         let relative_pointer_state = RelativePointerManagerState::new::<Self>(dh);
         let pointer_constraints_state = PointerConstraintsState::new::<Self>(dh);
+        let pointer_gestures_state = PointerGesturesState::new::<Self>(dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
         // Clipboard managers read and replace the selections through these
         // without having the keyboard focus. Every client may bind them:
@@ -255,6 +265,7 @@ impl State {
             menu_grab: None,
             color: ColorState::new(dh),
             activation_state,
+            _pointer_gestures_state: pointer_gestures_state,
             events: Vec::new(),
             windows: Vec::new(),
             popups: Vec::new(),
@@ -267,6 +278,9 @@ impl State {
             primary_selection: None,
             constrained_surfaces: Vec::new(),
             pointer_target: None,
+            touch_points: HashMap::new(),
+            touch_frame_owed: false,
+            popup_grab: None,
             popups_awaiting_configure: Vec::new(),
             repositions: Vec::new(),
             dragging: false,

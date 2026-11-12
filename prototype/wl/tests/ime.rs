@@ -665,3 +665,129 @@ fn a_menu_opens_while_the_input_method_holds_the_keyboard() {
     });
     let _ = ime;
 }
+
+/// While the input method holds the keyboard and a menu is open, a touch
+/// on another client still dismisses the menu, as it does without an input
+/// method, and the touch reaches that client. The input method keeps its
+/// grab.
+#[test]
+fn a_touch_elsewhere_dismisses_a_menu_opened_under_the_input_method() {
+    let mut rig = Rig::new();
+    rig.server.set_touch_available(true);
+    let (ime, app, window) = rig.active();
+    let (other, other_window) = rig.add_application("other");
+    rig.client(other).request_touch();
+    rig.settle("the other client has a wl_touch", |rig| {
+        rig.client(other).has_touch()
+    });
+    let surface = rig.server.window(window).unwrap().surface;
+    rig.server
+        .pointer_motion(Some((surface, (10.0, 10.0))), 1000);
+    rig.server.pointer_frame();
+    rig.server.pointer_button(BTN_LEFT, true, 2000);
+    rig.server.pointer_frame();
+    rig.settle("press", |rig| {
+        rig.client(app)
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::PointerButton { pressed: true, .. }))
+    });
+    rig.client(app)
+        .open_popup(PopupOptions {
+            x: 20,
+            y: 20,
+            width: 80,
+            height: 50,
+            color: [255, 0, 0, 255],
+            grab: true,
+            slide: false,
+        })
+        .unwrap();
+    rig.settle("menu has the keyboard", |rig| {
+        rig.client(app).keyboard_focus() == Some(SurfaceKind::Popup)
+    });
+    rig.server.pointer_button(BTN_LEFT, false, 2500);
+    rig.server.pointer_frame();
+    rig.steps(4);
+    assert!(rig.client(app).has_popup(), "the menu closed by itself");
+
+    let other_surface = rig.server.window(other_window).unwrap().surface;
+    rig.server
+        .touch_down(0, Some((other_surface, (5.0, 6.0))), 3000);
+    rig.server.touch_frame();
+    rig.settle("the menu is dismissed", |rig| {
+        rig.client(app).events().contains(&ClientEvent::PopupDone)
+    });
+    assert!(
+        rig.client(other)
+            .events()
+            .contains(&ClientEvent::TouchDown {
+                id: 0,
+                surface: SurfaceKind::Window,
+                x: 5.0,
+                y: 6.0
+            })
+    );
+    // The keyboard goes back to the window the compositor wants it on.
+    rig.client(app).close_popup();
+    rig.settle("the window has the keyboard again", |rig| {
+        rig.client(app).keyboard_focus() == Some(SurfaceKind::Window)
+    });
+    assert!(rig.status().keyboard_grab, "the input method lost the grab");
+    let _ = ime;
+}
+
+/// A touch on the input method's candidate window goes to the input
+/// method's client, like any touch on a surface. Nothing else happens: the
+/// input method stays active and keeps the grab, the application gets no
+/// touch.
+#[test]
+fn a_touch_on_the_candidate_window_goes_to_the_input_method() {
+    let mut rig = Rig::new();
+    rig.server.set_touch_available(true);
+    let (ime, app, window) = rig.active();
+    rig.client(ime).request_touch();
+    rig.client(app).request_touch();
+    rig.settle("both have a wl_touch", |rig| {
+        rig.client(ime).has_touch() && rig.client(app).has_touch()
+    });
+    rig.client(ime)
+        .ime_show_popup(100, 40, [0, 0, 255, 255])
+        .unwrap();
+    rig.settle("popup shown", |rig| {
+        input_popup(&rig.server, window).is_some()
+    });
+    let popup = rig
+        .server
+        .window_surfaces(window)
+        .into_iter()
+        .find(|n| n.role == SurfaceRole::InputPopup)
+        .unwrap()
+        .surface;
+    rig.client(app).clear_events();
+    rig.server.touch_down(0, Some((popup, (30.0, 10.0))), 3000);
+    rig.server.touch_frame();
+    rig.server.touch_up(0, 3100);
+    rig.server.touch_frame();
+    rig.settle("the touch reaches the input method", |rig| {
+        rig.client(ime)
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::TouchUp { id: 0 }))
+    });
+    assert!(rig.client(ime).events().contains(&ClientEvent::TouchDown {
+        id: 0,
+        surface: SurfaceKind::Other,
+        x: 30.0,
+        y: 10.0
+    }));
+    assert!(
+        !rig.client(app)
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::TouchDown { .. })),
+        "the application got the touch on the candidate window"
+    );
+    assert!(rig.client(ime).ime_active());
+    assert!(rig.status().keyboard_grab);
+}

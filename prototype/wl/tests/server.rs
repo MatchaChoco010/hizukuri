@@ -299,6 +299,49 @@ fn moves_and_resizes_need_a_held_button() {
     assert_eq!(rig.requests().len(), 2);
 }
 
+/// A touch that is down can start an interactive move, as a held button
+/// can (a title bar dragged with a finger). Once the finger is up, its
+/// serial is no good any more.
+#[test]
+fn moves_can_start_from_a_touch_that_is_down() {
+    let mut rig = Rig::new(ServerConfig::default());
+    rig.server.set_touch_available(true);
+    let (client, window) = rig.add_mapped_client("touched");
+    rig.clients[client].request_touch();
+    rig.settle("the client has a wl_touch", |rig| {
+        rig.clients[client].has_touch()
+    });
+    let surface = rig.server.window(window).unwrap().surface;
+
+    rig.server
+        .touch_down(0, Some((surface, (10.0, 10.0))), 1000);
+    rig.server.touch_frame();
+    rig.settle("the touch reaches the client", |rig| {
+        rig.clients[client]
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::TouchDown { .. }))
+    });
+    rig.clients[client].request(ToplevelRequest::Move).unwrap();
+    rig.settle("the move is reported", |rig| {
+        rig.requests() == [WindowRequest::Move]
+    });
+
+    rig.server.touch_up(0, 2000);
+    rig.server.touch_frame();
+    rig.settle("the up reaches the client", |rig| {
+        rig.clients[client]
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::TouchUp { .. }))
+    });
+    rig.clients[client].request(ToplevelRequest::Move).unwrap();
+    for _ in 0..10 {
+        rig.step();
+    }
+    assert_eq!(rig.requests(), [WindowRequest::Move]);
+}
+
 /// A commit that attaches a dmabuf which is not ready is held back until it
 /// is. Nothing of it is visible before, the server is not kept waiting, and
 /// its descriptor tells the caller when to come back.

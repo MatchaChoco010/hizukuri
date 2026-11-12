@@ -102,7 +102,8 @@ image description の名前:
 ### バックエンド
 
 - **headless**: 仮想の出力を、画面に出さずに描く。出力は複数作れる（左から右へ並ぶ）。仮想の frame clock が、
-  リフレッシュレートの周期でフレームを許す。既定のバックエンドである。
+  リフレッシュレートの周期でフレームを許す。既定のバックエンドである。入力は制御口から来る。
+  制御口からタッチを送れるので、いつも、タッチスクリーンがあるものとして扱う（seat が touch を出す）。
 - **KMS**: 仮想コンソールの上の DRM/KMS の session として動く。出力は 1 つだけ使う。
   明示したときだけ選ばれる（[KMS のバックエンド](kms-backend.md)）。
 - nested（ほかの compositor の中のウィンドウとして動く）は、未実装である。
@@ -238,6 +239,13 @@ target/debug/proto-compositor --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LA
 | `pointer_motion_relative` | `dx`、`dy`、`dx_unaccel`、`dy_unaccel`（後の 2 つは省略可） | ポインターを相対的に動かす。出力の範囲に収める。`dx`、`dy` は加速を掛けた後の値、`*_unaccel` は掛ける前の値（省略すると、`dx`、`dy` と同じ）。どちらも、相対的な動きとしてクライアントに届く |
 | `pointer_button` | `button`、`pressed` | ボタンを押す、離す |
 | `pointer_axis` | `horizontal`、`vertical`、`v120_horizontal`、`v120_vertical`（どれも省略可） | スクロール。`v120_*` を付けると、ホイールとして送る |
+| `touch_down`、`touch_motion` | `slot`、`x`、`y` | 指 `slot` が、絶対位置に触れる、動く |
+| `touch_up` | `slot` | 指 `slot` が離れる |
+| `touch_frame` | | 同時に起きたタッチの区切り。タッチの要求の後に送る |
+| `touch_cancel` | | 進行中のすべてのタッチを取り消す |
+| `gesture_begin` | `kind`、`fingers` | タッチパッドのジェスチャーを始める。`kind` は `swipe`、`pinch`、`hold` |
+| `gesture_update` | `kind`、`dx`、`dy`、`scale`（既定 1）、`rotation`（既定 0） | 進行中のジェスチャーを動かす。`scale` は始めからの倍率、`rotation` は前の update からの度数（pinch） |
+| `gesture_end` | `kind`、`cancelled`（既定 `false`） | 進行中のジェスチャーを終える |
 | `move_window` | `window`、`x`、`y` | ウィンドウの論理的な位置を変える |
 | `focus_window` | `window`（`null` で解除） | focus を移し、最前面に出す |
 | `close_window` | `window` | ウィンドウに閉じるよう頼む |
@@ -259,6 +267,10 @@ proto-ctl --socket PATH pointer-motion 100 80
 proto-ctl --socket PATH pointer-motion-relative 10 0 --dx-unaccel 6 --dy-unaccel 0
 proto-ctl --socket PATH pointer-button 272 press
 proto-ctl --socket PATH pointer-axis --vertical 15 --v120-vertical 120
+proto-ctl --socket PATH touch-down 0 200 150 && proto-ctl --socket PATH touch-frame
+proto-ctl --socket PATH gesture-begin swipe 3
+proto-ctl --socket PATH gesture-update swipe --dx 40
+proto-ctl --socket PATH gesture-end swipe
 proto-ctl --socket PATH move-window 3 40 30
 proto-ctl --socket PATH set-surface-color 2 display-p3
 proto-ctl --socket PATH set-output-image-description HEADLESS-1 bt2020-pq
@@ -290,6 +302,8 @@ proto-ctl --socket PATH raw '{"cmd":"state"}'
   表面、見えているか、ウィンドウ、ウィンドウの中の位置、アプリが伝えたカーソルの矩形、IME に伝えた矩形
 - `x11`（`--xwayland-satellite` のとき）: `display`（`:N`）、`satellite_pid`（動いている xwayland-satellite）、
   `satellite_starts`（起動した回数）、`satellite_exits`（最近の終わり方）
+- `touch`: seat が touch を出しているか（`available`）、いま触れている指（`points`。slot と、触れた表面）、
+  進行中のタッチパッドのジェスチャー（`gesture`。種類と、持ち主 `window_manager` か `client`）
 - `redraw_pending`: まだ描いていないフレームが、どれかの出力にあるか
 - `window_manager`: `script`（スクリプトのウィンドウ管理）か `fallback`（`--no-drawing`）
 - `script`: モード、失敗の記録、読み直しの回数、呼び出しごとの時間、dmabuf の取り込みの統計。`--no-drawing` では `null`
@@ -347,6 +361,7 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
                   [--duration 秒] [--relative-pointer] [--lock-pointer | --confine-pointer]
                   [--text-input X,Y,W,H] [--input-method echo] [--no-window]
                   [--color-manager 版] [--image-description 記述] [--color-info]
+                  [--touch] [--gestures]
 ```
 
 - `--socket` は必須である。`WAYLAND_DISPLAY` を見ない。
@@ -356,12 +371,14 @@ proto-test-client --socket PATH [--title T] [--app-id ID] [--size WxH]
   ウィンドウに望まれる image description を読む。`--color-manager` は、bind する版の上限である（既定は 3。どちらかを付けたときだけ bind する）。
 - `--relative-pointer` は、相対的な動きを求める。`--lock-pointer`、`--confine-pointer` は、ウィンドウに、
   persistent の lock か confine を求める（ゲームのように）。
+- `--touch` は、seat が touch を出している間、`wl_touch` を持つ。`--gestures` は、タッチパッドのジェスチャー
+  （swipe、pinch、hold）を求める。
 - `--color` は、バッファに書く値そのものである。`wl_shm` は premultiplied なので、半透明の色は掛け算した値を渡す
   （50% の赤は `80000080`）。
 - テストからは、ライブラリ（`proto_test_client::TestClient`）として使う。自分ではブロックせず、`pump` を呼んだときだけ進む。
   ライブラリは、バッファの模様、dmabuf での送付、buffer transform、viewport、fractional-scale、presentation の feedback、
   popup、selection、drag and drop、ウィンドウ管理への要求、相対的な動き、ポインターの制約、primary selection、
-  data control、`wp_color_management_v1`（image description の作成と設定、出力と feedback、誤った使い方）も話す。ウィンドウを持たないクライアント（クリップボードの履歴の道具の役）にもなれる。
+  data control、`wp_color_management_v1`（image description の作成と設定、出力と feedback、誤った使い方）、タッチ、ジェスチャーも話す。ウィンドウを持たないクライアント（クリップボードの履歴の道具の役）にもなれる。
 - `--text-input` は、ウィンドウに入力欄を持たせる。text-input に `enter` されると、その矩形をカーソルとして伝えて、
   有効にする。受け取った preedit と確定した文字列は、イベントとして出す。
 - `--input-method echo` は、クライアントを、seat の入力メソッドにする（ふつうは `--no-window` と一緒に使う）。
@@ -458,7 +475,10 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - KMS の dma-buf の経路で、GPU の完了を待たずに flip すること。いまは、scanout の画像に描いたフレームの完了を、
   CPU で待ってから flip する（`IN_FENCE_FD` を使わない）。
 - スクリプトから、SPIR-V の shader を渡すこと（`Gpu::create_shader_spirv` は、Rust の API にだけある）。
-- タッチ、ジェスチャー。
+- タブレット（`zwp_tablet_manager_v2`）。
+- タッチを、`wl_touch` を持たないクライアントに、ポインターの操作として送ること。タッチで始める drag and drop。
+- 複数の出力のうち、どれにタッチスクリーンを当てるかを決めること（KMS は、出力を 1 つだけ使う）。
+- スクリプトが、タッチを自分で使う（アプリへのタッチを取り消す）こと。タッチパッドの設定（tap、自然なスクロール、加速など）。
 - data control を、信頼するクライアントにだけ見せること（`wp_security_context_v1`）。
 - 候補ウィンドウの位置を、スクリプトが決めること。text-input-v3 の version 2。
 - X11 の display を、compositor が起動するアプリへ渡すこと（compositor は、アプリを起動しない）。

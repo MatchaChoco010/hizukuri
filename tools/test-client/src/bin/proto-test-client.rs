@@ -7,6 +7,7 @@
 //!                   [--text-input X,Y,W,H] [--input-method echo] [--no-window]
 //!                   [--color-manager VERSION] [--image-description SPEC]
 //!                   [--color-info]
+//!                   [--touch] [--gestures]
 //! ```
 //!
 //! Shows a solid window and prints every event it receives as one JSON
@@ -174,6 +175,10 @@ fn run() -> Result<(), String> {
     let mut constraint: Option<ConstraintRequest> = None;
     let mut description: Option<Description> = None;
     let mut color_info = false;
+    // Touch events, whenever the seat offers touch; touchpad gestures, once
+    // the pointer exists.
+    let mut touch = false;
+    let mut gestures = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -227,6 +232,8 @@ fn run() -> Result<(), String> {
                     .map_err(|_| format!("invalid duration {text:?}"))?;
                 duration = Some(Duration::from_secs_f64(seconds));
             }
+            "--touch" => touch = true,
+            "--gestures" => gestures = true,
             "--relative-pointer" => relative = true,
             "--lock-pointer" => constraint = Some(ConstraintRequest::Lock),
             "--confine-pointer" => constraint = Some(ConstraintRequest::Confine),
@@ -248,7 +255,8 @@ fn run() -> Result<(), String> {
                      [--duration SECONDS] [--relative-pointer] [--lock-pointer | --confine-pointer] \
                      [--text-input X,Y,W,H] [--input-method echo] \
                      [--no-window] \
-                     [--color-manager VERSION] [--image-description SPEC] [--color-info]"
+                     [--color-manager VERSION] [--image-description SPEC] [--color-info] \
+                     [--touch] [--gestures]"
                 );
                 return Ok(());
             }
@@ -263,6 +271,9 @@ fn run() -> Result<(), String> {
     let socket =
         socket.ok_or("--socket PATH is required (the client never uses WAYLAND_DISPLAY)")?;
     let mut client = TestClient::connect_path(&socket, options).map_err(|e| e.to_string())?;
+    if touch {
+        client.request_touch();
+    }
     let deadline = duration.map(|d| Instant::now() + d);
     let mut printed = 0;
     let mut printed_ime = 0;
@@ -275,6 +286,9 @@ fn run() -> Result<(), String> {
         // Not there yet until the globals, the pointer and the window are.
         if relative && client.request_relative_pointer().is_ok() {
             relative = false;
+        }
+        if gestures && client.request_pointer_gestures().is_ok() {
+            gestures = false;
         }
         if let Some(request) = constraint
             && client.is_drawn()

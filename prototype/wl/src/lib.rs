@@ -19,9 +19,9 @@
 //! 4. reports frames back ([`WlServer::send_frame_callbacks`],
 //!    [`WlServer::send_presented`]) and calls [`WlServer::flush_clients`].
 //!
-//! Pointer input is addressed to a surface with surface-local coordinates.
-//! Hit testing is the caller's job, so it works the same whether windows are
-//! laid out flat or placed in 3D.
+//! Pointer and touch input is addressed to a surface with surface-local
+//! coordinates. Hit testing is the caller's job, so it works the same
+//! whether windows are laid out flat or placed in 3D.
 
 mod buffer;
 mod color;
@@ -30,6 +30,7 @@ mod handlers;
 mod ime;
 mod state;
 mod surface;
+mod touch;
 
 use std::borrow::Cow;
 use std::io;
@@ -530,6 +531,15 @@ pub enum AxisSource {
     Wheel,
     Finger,
     Continuous,
+}
+
+/// A touchpad gesture (`zwp_pointer_gestures_v1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GestureKind {
+    Swipe,
+    Pinch,
+    /// Since version 3 of the protocol.
+    Hold,
 }
 
 /// The role of a surface inside a window's surface tree.
@@ -1155,6 +1165,80 @@ impl WlServer {
     /// it is active and holds the keyboard, and where its popup is.
     pub fn input_method_status(&self) -> InputMethodStatus {
         self.state.input_method_status()
+    }
+
+    // -- touch and touchpad gestures -------------------------------------------
+
+    /// Offers the touch capability on the seat (`wl_seat.capabilities`), or
+    /// withdraws it. Offer it while a touchscreen is there: clients take
+    /// its presence as a sign that the user can touch.
+    pub fn set_touch_available(&mut self, available: bool) {
+        self.state.set_touch_available(available);
+    }
+
+    pub fn touch_available(&self) -> bool {
+        self.state.touch_available()
+    }
+
+    /// A finger touched a surface at surface-local logical coordinates, or
+    /// touched nothing (`None`). The touch belongs to that surface until it
+    /// is up: its motions go there, wherever the finger moves. `slot` names
+    /// it until then. While a popup holds a grab, a touch on a surface of
+    /// another client dismisses the popup.
+    pub fn touch_down(&mut self, slot: u32, target: Option<(SurfaceId, (f64, f64))>, time_us: u64) {
+        self.state.touch_down(slot, target, time_us);
+    }
+
+    /// A touch moved. `position` is in the coordinates of the surface it
+    /// went down on. Nothing is sent for a slot that is not down.
+    pub fn touch_motion(&mut self, slot: u32, position: (f64, f64), time_us: u64) {
+        self.state.touch_motion(slot, position, time_us);
+    }
+
+    pub fn touch_up(&mut self, slot: u32, time_us: u64) {
+        self.state.touch_up(slot, time_us);
+    }
+
+    /// Ends a set of touch events that belong together (`wl_touch.frame`),
+    /// for every client that got one of them.
+    pub fn touch_frame(&mut self) {
+        self.state.touch_frame();
+    }
+
+    /// Voids every touch in progress (`wl_touch.cancel`). The clients are
+    /// not told that the fingers came up.
+    pub fn touch_cancel(&mut self, time_us: u64) {
+        self.state.touch_cancel(time_us);
+    }
+
+    /// The touches in progress: slot, and the surface each went down on
+    /// (`None` for nothing, or a surface that is gone). Ordered by slot.
+    pub fn touch_points(&self) -> Vec<(u32, Option<SurfaceId>)> {
+        self.state.touch_points()
+    }
+
+    /// A touchpad gesture began. It goes to the surface the pointer is on.
+    pub fn gesture_begin(&mut self, kind: GestureKind, fingers: u32, time_us: u64) {
+        self.state.gesture_begin(kind, fingers, time_us);
+    }
+
+    /// The gesture moved: `delta` of the fingers' center in logical pixels;
+    /// for a pinch also the scale since the begin and the rotation since the
+    /// previous update, in degrees. Holds have no updates.
+    pub fn gesture_update(
+        &mut self,
+        kind: GestureKind,
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_us: u64,
+    ) {
+        self.state
+            .gesture_update(kind, delta, scale, rotation, time_us);
+    }
+
+    pub fn gesture_end(&mut self, kind: GestureKind, cancelled: bool, time_us: u64) {
+        self.state.gesture_end(kind, cancelled, time_us);
     }
 
     /// The cursor requested by the client under the pointer.

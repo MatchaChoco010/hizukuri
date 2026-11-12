@@ -94,6 +94,38 @@ enum Command {
         #[arg(long, allow_negative_numbers = true)]
         v120_horizontal: Option<i32>,
     },
+    /// Touch the screen with finger `slot` at an absolute position.
+    TouchDown { slot: u32, x: f64, y: f64 },
+    /// Move finger `slot` to an absolute position.
+    TouchMotion { slot: u32, x: f64, y: f64 },
+    /// Lift finger `slot`.
+    TouchUp { slot: u32 },
+    /// End a set of touch events that happen together.
+    TouchFrame,
+    /// Void every touch in progress.
+    TouchCancel,
+    /// Start a touchpad gesture (`swipe`, `pinch` or `hold`).
+    GestureBegin { kind: String, fingers: u32 },
+    /// Move the gesture in progress.
+    GestureUpdate {
+        kind: String,
+        #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+        dx: f64,
+        #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+        dy: f64,
+        /// Pinch: scale relative to the start.
+        #[arg(long, default_value_t = 1.0)]
+        scale: f64,
+        /// Pinch: degrees since the previous update.
+        #[arg(long, default_value_t = 0.0, allow_negative_numbers = true)]
+        rotation: f64,
+    },
+    /// End the gesture in progress.
+    GestureEnd {
+        kind: String,
+        #[arg(long)]
+        cancelled: bool,
+    },
     /// Move a window.
     MoveWindow {
         window: u64,
@@ -186,6 +218,26 @@ fn main() -> ExitCode {
             v120_horizontal,
             v120_vertical,
         },
+        Command::TouchDown { slot, x, y } => Request::TouchDown { slot, x, y },
+        Command::TouchMotion { slot, x, y } => Request::TouchMotion { slot, x, y },
+        Command::TouchUp { slot } => Request::TouchUp { slot },
+        Command::TouchFrame => Request::TouchFrame,
+        Command::TouchCancel => Request::TouchCancel,
+        Command::GestureBegin { kind, fingers } => Request::GestureBegin { kind, fingers },
+        Command::GestureUpdate {
+            kind,
+            dx,
+            dy,
+            scale,
+            rotation,
+        } => Request::GestureUpdate {
+            kind,
+            dx,
+            dy,
+            scale,
+            rotation,
+        },
+        Command::GestureEnd { kind, cancelled } => Request::GestureEnd { kind, cancelled },
         Command::MoveWindow { window, x, y } => Request::MoveWindow { window, x, y },
         Command::FocusWindow { window } => Request::FocusWindow { window },
         Command::CloseWindow { window } => Request::CloseWindow { window },

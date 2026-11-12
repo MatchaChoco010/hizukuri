@@ -1268,6 +1268,133 @@ class Run:
         wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
         return "; ".join(notes)
 
+    def check_touch_and_gestures(self):
+        """Touches from a touchscreen and gestures from a touchpad, through
+        the kernel's multitouch protocol and libinput: virtual devices made
+        with uinput in the guest (QMP has neither)."""
+        self.start("--exit-after", "120")
+        notes = []
+        if self.state()["touch"]["available"]:
+            raise Failed("touch is offered before there is a touchscreen")
+        width, height = self.state()["outputs"][0]["logical_size"]
+        python = "$(command -v python3)"
+
+        def client(title, flag):
+            log = f"input-{title}.log"
+            before = {w["id"] for w in self.state()["windows"]}
+            spawn(f"{GUEST_BIN}/proto-test-client --socket {self.runtime}/{SOCKET} "
+                  f"--title {title} --size 300x200 --duration 100 {flag}", log)
+            window = wait_for(f"the window of {title}", lambda: next(
+                (w for w in self.state()["windows"]
+                 if w["id"] not in before and w["mapped"] and w["title"] == title), None),
+                seconds=10)
+            self.ctl("move-window", str(window["id"]), "100", "100")
+            wait_for(f"{title} at 100, 100", lambda: self.window(
+                self.state(), id=window["id"])["position"] == [100, 100], seconds=5)
+            events = lambda: [json.loads(line) for line in
+                              self.fetch(f"{GUEST_DIR}/{log}", log).splitlines()
+                              if line.startswith("{")]
+            return window, events
+
+        # 1. A touchscreen. libinput reports it when udev has called it one;
+        # the seat offers touch from then on.
+        go = f"{GUEST_DIR}/touch-go"
+        guest(f"mkdir -p {GUEST_DIR}; rm -f {go}")
+
+        def at(x, y):
+            return f"{x / width:.6f}:{y / height:.6f}"
+
+        # One finger down on the window at (150, 100) of it, moved off the
+        # window and lifted; then two fingers on it at once.
+        steps = [f"down:0:{at(250, 200)}", "frame"]
+        steps += [s for i in range(1, 11) for s in (f"move:0:{at(250 + 45 * i, 200 + 30 * i)}",
+                                                    "frame")]
+        steps += ["up:0", "frame", "wait:0.2",
+                  f"down:0:{at(150, 150)}", f"down:1:{at(350, 250)}", "frame",
+                  f"move:1:{at(360, 250)}", "frame", "up:0", "up:1", "frame"]
+        screen = spawn(f"sudo -n {python} $(command -v uinput-touchscreen.py) --go {go} "
+                       + " ".join(steps), "input-touchscreen.log")
+        wait_for("libinput to report a touchscreen",
+                 lambda: self.state()["touch"]["available"], seconds=15)
+        window, events = client("hzk-touch", "--touch")
+        time.sleep(0.5)
+        guest(f"touch {go}")
+
+        def touched():
+            got = events()
+            return got if sum(e["event"] == "touch_up" for e in got) >= 3 else None
+
+        got = wait_for("the touches at the client", touched, seconds=15)
+        downs = [e for e in got if e["event"] == "touch_down"]
+        motions = [e for e in got if e["event"] == "touch_motion"]
+        if len(downs) != 3 or any(e["surface"] != "window" for e in downs):
+            raise Failed(f"expected three downs on the window: {downs}")
+        if not (near((downs[0]["x"], downs[0]["y"]), (150, 100), 3)):
+            raise Failed(f"the first down is at {downs[0]['x']}, {downs[0]['y']} of the window, "
+                         "not 150, 100")
+        first = [m for m in motions if m["id"] == downs[0]["id"]][:10]
+        if len(first) < 10 or not near((first[-1]["x"], first[-1]["y"]), (600, 400), 3):
+            raise Failed(f"the finger moved off the window is not followed there: {first[-3:]}")
+        if downs[1]["id"] == downs[2]["id"]:
+            raise Failed(f"two fingers down at once have the same id: {downs[1:]}")
+        two = sorted(((d["x"], d["y"]) for d in downs[1:]))
+        if not (near(two[0], (50, 50), 3) and near(two[1], (250, 150), 3)):
+            raise Failed(f"the two fingers are at {two}, not (50, 50) and (250, 150)")
+        frames = sum(e["event"] == "touch_frame" for e in got)
+        if frames < 14:
+            raise Failed(f"only {frames} touch frames for 14 sets of events")
+        wait_for("the touchscreen to go", lambda: not alive(screen), seconds=15)
+        wait_for("touch to be withdrawn", lambda: not self.state()["touch"]["available"],
+                 seconds=10)
+        notes.append(f"touchscreen: {len(downs)} downs, {len(motions)} motions, {frames} frames "
+                     f"at the client; a finger moved off the window stays with it; touch "
+                     "offered while the device is there")
+        self.ctl("close-window", str(window["id"]))
+        stop_spawned()
+
+        # 2. A touchpad: gestures go to the client under the pointer.
+        window, events = client("hzk-pad", "--gestures")
+        self.move_pointer(250, 200)
+        surface = window["surfaces"][0]["id"]
+        wait_for("the pointer on the window",
+                 lambda: self.state()["focus"]["pointer_surface"] == surface, seconds=8)
+        guest(f"sudo -n {python} $(command -v uinput-touchpad.py) swipe pinch hold", timeout=60)
+
+        def gestured():
+            got = [e for e in events() if e["event"].startswith("gesture_")]
+            kinds = {(e["kind"], e["event"]) for e in got}
+            return got if {("swipe", "gesture_end"), ("pinch", "gesture_end")} <= kinds else None
+
+        got = wait_for("the gestures at the client", gestured, seconds=10)
+
+        def gesture(kind):
+            begin = next((e for e in got if e["event"] == "gesture_begin" and e["kind"] == kind),
+                         None)
+            updates = [e for e in got if e["event"] == "gesture_update" and e["kind"] == kind]
+            ends = [e for e in got if e["event"] == "gesture_end" and e["kind"] == kind]
+            return begin, updates, ends
+
+        begin, updates, ends = gesture("swipe")
+        if not begin or begin["fingers"] != 3 or not updates:
+            raise Failed(f"no three finger swipe with updates: {got}")
+        swiped = sum(e["dx"] for e in updates)
+        if swiped <= 0 or ends[-1]["cancelled"]:
+            raise Failed(f"the swipe went {swiped} to the right, ended {ends}")
+        begin, updates, ends = gesture("pinch")
+        if not begin or begin["fingers"] != 2 or not updates or updates[-1]["scale"] <= 1.0:
+            raise Failed(f"no two finger pinch that spreads: {got}")
+        hold, _, hold_ends = gesture("hold")
+        notes.append(f"touchpad: a 3 finger swipe of dx {swiped:.0f} in "
+                     f"{len(gesture('swipe')[1])} updates, a 2 finger pinch to scale "
+                     f"{updates[-1]['scale']:.2f}"
+                     + (f", a {hold['fingers']} finger hold "
+                        f"({'cancelled' if hold_ends and hold_ends[-1]['cancelled'] else 'ended'})"
+                        if hold else ", no hold"))
+
+        self.ctl("quit")
+        wait_for("the compositor to exit", lambda: not self.unit_active(), seconds=8)
+        return "; ".join(notes)
+
     def run(self):
         self.stop()
         if self.item("start", self.check_start):
@@ -1303,6 +1430,8 @@ class Run:
         self.item("input-protocols", self.check_input_protocols)
         self.stop()
         self.item("color-management", self.check_color_management)
+        self.stop()
+        self.item("touch-and-gestures", self.check_touch_and_gestures)
         self.stop()
         self.item("script-layer", self.check_script_layer)
         self.stop()
@@ -1809,12 +1938,19 @@ def check_script(out, uid, results):
         vm("key", "logo-shift-h")
         wait_for("the tiles to swap back", lambda: (lambda now: now and [w["id"] for w in now]
                                                     == order)(tiled()), seconds=5)
+        # Three fingers swiped right on a touchpad (a uinput device that
+        # libinput takes for one): the tiling script's gesture, the focus
+        # goes back to the right.
+        guest("sudo -n $(command -v python3) $(command -v uinput-touchpad.py) swipe", timeout=60)
+        wait_for("a three finger swipe to move the focus right",
+                 lambda: state()["focus"]["window"] == newest, seconds=8)
         if script_state()["failures"]:
             raise Failed(f"the script failed: {script_state()['last_failures']}")
         return (f"{', '.join(apps)} side by side in tiles at x "
                 f"{[w['position'][0] for w in windows]} with widths "
                 f"{[w['size'][0] for w in windows]}; middles {values[:3]}, gaps are the "
-                f"background; logo+H moved the focus, logo+shift+L/H swapped two tiles")
+                f"background; logo+H moved the focus, logo+shift+L/H swapped two tiles, "
+                f"a three finger swipe on a touchpad moved the focus right")
 
     def faults():
         count = len(state()["windows"])

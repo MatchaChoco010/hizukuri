@@ -15,8 +15,9 @@ use proto_color::{AlphaMode, CompositeSpace, DecodeTransform, ImageDescription, 
 use proto_compositor::control::Request;
 use proto_compositor::image::{CompositeImage, EncodedImage};
 use proto_test_client::{
-    ClientEvent, ClientOptions, ConstraintRequest, ExternalDmabuf, InputMethodMode, Pattern,
-    PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform, create_udmabuf,
+    ClientEvent, ClientOptions, ConstraintRequest, DialogOptions, ExternalDmabuf, GestureKind,
+    InputMethodMode, Pattern, PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform,
+    create_udmabuf,
 };
 use serde_json::{Value, json};
 
@@ -48,6 +49,7 @@ device_tests!(
     a_module_that_does_not_compile_is_not_taken,
     the_script_decides_when_the_pointer_is_held,
     colors_set_through_the_protocol_are_drawn,
+    the_script_takes_the_gestures_it_wants,
 );
 
 // ---------------------------------------------------------------------------
@@ -2981,6 +2983,287 @@ fn the_script_decides_when_the_pointer_is_held(device: Device) {
         .wait_for(common::TIMEOUT, |e| *e == ClientEvent::PointerLocked)
         .unwrap()
         .expect("the pointer is locked again");
+    session.assert_script_healthy();
+    session.quit();
+}
+
+// ---------------------------------------------------------------------------
+// Touch and touchpad gestures
+// ---------------------------------------------------------------------------
+
+/// Pumps a client until `done`.
+#[track_caller]
+fn wait_client(client: &mut TestClient, what: &str, done: impl Fn(&TestClient) -> bool) {
+    let deadline = std::time::Instant::now() + common::TIMEOUT;
+    while !done(client) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {:?}",
+            client.events()
+        );
+        client
+            .pump(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
+    }
+}
+
+fn gestures(client: &TestClient) -> Vec<ClientEvent> {
+    client
+        .events()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                ClientEvent::GestureBegin { .. }
+                    | ClientEvent::GestureUpdate { .. }
+                    | ClientEvent::GestureEnd { .. }
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// The built-in tiling takes three finger swipes for itself: they move the
+/// focus, and no application sees any of them. Every other gesture goes to
+/// the application under the pointer. A script that answers `touch_down`
+/// decides the focus of a touch; the touch reaches the application anyway.
+fn the_script_takes_the_gestures_it_wants(device: Device) {
+    let project = script_project(
+        "gestures",
+        device,
+        &[(
+            "main",
+            r#"
+            hz.include("session")
+
+            -- What the tiling is asked about gestures, and every touch,
+            -- which leaves the focus alone.
+            local tile_gesture_begin = gesture_begin
+            local asked = {}
+            local touches = {}
+            function gesture_begin(g)
+                table.insert(asked, g.kind .. ":" .. g.fingers .. ":" .. tostring(g.window))
+                return tile_gesture_begin(g)
+            end
+            function touch_down(slot, x, y, window, surface)
+                table.insert(touches, { slot = slot, x = x, y = y, window = window })
+                return true
+            end
+            function report()
+                local result = { asked = asked, touches = touches }
+                asked = {}
+                touches = {}
+                return result
+            end
+            "#,
+        )],
+    );
+    let mut session = Session::start(
+        "gestures",
+        device,
+        &[
+            "--output-size",
+            "640x400",
+            "--script",
+            project.to_str().unwrap(),
+        ],
+    );
+    let (mut a, ida) = session.mapped_client(options("a", 100, 60, RED));
+    let (mut b, idb) = session.mapped_client(options("b", 100, 60, GREEN));
+    wait_tiles(
+        &mut session,
+        &mut [&mut a, &mut b],
+        &[("a", [8, 8], [308, 384]), ("b", [324, 8], [308, 384])],
+    );
+    for client in [&mut a, &mut b] {
+        client.request_touch();
+        wait_client(client, "a wl_touch", |c| c.has_touch());
+        client.request_pointer_gestures().unwrap();
+    }
+    wait_keyboard(&mut b);
+    pointer_to(&mut session, (478.0, 200.0));
+    a.clear_events();
+    b.clear_events();
+
+    // Three fingers to the left: the focus goes to the left tile.
+    for request in [
+        Request::GestureBegin {
+            kind: "swipe".into(),
+            fingers: 3,
+        },
+        Request::GestureUpdate {
+            kind: "swipe".into(),
+            dx: -40.0,
+            dy: 3.0,
+            scale: 1.0,
+            rotation: 0.0,
+        },
+        Request::GestureUpdate {
+            kind: "swipe".into(),
+            dx: -40.0,
+            dy: 0.0,
+            scale: 1.0,
+            rotation: 0.0,
+        },
+    ] {
+        session.send(request);
+    }
+    assert_eq!(
+        session.state()["touch"]["gesture"],
+        json!({ "kind": "swipe", "owner": "window_manager" })
+    );
+    session.send(Request::GestureEnd {
+        kind: "swipe".into(),
+        cancelled: false,
+    });
+    session.wait(&mut [&mut a, &mut b], "focus on a by a swipe", |s| {
+        s["focus"]["window"] == ida
+    });
+    wait_keyboard(&mut a);
+
+    // A pinch and a four finger swipe are the application's.
+    session.send(Request::GestureBegin {
+        kind: "pinch".into(),
+        fingers: 2,
+    });
+    session.send(Request::GestureUpdate {
+        kind: "pinch".into(),
+        dx: 0.0,
+        dy: 0.0,
+        scale: 1.5,
+        rotation: -2.0,
+    });
+    session.send(Request::GestureEnd {
+        kind: "pinch".into(),
+        cancelled: false,
+    });
+    session.send(Request::GestureBegin {
+        kind: "swipe".into(),
+        fingers: 4,
+    });
+    session.send(Request::GestureEnd {
+        kind: "swipe".into(),
+        cancelled: true,
+    });
+    b.wait_for(common::TIMEOUT, |e| {
+        matches!(
+            e,
+            ClientEvent::GestureEnd {
+                kind: GestureKind::Swipe,
+                ..
+            }
+        )
+    })
+    .unwrap()
+    .expect("the four finger swipe reaches b");
+    // Nothing of the three finger swipe reached anyone; it came first.
+    assert_eq!(
+        gestures(&b),
+        [
+            ClientEvent::GestureBegin {
+                kind: GestureKind::Pinch,
+                fingers: 2,
+                surface: SurfaceKind::Window
+            },
+            ClientEvent::GestureUpdate {
+                kind: GestureKind::Pinch,
+                dx: 0.0,
+                dy: 0.0,
+                scale: 1.5,
+                rotation: -2.0
+            },
+            ClientEvent::GestureEnd {
+                kind: GestureKind::Pinch,
+                cancelled: false
+            },
+            ClientEvent::GestureBegin {
+                kind: GestureKind::Swipe,
+                fingers: 4,
+                surface: SurfaceKind::Window
+            },
+            ClientEvent::GestureEnd {
+                kind: GestureKind::Swipe,
+                cancelled: true
+            },
+        ]
+    );
+    a.pump(Some(std::time::Duration::from_millis(20))).unwrap();
+    assert_eq!(gestures(&a), []);
+    let report = session.script("report", json!([]));
+    assert_eq!(
+        report["asked"],
+        json!([
+            format!("swipe:3:{idb}"),
+            format!("pinch:2:{idb}"),
+            format!("swipe:4:{idb}")
+        ]),
+        "{report}"
+    );
+
+    // A touch on b: the script keeps the focus on a; b gets the touch.
+    session.send(Request::TouchDown {
+        slot: 0,
+        x: 400.0,
+        y: 100.0,
+    });
+    session.send(Request::TouchFrame);
+    b.wait_for(common::TIMEOUT, |e| {
+        matches!(e, ClientEvent::TouchDown { .. })
+    })
+    .unwrap()
+    .expect("the touch reaches b");
+    assert!(b.events().contains(&ClientEvent::TouchDown {
+        id: 0,
+        surface: SurfaceKind::Window,
+        x: 76.0,
+        y: 92.0
+    }));
+    session.send(Request::TouchUp { slot: 0 });
+    session.send(Request::TouchFrame);
+    let report = session.script("report", json!([]));
+    let touches = report["touches"].as_array().expect("one touch");
+    assert_eq!(touches.len(), 1, "{report}");
+    let field = |name: &str| touches[0][name].as_f64();
+    assert_eq!(
+        [field("slot"), field("x"), field("y"), field("window")],
+        [Some(0.0), Some(400.0), Some(100.0), Some(idb as f64)],
+        "{report}"
+    );
+    assert_eq!(session.state()["focus"]["window"], ida);
+
+    // A dialog of b floats above the tiles and has the focus. A swipe to
+    // the left goes from its parent's tile, b, to the tile on its left, a;
+    // floating windows are passed over.
+    session.send(Request::FocusWindow { window: Some(idb) });
+    b.open_dialog(DialogOptions::default()).unwrap();
+    let state = session.wait(&mut [&mut a, &mut b], "the dialog has the focus", |s| {
+        window(s, "dialog").is_some_and(|w| w["mapped"] == true)
+            && s["focus"]["window"] == window(s, "dialog").unwrap()["id"]
+    });
+    let dialog = window(&state, "dialog").unwrap()["id"].as_u64().unwrap();
+    for request in [
+        Request::GestureBegin {
+            kind: "swipe".into(),
+            fingers: 3,
+        },
+        Request::GestureUpdate {
+            kind: "swipe".into(),
+            dx: -90.0,
+            dy: 0.0,
+            scale: 1.0,
+            rotation: 0.0,
+        },
+        Request::GestureEnd {
+            kind: "swipe".into(),
+            cancelled: false,
+        },
+    ] {
+        session.send(request);
+    }
+    session.wait(&mut [&mut a, &mut b], "focus on a from the dialog", |s| {
+        s["focus"]["window"] == ida
+    });
+    assert_ne!(dialog, ida);
     session.assert_script_healthy();
     session.quit();
 }

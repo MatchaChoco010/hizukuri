@@ -21,6 +21,7 @@ mod features;
 mod ime;
 mod pointer;
 mod satellite;
+mod touch;
 
 use std::collections::HashMap;
 use std::io;
@@ -52,6 +53,7 @@ pub use features::{PopupOptions, SurfaceKind, ToplevelRequest};
 pub use ime::{ImeEvent, InputMethodMode};
 pub use pointer::ConstraintRequest;
 pub use satellite::DialogOptions;
+pub use touch::GestureKind;
 use xkbcommon::xkb;
 
 /// Errors of the test client.
@@ -521,6 +523,44 @@ pub enum ClientEvent {
         width: i32,
         height: i32,
     },
+    /// `wl_touch.down`: touch point `id` went down on `surface`, at a
+    /// position in that surface.
+    TouchDown {
+        id: i32,
+        surface: SurfaceKind,
+        x: f64,
+        y: f64,
+    },
+    /// `wl_touch.motion`, in the coordinates of the surface of the down.
+    TouchMotion {
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+    TouchUp {
+        id: i32,
+    },
+    TouchFrame,
+    TouchCancel,
+    /// A touchpad gesture began on `surface` with this many fingers.
+    GestureBegin {
+        kind: GestureKind,
+        fingers: u32,
+        surface: SurfaceKind,
+    },
+    /// A swipe or pinch moved. `scale` and `rotation` are those of a pinch
+    /// (1 and 0 for a swipe).
+    GestureUpdate {
+        kind: GestureKind,
+        dx: f64,
+        dy: f64,
+        scale: f64,
+        rotation: f64,
+    },
+    GestureEnd {
+        kind: GestureKind,
+        cancelled: bool,
+    },
 }
 
 #[derive(Default)]
@@ -549,6 +589,9 @@ struct Globals {
     >,
     wlr_data_control_manager: Option<
         wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+    >,
+    pointer_gestures: Option<
+        wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::ZwpPointerGesturesV1,
     >,
 }
 
@@ -599,6 +642,7 @@ struct State {
     pointer: pointer::PointerState,
     clipboard: clipboard::ClipboardState,
     color: color::ColorState,
+    touch: touch::TouchState,
     /// Never create a window (a clipboard manager has none).
     windowless: bool,
     ime: ime::ImeState,
@@ -649,6 +693,7 @@ impl TestClient {
             pointer: pointer::PointerState::default(),
             clipboard: clipboard::ClipboardState::default(),
             color: color::ColorState::default(),
+            touch: touch::TouchState::default(),
             windowless: false,
             ime: ime::ImeState::default(),
             satellite: satellite::SatelliteState::default(),
@@ -1124,6 +1169,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                             Some(registry.bind(name, version.min(wanted), handle, ()));
                     }
                 }
+                "zwp_pointer_gestures_v1" => {
+                    // Version 3 has the hold gesture.
+                    state.globals.pointer_gestures =
+                        Some(registry.bind(name, version.min(3), handle, ()));
+                }
                 "zwlr_data_control_manager_v1" => {
                     // Version 2 has the primary selection.
                     state.globals.wlr_data_control_manager =
@@ -1352,7 +1402,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
             {
                 state.pointer_object = Some(seat.get_pointer(handle, ()));
             }
-            let _ = seat;
+            state.touch_capabilities(seat, capabilities, handle);
         }
     }
 }

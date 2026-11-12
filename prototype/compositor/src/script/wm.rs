@@ -24,7 +24,7 @@ use proto_gfx_core::{ErrorCode, GfxError};
 use super::{Mode, ScriptRuntime, Shared};
 use crate::fallback;
 use crate::scene::Hit;
-use crate::wm::{ConstraintView, Modifiers, WindowManager, WmRequest};
+use crate::wm::{ConstraintView, GestureStart, GestureStep, Modifiers, WindowManager, WmRequest};
 
 /// Something that happened, waiting to be told to the script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +72,15 @@ fn constraint_table(lua: &Lua, constraint: &ConstraintView) -> mlua::Result<Tabl
     t.set("kind", constraint.kind.name())?;
     t.set("active", constraint.active)?;
     Ok(t)
+}
+
+/// What a gesture is called in the script.
+fn gesture_name(kind: proto_wl::GestureKind) -> &'static str {
+    match kind {
+        proto_wl::GestureKind::Swipe => "swipe",
+        proto_wl::GestureKind::Pinch => "pinch",
+        proto_wl::GestureKind::Hold => "hold",
+    }
 }
 
 fn wm_error(message: impl Into<String>) -> mlua::Error {
@@ -367,6 +376,64 @@ impl WindowManager for ScriptWm {
                 .call::<_, Option<bool>>("pointer_button", (button, pressed, window, surface)),
             Some(Ok(Some(true)))
         )
+    }
+
+    fn touch_down(&mut self, slot: u32, position: (f64, f64), hit: Option<&Hit>) -> bool {
+        let window = hit.map(|h| h.window.0);
+        let surface = hit.map(|h| h.surface.0);
+        matches!(
+            self.runtime.call::<_, Option<bool>>(
+                "touch_down",
+                (slot, position.0, position.1, window, surface)
+            ),
+            Some(Ok(Some(true)))
+        )
+    }
+
+    fn gesture_begin(&mut self, gesture: &GestureStart) -> bool {
+        let table = (|| {
+            let t = self.runtime.host.lua().create_table()?;
+            t.set("kind", gesture_name(gesture.kind))?;
+            t.set("fingers", gesture.fingers)?;
+            t.set("window", gesture.hit.map(|h| h.window.0))?;
+            t.set("surface", gesture.hit.map(|h| h.surface.0))?;
+            mlua::Result::Ok(t)
+        })();
+        let Ok(table) = table else {
+            return false;
+        };
+        // Not defined, failed, or anything but `true`: the client has it.
+        matches!(
+            self.runtime.call::<_, Option<bool>>("gesture_begin", table),
+            Some(Ok(Some(true)))
+        )
+    }
+
+    fn gesture_step(&mut self, step: &GestureStep) {
+        let table = (|| {
+            let t = self.runtime.host.lua().create_table()?;
+            t.set("kind", gesture_name(step.kind))?;
+            t.set("dx", step.dx)?;
+            t.set("dy", step.dy)?;
+            t.set("scale", step.scale)?;
+            t.set("rotation", step.rotation)?;
+            mlua::Result::Ok(t)
+        })();
+        if let Ok(table) = table {
+            self.runtime.call::<_, ()>("gesture_update", table);
+        }
+    }
+
+    fn gesture_end(&mut self, kind: proto_wl::GestureKind, cancelled: bool) {
+        let table = (|| {
+            let t = self.runtime.host.lua().create_table()?;
+            t.set("kind", gesture_name(kind))?;
+            t.set("cancelled", cancelled)?;
+            mlua::Result::Ok(t)
+        })();
+        if let Ok(table) = table {
+            self.runtime.call::<_, ()>("gesture_end", table);
+        }
     }
 
     fn pointer_constraint(&mut self, constraint: &ConstraintView) -> Option<bool> {
