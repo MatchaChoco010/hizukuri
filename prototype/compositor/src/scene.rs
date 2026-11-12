@@ -21,11 +21,12 @@
 //!    the screen and where inside it. The scene decides, because only the
 //!    scene knows where things were drawn.
 //!
-//! [`FlatScene`] is the implementation used for verification: windows as
-//! flat rectangles at their logical position, drawn by the Rust renderer in
-//! `proto-render`. `script::ScriptScene` is the other implementation:
-//! drawing assembled by a script, behind the same three ports. `FlatScene`
-//! is the reference its output and timing are compared against.
+//! `script::ScriptScene` is the implementation that draws: drawing
+//! assembled by a script, behind these three ports. [`NullScene`] draws
+//! nothing and needs no GPU (protocol tests, `--no-renderer`).
+//! [`FlatScene`] draws windows as flat rectangles with the Rust renderer in
+//! `proto-render`; it is only used when asked for (`--renderer rust`), to
+//! compare the script's drawing against.
 
 use std::collections::HashMap;
 
@@ -310,6 +311,132 @@ pub trait Scene {
     /// `None` when the command is not one of them.
     fn control(&mut self, _command: &str, _args: &Value) -> Option<Result<Value, String>> {
         None
+    }
+}
+
+/// A scene that draws nothing and needs neither a GPU nor a script.
+///
+/// It keeps the visual state (windows at their logical position, their
+/// opacity) and answers hit tests with the fallback's
+/// ([`fallback::hit_test`]), so everything but drawing works: protocol
+/// tests, and the compositor started with `--no-renderer`. Contents are
+/// not kept.
+#[derive(Debug, Default)]
+pub struct NullScene {
+    windows: HashMap<WindowId, VisualWindow>,
+}
+
+impl NullScene {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Scene for NullScene {
+    fn window_added(&mut self, window: WindowId, position: (i32, i32)) {
+        self.windows.insert(
+            window,
+            VisualWindow {
+                position: (position.0 as f64, position.1 as f64),
+                opacity: 1.0,
+            },
+        );
+    }
+
+    fn window_moved(&mut self, window: WindowId, position: (i32, i32)) {
+        if let Some(visual) = self.windows.get_mut(&window) {
+            visual.position = (position.0 as f64, position.1 as f64);
+        }
+    }
+
+    fn window_removed(&mut self, window: WindowId) {
+        self.windows.remove(&window);
+    }
+
+    fn set_window_opacity(&mut self, window: WindowId, opacity: f32) -> bool {
+        match self.windows.get_mut(&window) {
+            Some(visual) => {
+                visual.opacity = opacity.clamp(0.0, 1.0);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn visual(&self, window: WindowId) -> Option<VisualWindow> {
+        self.windows.get(&window).copied()
+    }
+
+    fn surface_contents(
+        &mut self,
+        _surface: SurfaceId,
+        _contents: &BufferContents,
+        _damage: &[DamageRect],
+        _image_description: ImageDescription,
+        _alpha_mode: AlphaMode,
+    ) -> Result<(), SceneError> {
+        Ok(())
+    }
+
+    fn surface_removed(&mut self, _surface: SurfaceId) {}
+
+    fn has_contents(&self, _surface: SurfaceId) -> bool {
+        false
+    }
+
+    fn draw(
+        &mut self,
+        _output: &OutputInfo,
+        _target: Option<TargetId>,
+        _background: [f32; 3],
+        _windows: &[WindowView],
+        _cursor: Option<&CursorView>,
+    ) -> Result<DrawStatus, SceneError> {
+        Ok(DrawStatus::Drawn)
+    }
+
+    fn targets(&mut self) -> Targets<'_> {
+        None
+    }
+
+    fn hit_test(
+        &self,
+        point: (f64, f64),
+        windows: &[WindowView],
+        accepts_input: &dyn Fn(SurfaceId, f64, f64) -> bool,
+    ) -> Option<Hit> {
+        fallback::hit_test(
+            |window| self.windows.get(&window).map(|v| v.position),
+            point,
+            windows,
+            accepts_input,
+        )
+    }
+
+    fn locate(
+        &self,
+        point: (f64, f64),
+        surface: SurfaceId,
+        windows: &[WindowView],
+    ) -> Option<(f64, f64)> {
+        fallback::locate(
+            |window| self.windows.get(&window).map(|v| v.position),
+            point,
+            surface,
+            windows,
+        )
+    }
+
+    fn capture(&mut self, _target: TargetId) -> Result<Capture, SceneError> {
+        Err(SceneError::NoRenderer)
+    }
+
+    fn describe(&self) -> Value {
+        json!({
+            "kind": "none",
+            "renderer": Value::Null,
+            "frames_rendered": 0,
+        })
     }
 }
 
@@ -738,7 +865,7 @@ mod tests {
 
     #[test]
     fn visual_position_follows_the_logical_position() {
-        let mut scene = FlatScene::new(None);
+        let mut scene = NullScene::new();
         scene.window_added(WindowId(1), (10, 20));
         assert_eq!(scene.visual(WindowId(1)).unwrap().position, (10.0, 20.0));
         scene.window_moved(WindowId(1), (30, 40));
@@ -750,7 +877,7 @@ mod tests {
 
     #[test]
     fn opacity_is_clamped() {
-        let mut scene = FlatScene::new(None);
+        let mut scene = NullScene::new();
         scene.window_added(WindowId(1), (0, 0));
         assert_eq!(scene.visual(WindowId(1)).unwrap().opacity, 1.0);
         assert!(scene.set_window_opacity(WindowId(1), 0.25));
@@ -762,7 +889,7 @@ mod tests {
 
     #[test]
     fn hit_test_prefers_the_topmost_window_and_surface() {
-        let mut scene = FlatScene::new(None);
+        let mut scene = NullScene::new();
         scene.window_added(WindowId(1), (0, 0));
         scene.window_added(WindowId(2), (50, 50));
         // Bottom to top. Window 1 has a second surface above its first.
@@ -788,7 +915,7 @@ mod tests {
 
     #[test]
     fn hit_test_uses_the_visual_position() {
-        let mut scene = FlatScene::new(None);
+        let mut scene = NullScene::new();
         scene.window_added(WindowId(1), (0, 0));
         let windows = [view(1, &[(10, (0, 0))])];
         scene.window_moved(WindowId(1), (300, 0));
@@ -798,9 +925,13 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_without_a_renderer_draws_nothing_and_cannot_capture() {
-        let mut scene = FlatScene::new(None);
+    fn the_null_scene_draws_nothing_and_cannot_capture() {
+        let mut scene = NullScene::new();
         assert!(scene.targets().is_none());
+        assert!(matches!(
+            scene.capture(TargetId::from_raw(1)),
+            Err(SceneError::NoRenderer)
+        ));
         assert_eq!(scene.describe()["renderer"], Value::Null);
         assert_eq!(scene.describe()["frames_rendered"], 0);
         assert!(!scene.has_contents(SurfaceId(1)));

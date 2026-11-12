@@ -8,9 +8,11 @@
 //! each window should be configured with. It then makes the protocol side
 //! agree.
 //!
-//! Two implementations exist: [`proto_layout::Layout`], the plain floating
-//! layout written in Rust, and
-//! [`ScriptWm`](crate::script::ScriptWm), which asks a script.
+//! [`ScriptWm`](crate::script::ScriptWm) asks a script.
+//! [`fallback::Windows`](crate::fallback::Windows) is what the core does
+//! where nobody else decides; it runs without a script and without a GPU.
+//! [`proto_layout::Layout`], the floating layout written in Rust, is only
+//! used when asked for (`--wm rust`).
 
 use proto_layout::{ConfigureHint, Layout, OutputId, Placement, Point, Rect, Size, WindowId};
 

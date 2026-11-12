@@ -32,7 +32,7 @@ use proto_compositor::compositor::{Compositor, CompositorOptions};
 use proto_compositor::control::Request;
 use proto_compositor::scene::{FlatScene, Scene};
 use proto_compositor::script::{ScriptOptions, ScriptRuntime, ScriptScene};
-use proto_compositor::selftest::SelfTest;
+use proto_compositor::selftest::{PatternRenderer, SelfTest};
 use proto_render::{
     DeviceSelector, DmabufPlane, RenderError, Renderer, RendererOptions, TargetDesc, TargetId,
     TargetProvider, find_icd_manifest,
@@ -147,13 +147,13 @@ fn run_all(selector: DeviceSelector) {
     for scanout in [Auto, Dmabuf] {
         the_scanout_path_follows_the_modifiers(
             &selector,
-            Draws::Rust,
+            Draws::Script,
             Offer::TiledOnly,
             scanout,
             NoModifiers,
         );
     }
-    the_self_test_passes_on_the_mock(&selector);
+    the_self_test_passes_on_the_mock();
 }
 
 /// The script scene on the device this process sees first (the hardware
@@ -164,7 +164,7 @@ fn script_scene() -> ScriptScene {
         call_budget: Duration::from_secs(120),
         ..ScriptOptions::default()
     };
-    options.gpu.validation = std::env::var("HIZUKURI_TEST_VALIDATION").is_ok_and(|v| v == "1");
+    options.gpu.validation = validation();
     ScriptScene::new(ScriptRuntime::new(options).expect("starting the script"))
 }
 
@@ -176,11 +176,11 @@ fn drawing(selector: &DeviceSelector, draws: Draws, offer: Offer) -> (Drawing, V
             let modifiers = renderer.scanout_modifiers();
             (Drawing::Rust(Box::new(renderer)), modifiers)
         }
-        (Draws::Rust, Offer::TiledOnly) => (
-            Drawing::TiledOnly(TiledOnly(Box::new(renderer(selector)))),
+        (Draws::Rust, Offer::TiledOnly) => unimplemented!("only the script's drawing is wrapped"),
+        (Draws::Script, Offer::TiledOnly) => (
+            Drawing::TiledOnly(TiledOnly(Box::new(script_scene()))),
             vec![TILED_MODIFIER],
         ),
-        (Draws::Script, Offer::TiledOnly) => unimplemented!("only the Rust renderer is wrapped"),
         (Draws::Script, Offer::Driver) => {
             let mut scene = script_scene();
             let modifiers = scene
@@ -225,13 +225,19 @@ enum Offer {
 /// A modifier no driver has, standing in for a driver's tiled layout.
 const TILED_MODIFIER: u64 = 0x00ff_ffff_ffff_fffe;
 
-/// The Rust renderer, made to say that it can export scanout targets with
-/// [`TILED_MODIFIER`] only.
-struct TiledOnly(Box<Renderer>);
+/// The script's drawing, made to say that it can export scanout targets
+/// with [`TILED_MODIFIER`] only.
+struct TiledOnly(Box<ScriptScene>);
+
+impl TiledOnly {
+    fn inner(&mut self) -> &mut (dyn TargetProvider + 'static) {
+        self.0.targets().expect("the script scene has targets")
+    }
+}
 
 impl TargetProvider for TiledOnly {
     fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, RenderError> {
-        self.0.create_target(desc)
+        self.inner().create_target(desc)
     }
 
     fn scanout_modifiers(&self) -> Vec<u64> {
@@ -247,7 +253,7 @@ impl TargetProvider for TiledOnly {
     }
 
     fn destroy_target(&mut self, id: TargetId) {
-        self.0.destroy_target(id)
+        self.inner().destroy_target(id)
     }
 
     fn read_encoded_into(
@@ -256,7 +262,7 @@ impl TargetProvider for TiledOnly {
         destination: &mut [u8],
         stride: usize,
     ) -> Result<(), RenderError> {
-        self.0.read_encoded_into(target, destination, stride)
+        self.inner().read_encoded_into(target, destination, stride)
     }
 }
 
@@ -337,10 +343,9 @@ impl Rig {
                     Some(&mut offering),
                     on_kms_device,
                 )?;
-                // From here on the renderer itself draws; the backend only
+                // From here on the scene itself draws; the backend only
                 // asks what it can export when it sets up an output.
-                let renderer = *offering.0;
-                Compositor::new(options, backend, Box::new(FlatScene::new(Some(renderer)))).unwrap()
+                Compositor::new(options, backend, offering.0).unwrap()
             }
             Drawing::Script(mut scene) => {
                 let backend = KmsBackend::new(
@@ -350,13 +355,7 @@ impl Rig {
                     scene.targets(),
                     on_kms_device,
                 )?;
-                Compositor::with_window_manager(
-                    options,
-                    backend,
-                    Box::new(scene),
-                    Box::new(proto_layout::Layout::new()),
-                )
-                .unwrap()
+                Compositor::new(options, backend, Box::new(scene)).unwrap()
             }
         };
         Ok(Rig {
@@ -749,9 +748,23 @@ fn a_vt_switch_keeps_clients_and_shows_them_again(selector: &DeviceSelector, dra
     assert_eq!(text, "a", "modifiers are stuck after the VT switch");
 }
 
+fn validation() -> bool {
+    std::env::var("HIZUKURI_TEST_VALIDATION").is_ok_and(|v| v == "1")
+}
+
+/// The self test's renderer on the device this process sees first (the
+/// hardware device, or lavapipe in the child process).
+fn pattern_renderer() -> PatternRenderer {
+    PatternRenderer::new(proto_gfx_core::GpuConfig {
+        validation: validation(),
+        ..Default::default()
+    })
+    .expect("creating the self test's renderer")
+}
+
 /// The self test, driven by the mock instead of a display: it draws its
 /// pattern, sees the flips, and reports what a run on hardware would.
-fn the_self_test_passes_on_the_mock(selector: &DeviceSelector) {
+fn the_self_test_passes_on_the_mock() {
     for with_renderer in [true, false] {
         let clock = ManualClock::new(Duration::from_secs(100));
         let device = MockDevice::new(
@@ -760,12 +773,12 @@ fn the_self_test_passes_on_the_mock(selector: &DeviceSelector) {
                 .build(),
             clock.clone(),
         );
-        let mut renderer = with_renderer.then(|| renderer(selector));
+        let mut renderer = with_renderer.then(pattern_renderer);
         let mut backend = KmsBackend::new(
             device.clone(),
             clock,
             KmsConfig::default(),
-            proto_render::targets_of(renderer.as_mut()),
+            renderer.as_mut().and_then(PatternRenderer::targets),
             false,
         )
         .unwrap();
@@ -829,12 +842,17 @@ fn the_self_test_passes_on_the_mock(selector: &DeviceSelector) {
             serde_json::json!([640, 480])
         );
 
-        Backend::shutdown(&mut backend, proto_render::targets_of(renderer.as_mut()));
+        Backend::shutdown(
+            &mut backend,
+            renderer.as_mut().and_then(PatternRenderer::targets),
+        );
         assert_eq!(device.framebuffer_count(), 0);
-        if let Some(renderer) = &renderer
-            && let Some(errors) = renderer.validation_errors()
-        {
-            assert_eq!(errors, 0, "Vulkan validation errors");
+        if renderer.is_some() && validation() {
+            assert_eq!(
+                proto_gfx_core::validation_error_count(),
+                0,
+                "Vulkan validation errors"
+            );
         }
     }
 }

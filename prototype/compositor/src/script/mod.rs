@@ -35,8 +35,8 @@ use proto_gfx_core::{ErrorCode, Format, GfxError, Gpu, GpuConfig, Handle, ImageD
 use proto_gfx_lua::{HostOptions, ScriptError, ScriptHost};
 use proto_layout::WindowId;
 use proto_render::{
-    CompositeImage, DRM_FORMAT_XRGB8888, DmabufPlane, EncodedImage, OutputFormat, RenderError,
-    TargetDesc, TargetId, TargetProvider, Targets,
+    CompositeImage, DmabufPlane, EncodedImage, RenderError, TargetDesc, TargetId, TargetProvider,
+    Targets,
 };
 use proto_wl::{
     BufferContents, BufferSource, BufferTransform, BufferUpdate, DamageRect, ShmFormat, SurfaceId,
@@ -48,6 +48,7 @@ use crate::scene::{
     Capture, CursorView, DrawStatus, Hit, Scene, SceneError, SceneRequest, SurfaceView,
     VisualWindow, WindowView, WorldSnapshot, arrow_image,
 };
+use crate::targets::OutputImages;
 
 pub use wm::ScriptWm;
 
@@ -241,17 +242,6 @@ pub(crate) struct SurfaceTexture {
     pub y_inverted: bool,
 }
 
-/// The image(s) of an output.
-pub(crate) struct OutputTarget {
-    pub desc: TargetDesc,
-    /// One image for a scanout target (the backend rotates between targets),
-    /// two for an offscreen one: the script draws into the back image, and a
-    /// frame that fails never replaces the front image.
-    pub images: Vec<Handle>,
-    pub front: usize,
-    pub rendered: bool,
-}
-
 /// One recorded failure of the script.
 #[derive(Debug, Clone)]
 pub(crate) struct Failure {
@@ -270,8 +260,7 @@ pub(crate) struct Shared {
     /// refer to them by index, which makes caching per color cheap.
     pub colors: Vec<(ImageDescription, AlphaMode)>,
     pub arrow: Option<(Handle, Handle)>,
-    pub targets: HashMap<u64, OutputTarget>,
-    pub next_target: u64,
+    pub targets: OutputImages,
     pub requests: Vec<SceneRequest>,
     /// The compositing buffer the script offers for verification captures.
     pub debug_composite: Option<(Handle, Primaries)>,
@@ -343,6 +332,8 @@ pub struct ScriptRuntime {
     pub(crate) host: ScriptHost,
     pub(crate) shared: Rc<RefCell<Shared>>,
     pub(crate) options: ScriptOptions,
+    /// The table of windows, which the script edits when it manages them.
+    pub(crate) windows: Rc<RefCell<fallback::Windows>>,
     fallback: RefCell<fallback::Drawer>,
 }
 
@@ -362,8 +353,7 @@ impl ScriptRuntime {
             textures: HashMap::new(),
             colors: Vec::new(),
             arrow: None,
-            targets: HashMap::new(),
-            next_target: 1,
+            targets: OutputImages::new(),
             requests: Vec::new(),
             debug_composite: None,
             project: options.project.clone(),
@@ -383,6 +373,8 @@ impl ScriptRuntime {
             timing: Vec::new(),
         }));
         let for_api = Rc::clone(&shared);
+        let windows = Rc::new(RefCell::new(fallback::Windows::new()));
+        let windows_for_api = Rc::clone(&windows);
         let host = ScriptHost::with_setup(
             gpu,
             HostOptions {
@@ -390,13 +382,14 @@ impl ScriptRuntime {
                 time_budget: Some(options.call_budget),
                 sandbox: true,
             },
-            move |lua, gpu| api::register(lua, &for_api, gpu),
+            move |lua, gpu| api::register(lua, &for_api, &windows_for_api, gpu),
         )
         .map_err(|e| format!("creating the script VM: {e}"))?;
         let runtime = Rc::new(Self {
             host,
             shared,
             options,
+            windows,
             fallback: RefCell::new(fallback::Drawer::default()),
         });
         if let Err(error) = runtime.load(None) {
@@ -830,18 +823,6 @@ pub(crate) fn arrow_texture(
     Ok((image, slot))
 }
 
-fn output_format(format: OutputFormat) -> Format {
-    match format {
-        OutputFormat::Rgba8Unorm => Format::Rgba8Unorm,
-        OutputFormat::Rgba16Unorm => Format::Rgba16Unorm,
-        OutputFormat::Bgra8Unorm => Format::Bgra8Unorm,
-    }
-}
-
-fn provider_error(context: &str, error: GfxError) -> RenderError {
-    RenderError::Provider(format!("{context}: {error}"))
-}
-
 /// The output images, as the backend sees them.
 pub struct ScriptTargets {
     runtime: Rc<ScriptRuntime>,
@@ -850,33 +831,11 @@ pub struct ScriptTargets {
 impl TargetProvider for ScriptTargets {
     fn create_target(&mut self, desc: &TargetDesc) -> Result<TargetId, RenderError> {
         let mut gpu = self.runtime.gpu();
-        let mut images = Vec::new();
-        for _ in 0..2 {
-            let image = gpu
-                .create_image(&ImageDesc {
-                    format: output_format(desc.format),
-                    width: desc.width,
-                    height: desc.height,
-                    usage: ImageUsage::COLOR_TARGET | ImageUsage::COPY_SRC,
-                })
-                .map_err(|e| provider_error("creating an output image", e))?;
-            gpu.protect(image);
-            images.push(image);
-        }
-        drop(gpu);
-        let mut shared = self.runtime.shared.borrow_mut();
-        let id = shared.next_target;
-        shared.next_target += 1;
-        shared.targets.insert(
-            id,
-            OutputTarget {
-                desc: *desc,
-                images,
-                front: 0,
-                rendered: false,
-            },
-        );
-        Ok(TargetId::from_raw(id))
+        self.runtime
+            .shared
+            .borrow_mut()
+            .targets
+            .create(&mut gpu, desc)
     }
 
     fn scanout_modifiers(&self) -> Vec<u64> {
@@ -888,54 +847,21 @@ impl TargetProvider for ScriptTargets {
         desc: &TargetDesc,
         allowed_modifiers: &[u64],
     ) -> Result<(TargetId, DmabufPlane), RenderError> {
-        if desc.format != OutputFormat::Bgra8Unorm {
-            return Err(RenderError::UnsupportedFormat(
-                "scanout targets must be bgra8 (DRM XRGB8888)",
-            ));
-        }
         let mut gpu = self.runtime.gpu();
-        let (image, plane) = gpu
-            .create_scanout_image(desc.width, desc.height, allowed_modifiers)
-            .map_err(|e| match e.code {
-                ErrorCode::Unsupported => RenderError::ScanoutUnsupported,
-                _ => provider_error("creating a scanout image", e),
-            })?;
-        gpu.protect(image);
-        drop(gpu);
-        let mut shared = self.runtime.shared.borrow_mut();
-        let id = shared.next_target;
-        shared.next_target += 1;
-        shared.targets.insert(
-            id,
-            OutputTarget {
-                desc: *desc,
-                images: vec![image],
-                front: 0,
-                rendered: false,
-            },
-        );
-        Ok((
-            TargetId::from_raw(id),
-            DmabufPlane {
-                fd: plane.fd,
-                width: desc.width,
-                height: desc.height,
-                fourcc: DRM_FORMAT_XRGB8888,
-                modifier: plane.modifier,
-                stride: plane.stride,
-                offset: plane.offset,
-            },
-        ))
+        self.runtime
+            .shared
+            .borrow_mut()
+            .targets
+            .create_scanout(&mut gpu, desc, allowed_modifiers)
     }
 
     fn destroy_target(&mut self, id: TargetId) {
-        let target = self.runtime.shared.borrow_mut().targets.remove(&id.raw());
-        if let Some(target) = target {
-            let mut gpu = self.runtime.gpu();
-            for image in target.images {
-                let _ = gpu.destroy(image);
-            }
-        }
+        let mut gpu = self.runtime.gpu();
+        self.runtime
+            .shared
+            .borrow_mut()
+            .targets
+            .destroy(&mut gpu, id);
     }
 
     fn read_encoded_into(
@@ -944,22 +870,15 @@ impl TargetProvider for ScriptTargets {
         destination: &mut [u8],
         stride: usize,
     ) -> Result<(), RenderError> {
-        let image = {
-            let shared = self.runtime.shared.borrow();
-            let target = shared
-                .targets
-                .get(&target.raw())
-                .ok_or(RenderError::UnknownTarget)?;
-            if !target.rendered {
-                return Err(RenderError::TargetNotRendered);
-            }
-            target.images[target.front]
-        };
+        // Fail before ending the frame, like a read of nothing would.
+        self.runtime.shared.borrow().targets.shown(target)?;
         self.runtime.finish_frame(false);
+        let mut gpu = self.runtime.gpu();
         self.runtime
-            .gpu()
-            .read_image_into(image, destination, stride)
-            .map_err(|e| provider_error("reading an output image", e))
+            .shared
+            .borrow()
+            .targets
+            .read_into(&mut gpu, target, destination, stride)
     }
 }
 
@@ -1303,12 +1222,11 @@ impl Scene for ScriptScene {
         }
         let (image, scanout) = {
             let shared = runtime.shared.borrow();
-            let Some(target) = shared.targets.get(&target.raw()) else {
+            let Some(target) = shared.targets.get(target) else {
                 return Err(SceneError::Render(RenderError::UnknownTarget));
             };
             // Draw into the image that is not shown.
-            let back = (target.front + 1) % target.images.len();
-            (target.images[back], target.images.len() == 1)
+            (target.back(), target.is_scanout())
         };
         if let Err(error) = runtime.ensure_frame() {
             // The device is gone or stuck. Nothing can be drawn; keep going
@@ -1384,9 +1302,8 @@ impl Scene for ScriptScene {
             .finish_frame((scanout || runtime.options.wait_for_gpu) && status == DrawStatus::Drawn);
         if status == DrawStatus::Drawn {
             let mut shared = runtime.shared.borrow_mut();
-            if let Some(target) = shared.targets.get_mut(&target.raw()) {
-                target.front = (target.front + 1) % target.images.len();
-                target.rendered = true;
+            if let Some(target) = shared.targets.get_mut(target) {
+                target.flip();
             }
         }
         Ok(status)
@@ -1475,7 +1392,7 @@ impl Scene for ScriptScene {
             let shared = self.runtime.shared.borrow();
             let target = shared
                 .targets
-                .get(&target.raw())
+                .get(target)
                 .ok_or(RenderError::UnknownTarget)?;
             if !target.rendered {
                 return Err(RenderError::TargetNotRendered.into());

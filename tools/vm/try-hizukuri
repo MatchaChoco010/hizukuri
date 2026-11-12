@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Gets the compositor into the verification VM, ready to be started by hand:
-# builds it, makes sure the VM runs, and sends the binaries and the built-in
-# scripts to the guest.
+# builds it, makes sure the VM runs, and sends the binaries, the built-in
+# scripts and the draw-only project to the guest.
 #
 #   tools/vm/try-hizukuri          VM without a window (SSH and QMP)
 #   tools/vm/try-hizukuri --gtk    VM in a window
@@ -63,15 +63,18 @@ fi
 # it by `hzk script` and is left alone here.
 "$vm" ssh 'rm -rf ~/hzk-scripts.orig && mkdir -p ~/hzk-scripts.orig'
 "$vm" push "$root/prototype/compositor/scripts/" hzk-scripts.orig/
+# The project `hzk` runs by default: the built-in renderer, without window
+# management, so that the core's fallback places the windows.
+"$vm" ssh 'rm -rf ~/hzk-draw-only && mkdir -p ~/hzk-draw-only'
+"$vm" push "$root/prototype/compositor/projects/draw-only/" hzk-draw-only/
 
 cat <<TEXT
 
 The VM runs ($display) and has the binaries. In the guest:
   1. log in on the console: user hizukuri, password hizukuri
-  2. run:  hzk            (CPU rendering, copied into dumb buffers)
+  2. run:  hzk            (drawn on the CPU, copied into dumb buffers)
      or:   hzk script     (drawing and tiling by the scripts in ~/hzk-scripts,
                            which can be edited and reloaded while it runs)
-     or:   hzk venus      (in a VM started with HIZUKURI_VM_GPU=venus)
   3. Ctrl+Alt+Backspace quits. \`hzk --help\` lists the options.
 Stop the VM with: tools/vm/vm stop
 TEXT

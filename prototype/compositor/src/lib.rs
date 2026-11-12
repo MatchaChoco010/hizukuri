@@ -4,12 +4,13 @@
 //! This crate connects the pieces:
 //!
 //! - [`compositor`]: the core. Reacts to protocol events
-//!   (`proto-wl`), asks the layout (`proto-layout`) where windows go,
-//!   keeps the scene, draws with the renderer (`proto-render`) and talks
-//!   to the backend (`proto-backend`).
+//!   (`proto-wl`), asks the window manager ([`wm`]) where windows go, has
+//!   the scene ([`scene`]) draw, and talks to the backend
+//!   (`proto-backend`).
 //! - [`scene`]: the visual state of windows (where they are drawn, how
 //!   opaque they are) and the textures of their surfaces. Kept apart from
-//!   the logical state that protocols and the layout deal with.
+//!   the logical state that protocols and the window manager deal with.
+//! - [`script`]: drawing and window management written in a script.
 //! - [`control`]: the control interface used for verification: capture the
 //!   screen, inject input, dump state, quit.
 //! - [`fallback`]: the least drawing, placement and hit testing the core
@@ -30,5 +31,6 @@ pub mod safety;
 pub mod scene;
 pub mod script;
 pub mod selftest;
+pub mod targets;
 pub mod timing;
 pub mod wm;

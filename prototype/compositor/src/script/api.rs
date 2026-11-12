@@ -243,7 +243,12 @@ pub fn clear_modules(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// Installs the global `hz` table.
-pub fn register(lua: &Lua, shared: &SharedRef, gpu: &Rc<RefCell<Gpu>>) -> mlua::Result<()> {
+pub fn register(
+    lua: &Lua,
+    shared: &SharedRef,
+    windows: &Rc<RefCell<crate::fallback::Windows>>,
+    gpu: &Rc<RefCell<Gpu>>,
+) -> mlua::Result<()> {
     let hz = lua.create_table()?;
     clear_modules(lua)?;
 
@@ -580,7 +585,7 @@ pub fn register(lua: &Lua, shared: &SharedRef, gpu: &Rc<RefCell<Gpu>>) -> mlua::
         )?;
     }
 
-    super::wm::register(lua, &hz, shared)?;
+    super::wm::register(lua, &hz, shared, windows)?;
 
     lua.globals().set("hz", hz)?;
     Ok(())

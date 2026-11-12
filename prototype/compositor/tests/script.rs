@@ -10,7 +10,7 @@ mod common;
 
 use std::os::fd::AsFd;
 
-use common::{Device, Drawing, Session, options, script_project, window};
+use common::{DRAW_ONLY_SESSION, Device, Drawing, Session, options, script_project, window};
 use proto_color::{AlphaMode, CompositeSpace, DecodeTransform, ImageDescription, Primaries};
 use proto_compositor::control::Request;
 use proto_render::{CompositeImage, EncodedImage};
@@ -407,9 +407,11 @@ fn a_script_sees_what_the_core_knows_about_a_surface(device: Device) {
     let project = script_project(
         "inspect",
         device,
-        &[(
-            "main",
-            r#"
+        &[
+            ("session", DRAW_ONLY_SESSION),
+            (
+                "main",
+                r#"
             hz.include("session")
             function inspect(title)
                 for _, w in hz.windows() do
@@ -428,7 +430,8 @@ fn a_script_sees_what_the_core_knows_about_a_surface(device: Device) {
                 gfx.destroy(handle)
             end
             "#,
-        )],
+            ),
+        ],
     );
     let mut session = Session::start(
         "inspect",
@@ -1241,9 +1244,11 @@ fn the_script_decides_what_a_point_hits(device: Device) {
     let project = script_project(
         "ghost",
         device,
-        &[(
-            "main",
-            r#"
+        &[
+            ("session", DRAW_ONLY_SESSION),
+            (
+                "main",
+                r#"
             hz.include("session")
             local usual = hit_test
             local ghost
@@ -1264,7 +1269,8 @@ fn the_script_decides_what_a_point_hits(device: Device) {
                 end)
             end
             "#,
-        )],
+            ),
+        ],
     );
     let mut session = Session::start(
         "ghost",
@@ -1875,7 +1881,11 @@ fn assert_client_alive(
 /// the screen shows the windows (drawn by the built-in fallback, marked as
 /// such). Putting the script back in charge restores the normal picture.
 fn a_script_that_fails_to_draw_leaves_a_usable_session(device: Device) {
-    let project = script_project("faulty-frame", device, &[("main", FAULTY)]);
+    let project = script_project(
+        "faulty-frame",
+        device,
+        &[("session", DRAW_ONLY_SESSION), ("main", FAULTY)],
+    );
     let mut session = Session::start(
         "faulty-frame",
         device,
@@ -1978,7 +1988,11 @@ fn a_script_that_fails_to_draw_leaves_a_usable_session(device: Device) {
 /// good frame and ask the script again later. A frame that failed half-way
 /// never reaches the screen. Clients are not stalled meanwhile.
 fn holding_the_last_frame_while_the_script_fails(device: Device) {
-    let project = script_project("faulty-hold", device, &[("main", FAULTY)]);
+    let project = script_project(
+        "faulty-hold",
+        device,
+        &[("session", DRAW_ONLY_SESSION), ("main", FAULTY)],
+    );
     let mut session = Session::start(
         "faulty-hold",
         device,

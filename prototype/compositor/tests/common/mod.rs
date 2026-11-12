@@ -347,12 +347,20 @@ impl Session {
         isolate(&mut command, &runtime_dir);
         if device.is_script() {
             command.args(["--renderer", "script"]);
+            // Unless a test is about the script's window management, the
+            // script only draws and the fallback places the windows.
+            if !extra_args.contains(&"--wm") && !extra_args.contains(&"--script") {
+                command.arg("--script").arg(draw_only_project());
+            }
             // The tests are not about how fast the machine is: a call into
             // the script only times out when it is stuck. A scenario about
             // the budget itself passes its own.
             if !extra_args.contains(&"--script-budget-ms") {
                 command.args(["--script-budget-ms", "120000"]);
             }
+        } else {
+            // What the script's drawing is compared against.
+            command.args(["--renderer", "rust", "--wm", "rust"]);
         }
         match device.gpu {
             Gpu::Hardware => {
@@ -774,6 +782,18 @@ pub fn options(title: &str, width: u32, height: u32, color: [u8; 4]) -> ClientOp
         ..Default::default()
     }
 }
+
+/// The project in `projects/draw-only`: the built-in renderer, and no
+/// window management, so the core's fallback places the windows. Script
+/// sessions start with it unless a test gives `--wm` or `--script`.
+pub fn draw_only_project() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("projects/draw-only")
+}
+
+/// The `session` module of [`draw_only_project`]. A test project that
+/// includes `session` and is to run without the tiling has this module as
+/// its `session`.
+pub const DRAW_ONLY_SESSION: &str = include_str!("../../projects/draw-only/session.luau");
 
 /// Writes a script project (module name, source) for a test and returns its
 /// directory. Modules it does not have come from the built-in project.

@@ -6,29 +6,27 @@ development shell (the guest has the libraries of that shell):
 
     tools/vm/vm test tools/vm-check.py [--out DIR] [--only lavapipe,script] [--skip-build]
 
-No GPU is needed: the guest renders on the CPU (lavapipe). Two parts need the
-VM started in another way and are not part of the default run:
+No GPU is needed: the guest renders on the CPU (lavapipe). One part needs the
+VM started in another way and is not part of the default run:
 
     HIZUKURI_VM_CPU=host,-hypervisor tools/vm/vm test tools/vm-check.py --only real-hardware
-    HIZUKURI_VM_GPU=venus tools/vm/vm test tools/vm-check.py --only venus
-
-The second one needs a GPU on the machine that runs the VM. Asking for a part
-on a VM that was not started for it is a failure, not a skip.
 
 With the VM already running:
 
     HIZUKURI_VM=tools/vm/vm tools/vm-check.py
 
-It builds the binaries, sends them to the guest, and for a scanout path
-
-    lavapipe  the renderer runs on the CPU, frames are copied into dumb buffers
-    venus     the renderer runs on the virtio-gpu (Venus), frames are scanned
-              out as dma-bufs
-
+It builds the binaries, sends them and the draw-only project
+(`prototype/compositor/projects/draw-only`) to the guest, and in the part
+`lavapipe` (the script draws on the CPU, frames are copied into dumb buffers)
 starts the compositor on a guest VT, shows windows, injects input through
 QMP, switches VTs, and ends the compositor in each of the supported ways.
 What is on screen is read back through the VM's VNC socket and compared as
 numbers.
+
+The compositor draws with the script. Unless an item is about the script's
+window management (`--wm script` with the built-in project), it runs the
+draw-only project: the built-in renderer, and the core's fallback places
+the windows, so that windows stay where the items put them.
 
 The part `script` runs the script layer (the script renderer and the script
 window manager, on lavapipe) with real applications: tiling, faults in every
@@ -88,34 +86,34 @@ TOLERANCE = 2
 KEY_A = 30
 BTN_LEFT = 272
 
+# Where the draw-only project goes in the guest.
+DRAW_ONLY = "/home/hizukuri/hzk-draw-only"
+
 PATHS = {
-    "venus": {
-        "args": ["--vulkan-device", "auto", "--kms-scanout", "dmabuf"],
-        "selftest": ["--vulkan-device", "auto", "--scanout", "dmabuf"],
-        "scanout": "dmabuf",
-        "renderer": lambda r: "venus" in (r.get("driver", "") + r.get("device", "")).lower()
-        or "virtio" in r.get("device", "").lower(),
-        # The script renderer needs VK_EXT_descriptor_heap, which Venus does
-        # not offer.
-        "script_layer": False,
-    },
     "lavapipe": {
         "args": ["--vulkan-device", "cpu", "--kms-scanout", "cpu"],
         "selftest": ["--vulkan-device", "cpu", "--scanout", "cpu"],
         "scanout": "cpu-copy",
         "renderer": lambda r: r.get("kind") == "cpu"
         or "llvmpipe" in r.get("device", "").lower(),
-        "script_layer": True,
     },
 }
 
 # What runs on any machine, in this order, when nothing is asked for.
 DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs"]
-# What needs the VM started in a particular way: the part, the line of
-# `vm status` that shows it, and how to start the VM for it.
-VM_REQUIREMENTS = {
-    "venus": ("gpu: venus", "HIZUKURI_VM_GPU=venus (needs a GPU on the machine that runs the VM)"),
-}
+
+
+def drawing(args):
+    """The compositor's arguments with what draws and what places windows:
+    the draw-only project unless the arguments choose a project or the
+    window manager, and the Rust layout with the Rust renderer."""
+    args = list(args)
+    if "--wm" not in args:
+        if "--renderer" in args and args[args.index("--renderer") + 1] == "rust":
+            args += ["--wm", "rust"]
+        elif "--script" not in args:
+            args += ["--script", DRAW_ONLY]
+    return args
 
 
 class Failed(Exception):
@@ -138,11 +136,6 @@ def vm(*args, check=True, timeout=120):
             f"{(result.stderr or result.stdout).strip()[-600:]}"
         )
     return result.stdout
-
-
-def vm_has(line):
-    """Whether `vm status` has this line: how the VM was started."""
-    return line in vm("status", check=False).splitlines()
 
 
 def guest(command, check=True, timeout=120):
@@ -330,7 +323,7 @@ class Run:
         vm(
             "tty-run", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms",
             "--socket", SOCKET, "--background", BACKGROUND_ARG, "--cursor", "on",
-            *self.spec["args"], *extra,
+            *drawing([*self.spec["args"], *extra]),
         )
         try:
             wait_for("the control socket to answer", lambda: self.unit_active()
@@ -636,7 +629,7 @@ class Run:
     def check_exit_after(self):
         started = time.monotonic()
         vm("tty-run", "--wait", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms",
-           "--socket", SOCKET, *self.spec["args"], "--exit-after", "3", timeout=60)
+           "--socket", SOCKET, *drawing([*self.spec["args"], "--exit-after", "3"]), timeout=60)
         elapsed = time.monotonic() - started
         log = vm("tty-log", check=False)
         with open(os.path.join(self.out, "proto-compositor-exit-after.log"), "w") as file:
@@ -808,15 +801,10 @@ class Run:
         screen = tuple(int(v) for v in vm("screen-size").strip().split("x"))
         notes = []
 
-        # 1. A Vulkan client on the guest's default driver. With Venus,
-        # vkcube presents through zwp_linux_dmabuf_v1 once it is offered.
-        # Whether the compositor can read such a buffer by mapping it
-        # depends on the driver; both outcomes are recorded, neither fails:
-        # what must hold is that the buffer arrives as a dmabuf and the
-        # compositor keeps running. Without a GPU the default driver is
-        # lavapipe, which presents through wl_shm: then the window must be
+        # 1. A Vulkan client on the guest's default driver. Without a GPU
+        # that is lavapipe, which presents through wl_shm: the window must be
         # shown.
-        expected_kind = "dmabuf" if vm_has("gpu: venus") else "shm"
+        expected_kind = "shm"
         if guest("command -v vkcube || true").strip():
             cube_pid = spawn(
                 f"env -u DISPLAY XDG_RUNTIME_DIR={self.runtime} WAYLAND_DISPLAY={SOCKET} "
@@ -1146,9 +1134,8 @@ class Run:
         self.stop()
         self.item("protocols", self.check_protocols)
         self.stop()
-        if self.spec["script_layer"]:
-            self.item("script-layer", self.check_script_layer)
-            self.stop()
+        self.item("script-layer", self.check_script_layer)
+        self.stop()
         self.item("selftest", lambda: self.selftest("selftest"))
         self.item("selftest-1080p", lambda: self.selftest("selftest-1080p", "--mode", "1920x1080"))
         self.stop()
@@ -1202,7 +1189,7 @@ def check_vkms(out, uid, results):
             f"env XDG_RUNTIME_DIR={runtime} LIBSEAT_BACKEND=noop {GUEST_BIN}/proto-compositor "
             f"--backend kms --socket {socket} --kms-device {found['card']} "
             f"--vulkan-device cpu --kms-scanout cpu --background {BACKGROUND_ARG} "
-            f"--exit-after 30", "vkms-session.log")]
+            f"--script {DRAW_ONLY} --exit-after 30", "vkms-session.log")]
         try:
             wait_for("the control socket", lambda: "ok" in guest(f"{ctl} ping", check=False),
                      seconds=15)
@@ -1311,7 +1298,7 @@ class Part:
 
     def start(self, *args):
         vm("tty-run", "--", f"{GUEST_BIN}/proto-compositor", "--backend", "kms", "--socket", SOCKET,
-           "--background", BACKGROUND_ARG, "--vulkan-device", "cpu", *args)
+           "--background", BACKGROUND_ARG, "--vulkan-device", "cpu", *drawing(args))
         try:
             wait_for("the control socket to answer", lambda: self.unit_active()
                      and self.ctl("ping").get("ok"), seconds=20)
@@ -1596,8 +1583,7 @@ def check_script(out, uid, results):
     scripting language) as a DRM/KMS session, beyond what
     `lavapipe/script-layer` covers: real applications, faults in every hook,
     editing the script while it runs, VT switching, the watchdog, and a
-    comparison with the Rust renderer. Runs on lavapipe: the script renderer
-    needs VK_EXT_descriptor_heap, which Venus in the guest does not have."""
+    comparison with the Rust renderer. Runs on lavapipe."""
     part = Part("script", out, uid, results)
     project = f"{GUEST_DIR}/script-project"
     env = f"env -u DISPLAY XDG_RUNTIME_DIR={part.runtime} WAYLAND_DISPLAY={SOCKET}"
@@ -1832,7 +1818,8 @@ def check_script(out, uid, results):
         return f"main thread frozen: aborted after {int(answer[1]) / 1000:.1f} s (--watchdog 5)"
 
     def scene():
-        """A fixed scene with the Rust layout: the same for both renderers."""
+        """A fixed scene, with windows placed by the control socket: the same
+        for both renderers."""
         client = f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} --duration 90"
         placed = []
         for title, size, color, x, y in (("a", "300x200", "C86432FF", 100, 100),
@@ -2096,8 +2083,7 @@ def main():
     parser.add_argument("--only", default=",".join(DEFAULT_PARTS),
                         help="comma separated parts to check: lavapipe, script, vkms, safety, "
                              "outputs (the default: all of these), real-hardware (needs "
-                             "HIZUKURI_VM_CPU=host,-hypervisor), venus (needs "
-                             "HIZUKURI_VM_GPU=venus)")
+                             "HIZUKURI_VM_CPU=host,-hypervisor)")
     parser.add_argument("--skip-build", action="store_true",
                         help="send the binaries that are already built")
     args = parser.parse_args()
@@ -2119,8 +2105,10 @@ def main():
                 for name in ("proto-compositor", "proto-ctl", "proto-test-client")]
     results = []
     try:
-        guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR}")
+        guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR} && rm -rf {DRAW_ONLY} && mkdir -p {DRAW_ONLY}")
         vm("push", *binaries, "bin/", timeout=300)
+        vm("push", os.path.join(ROOT, "prototype", "compositor", "projects", "draw-only") + "/",
+           f"{DRAW_ONLY}/")
         uid = int(guest("id -u").strip())
     except (Failed, ValueError) as error:
         print(f"FAIL setup: {error}")
@@ -2167,13 +2155,7 @@ def main():
     seconds = {}
     for name in names:
         began = time.monotonic()
-        needed = VM_REQUIREMENTS.get(name)
-        if needed and not vm_has(needed[0]):
-            # Asked for on a VM that cannot run it: say so, as a failure.
-            detail = f"the VM was not started for this part; start it with {needed[1]}"
-            print(f"FAIL {name}/configured: {detail}", flush=True)
-            results.append({"item": f"{name}/configured", "status": "FAIL", "detail": detail})
-        elif name in PARTS:
+        if name in PARTS:
             PARTS[name](out, uid, results)
         else:
             Run(name, out, uid, results).run()
