@@ -221,6 +221,14 @@ pub enum WindowRequest {
     ShowMenu {
         position: (i32, i32),
     },
+    /// A client asks for the window to be activated (raised and focused)
+    /// with an `xdg_activation_v1` token. `from_input`: the token was made
+    /// for an input event of the client that had the keyboard focus (a
+    /// click, a key), not handed out without one. Whether to follow
+    /// (focus stealing) is the window manager's decision.
+    Activate {
+        from_input: bool,
+    },
 }
 
 /// The edges of a window that an interactive resize moves.
@@ -631,6 +639,17 @@ pub struct WindowInfo {
     pub maximized: bool,
     /// Whether the client was told it is fullscreen, and acknowledged it.
     pub fullscreen: bool,
+    /// The window this one belongs to (`xdg_toplevel.set_parent`): a
+    /// dialog's main window, for example.
+    pub parent: Option<WindowId>,
+    /// The smallest and largest size the client accepts
+    /// (`xdg_toplevel.set_min_size`, `set_max_size`), in logical
+    /// coordinates. Zero on an axis means no limit.
+    pub min_size: (i32, i32),
+    pub max_size: (i32, i32),
+    /// The process id of the client, as the kernel reports it for the
+    /// connection.
+    pub client_pid: Option<i32>,
 }
 
 /// Description of an output announced to clients.

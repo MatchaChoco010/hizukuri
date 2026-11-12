@@ -53,10 +53,15 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | Mesa | lavapipe。Vulkan の loader は、lavapipe だけを見る（`VK_DRIVER_FILES`） |
 | アプリ | `foot`、weston（`weston-terminal`）、`alacritty`、`vulkan-tools`（`vkcube`、`vulkaninfo`）、`wl-clipboard` |
 | 入力メソッド | fcitx5 と、日本語の変換エンジンの Anthy（`fcitx5-anthy`）だけ。Qt と GTK の IM module、設定の道具は入れない。session bus のための `dbus`（`dbus-run-session`）。日本語のフォント（IPAex） |
+| X11 のアプリ | `xwayland-satellite`（Xwayland を連れてくる）、`xterm`、`xclip`、`xdotool`、`xprop`、`xwininfo` |
 | 機器と入力を調べる道具 | `drm_info`、`libinput`、`evtest`、`wayland-utils`、`wev` |
-| そのほか | `gdb`、`strace`、`rsync`、`vim`、validation layer、Python（libevdev つき）、等幅のフォント、カーソルのテーマ |
+| そのほか | `gdb`、`strace`、`rsync`、`vim`、validation layer、Python（libevdev と python-xlib つき）、等幅のフォント、カーソルのテーマ |
 | session | logind と polkit。seatd も入っている（自動では起動しない。`tty-run --seatd` が起動する） |
-| 補助のスクリプト | `tools/vm/guest/` のもの（`tty-run`、`hzk`、`vkms-load`、`freeze-main-loop`、`uinput-touchpad.py`）。ゲストの PATH にある |
+| 補助のスクリプト | `tools/vm/guest/` のもの（`tty-run`、`hzk`、`vkms-load`、`freeze-main-loop`、`uinput-touchpad.py`、`x11-test-client.py`）。ゲストの PATH にある |
+
+`x11-test-client.py` は、X11 の検証用のクライアントである。1 色で塗ったウィンドウ（色は X server が塗る）を出し、受け取ったイベントを
+1 行 1 つの JSON で書く。名前付きパイプ（`--commands`）から、命令を受ける: メニュー（override-redirect のウィンドウ）を開く、
+ダイアログ（transient のウィンドウ）を開く、fullscreen を求める（`_NET_WM_STATE`）、CLIPBOARD と PRIMARY に置く、そこから貼り付ける。
 
 ゲストに何かを足すには、`tools/vm/guest.nix` を書き換える。次の `start` が、ゲストを作り直す。
 
@@ -225,6 +230,10 @@ VT の上の session から実行する。コンソールにログインして�
 3. マウスを動かすと、カーソルが付いてくる。ウィンドウをクリックすると、focus が移る。キーを打つと、端末に入る。
 4. Ctrl+Alt+F2 で、別のコンソールに切り替わる。元のコンソールの番号の Ctrl+Alt+F*n* で戻る（`hzk` が、起動のときに表示する）。
 5. Ctrl+Alt+Backspace で、compositor が終わり、コンソールに戻る。何もしなくても、600 秒で、自分で終わる。
+
+X11 のアプリも動く。`hzk` は、compositor を `--xwayland-satellite` で起動し、開いた端末に `DISPLAY` を渡す。
+端末で `xterm &` と打つと、xwayland-satellite が起動し、xterm が出る。xwayland-satellite の出力は、ゲストの
+`~/xwayland-satellite.log` にある。
 
 `hzk` の指定:
 
@@ -414,7 +423,7 @@ GPU は、要らない。数分で終わる。
 
 | 指定 | 内容 |
 | --- | --- |
-| `--only PART,...` | 回す部を選ぶ。既定は、`lavapipe,script,vkms,safety,outputs,ime` |
+| `--only PART,...` | 回す部を選ぶ。既定は、`lavapipe,script,vkms,safety,outputs,ime,x11` |
 | `--out DIR` | 結果を置く場所。既定は、`artifacts/vm-check/<日時>/` |
 | `--skip-build` | ビルドしない。すでにあるバイナリを送る |
 
@@ -426,6 +435,7 @@ GPU は、要らない。数分で終わる。
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
 | `outputs` | 2 つの出力。使う出力の指定、ほかの出力に触れないこと、hotplug | 既定 |
 | `ime` | 実際の IME（fcitx5 と Anthy）で、foot に日本語を入れる。スクリプトの層（組み込みのプロジェクト）で動かす。下の「IME の部」 | 既定 |
+| `x11` | X11 のアプリ（xwayland-satellite と Xwayland）を、スクリプトの層で。最初の X11 のクライアントでの起動、ウィンドウの表示、キーとポインター、メニュー（popup）、ダイアログ（親のある toplevel）、fullscreen、X11 と Wayland の間のコピーと貼り付け（CLIPBOARD と PRIMARY）、xterm とそのメニュー、xwayland-satellite が終わったときと起動し直し、出力の倍率が 1.5 のときのバッファの大きさ | 既定 |
 | `real-hardware` | VM の外で起動するときの安全策 | `HIZUKURI_VM_CPU=host,-hypervisor` |
 
 - compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目は、組み込みのプロジェクトで動かす。そのほかは、
@@ -527,6 +537,7 @@ CI の全体は、[テストと CI](testing-and-ci.md)にある。
 | Vulkan 1.4 と descriptor heap での描画を、KMS に出す | lavapipe、dumb buffer | `lavapipe`、`script` |
 | 出した画面の、画素の値 | VNC（virtio-gpu） | `lavapipe`、`script`、`outputs` |
 | 複数の出力、hotplug | virtio-gpu の 2 つ目の出力、`vm output` | `outputs` |
+| X11 のアプリ（xwayland-satellite、Xwayland） | ゲストの xwayland-satellite と `x11-test-client.py`、xterm | `x11` |
 | メインループが固まったときの、watchdog の動作 | `freeze-main-loop` | `safety`、`script` |
 | VM の外で起動するときの安全策 | CPU の `hypervisor` フラグを隠した構成 | `real-hardware` |
 | 実際の IME での日本語の入力、候補ウィンドウの位置 | fcitx5（Anthy）、foot、QMP のキー | `ime` |

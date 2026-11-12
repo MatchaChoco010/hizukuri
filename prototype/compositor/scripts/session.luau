@@ -43,7 +43,9 @@ end
 
 if tile then
     window_opened = tile.window_opened
+    window_changed = tile.window_changed
     window_closed = tile.window_closed
+    window_request = tile.window_request
     outputs_changed = tile.outputs_changed
     key = tile.key
 end

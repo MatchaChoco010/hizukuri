@@ -20,8 +20,9 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
-rustix = { version = "1", features = ["fs", "event"] }
+rustix = { version = "1", features = ["fs", "event", "process"] }
 png = "0.18"
+libc = "0.2"
 
 [build-dependencies]
 proto-slangc.workspace = true

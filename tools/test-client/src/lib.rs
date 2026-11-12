@@ -20,6 +20,7 @@ mod external;
 mod features;
 mod ime;
 mod pointer;
+mod satellite;
 
 use std::collections::HashMap;
 use std::io;
@@ -50,6 +51,7 @@ pub use external::{ExternalDmabuf, create_udmabuf};
 pub use features::{PopupOptions, SurfaceKind, ToplevelRequest};
 pub use ime::{ImeEvent, InputMethodMode};
 pub use pointer::ConstraintRequest;
+pub use satellite::DialogOptions;
 use xkbcommon::xkb;
 
 /// Errors of the test client.
@@ -217,6 +219,10 @@ pub struct ClientOptions {
     /// Bind `wp_color_manager_v1` with at most this version. `None`: do
     /// not bind it.
     pub color_manager_version: Option<u32>,
+    /// `xdg_toplevel.set_min_size` and `set_max_size`, sent before the
+    /// first commit.
+    pub min_size: Option<(i32, i32)>,
+    pub max_size: Option<(i32, i32)>,
 }
 
 impl Default for ClientOptions {
@@ -240,6 +246,8 @@ impl Default for ClientOptions {
             text_input_enable_on_enter: None,
             input_method: None,
             color_manager_version: None,
+            min_size: None,
+            max_size: None,
         }
     }
 }
@@ -505,6 +513,14 @@ pub enum ClientEvent {
     OutputImageDescriptionChanged {
         output: String,
     },
+    /// `xdg_surface.configure` of a dialog (see
+    /// [`TestClient::open_dialog`]), with the size of its toplevel
+    /// configure.
+    DialogConfigure {
+        dialog: usize,
+        width: i32,
+        height: i32,
+    },
 }
 
 #[derive(Default)]
@@ -586,6 +602,7 @@ struct State {
     /// Never create a window (a clipboard manager has none).
     windowless: bool,
     ime: ime::ImeState,
+    satellite: satellite::SatelliteState,
 }
 
 /// The test client. See the crate documentation.
@@ -634,6 +651,7 @@ impl TestClient {
             color: color::ColorState::default(),
             windowless: false,
             ime: ime::ImeState::default(),
+            satellite: satellite::SatelliteState::default(),
         };
         Ok(Self {
             connection,
@@ -845,6 +863,12 @@ impl State {
             let toplevel = xdg_surface.get_toplevel(handle, ());
             toplevel.set_title(self.options.title.clone());
             toplevel.set_app_id(self.options.app_id.clone());
+            if let Some((width, height)) = self.options.min_size {
+                toplevel.set_min_size(width, height);
+            }
+            if let Some((width, height)) = self.options.max_size {
+                toplevel.set_max_size(width, height);
+            }
             let viewport = self
                 .globals
                 .viewporter
@@ -1042,6 +1066,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "wl_compositor" => {
                     state.globals.compositor =
                         Some(registry.bind(name, version.min(6), handle, ()));
+                }
+                "xdg_activation_v1" => {
+                    state.satellite.activation = Some(registry.bind(name, 1, handle, ()));
                 }
                 "wl_subcompositor" => {
                     state.globals.subcompositor = Some(registry.bind(name, 1, handle, ()));

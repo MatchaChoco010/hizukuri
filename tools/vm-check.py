@@ -36,7 +36,11 @@ times, and the `hzk script` launcher.
 The part `vkms` runs the compositor and its self test on the virtual KMS
 driver over SSH alone, without a VT. `safety` covers the watchdog; `outputs`
 two outputs and hotplug; `ime` Japanese input with a real input method
-(fcitx5 with Anthy) into foot.
+(fcitx5 with Anthy) into foot. `x11` runs X11 applications through
+xwayland-satellite, which the compositor starts on the first X11 client:
+windows, input, menus, dialogs, fullscreen, the clipboard and PRIMARY both
+ways, xterm, xwayland-satellite ending and starting again, and an output
+scale of 1.5.
 
 Every item prints PASS, FAIL or SKIP. Everything needed to see why an item
 failed is kept under the output directory (default
@@ -55,6 +59,8 @@ failed is kept under the output directory (default
     ime/screen-candidates.png        the candidate window of fcitx5 by foot's cursor
     ime/fcitx5.log, fcitx5-requests.txt  fcitx5's log with WAYLAND_DEBUG, and the
                                      requests it made in the order of first use
+    x11/satellite.log                what xwayland-satellite and Xwayland printed
+    x11/x11-client*.log              the events the X11 test client received
     script/hzk-script.log            what `hzk script` printed
     kms-info.json                    the guest's DRM device
     kms-summary.txt                  `proto-compositor kms-info --summary` in the guest
@@ -105,7 +111,7 @@ PATHS = {
 }
 
 # What runs on any machine, in this order, when nothing is asked for.
-DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs", "ime"]
+DEFAULT_PARTS = ["lavapipe", "script", "vkms", "safety", "outputs", "ime", "x11"]
 
 
 def drawing(args, builtin=False):
@@ -2402,12 +2408,371 @@ def check_real_hardware(out, uid, results):
     part.stop()
 
 
+X11_CLASS = "hizukuri.x11-test-client"
+X11_COLOR = (200, 100, 50)
+X11_POPUP_COLOR = (48, 128, 192)
+X11_DIALOG_COLOR = (80, 192, 64)
+KEY_LEFTCTRL = 29
+
+
+def check_x11(out, uid, results):
+    """X11 applications through xwayland-satellite, with the script layer
+    managing the windows. The compositor serves the X11 display and starts
+    xwayland-satellite when the first X11 client connects
+    (`--xwayland-satellite`). x11-test-client.py (in the guest) shows
+    windows of known colors, menus (override-redirect windows), dialogs
+    (transient windows) and asks for fullscreen; xterm is a real
+    application with a real menu."""
+    part = Part("x11", out, uid, results)
+    commands = f"{GUEST_DIR}/x11-commands"
+    wrapper = f"{GUEST_DIR}/xwayland-satellite"
+    wayland = f"XDG_RUNTIME_DIR={part.runtime} WAYLAND_DISPLAY={SOCKET}"
+    info = {}
+
+    def state():
+        return part.ctl("state")
+
+    def save(name):
+        try:
+            with open(os.path.join(part.out, f"state-{name}.json"), "w") as file:
+                json.dump(state(), file, indent=2)
+        except Exception:
+            pass
+        vm("screendump", os.path.join(part.out, f"screen-{name}.png"), check=False)
+
+    def x_env():
+        return f"env -u WAYLAND_DISPLAY XDG_RUNTIME_DIR={part.runtime} DISPLAY={info['display']}"
+
+    def events(log):
+        text = guest(f"cat {GUEST_DIR}/{log} 2>/dev/null || true", check=False)
+        found = []
+        for line in text.splitlines():
+            try:
+                found.append(json.loads(line))
+            except ValueError:
+                pass
+        return found
+
+    def send(command):
+        guest(f"echo {shlex.quote(command)} > {commands}")
+
+    def mapped(**wanted):
+        for window in state()["windows"]:
+            if window["mapped"] and all(window.get(k) == v for k, v in wanted.items()):
+                return window
+        return None
+
+    def start(*extra):
+        part.start("--xwayland-satellite", wrapper,
+                   "--xwayland-satellite-log", f"{GUEST_DIR}/satellite.log", *extra,
+                   builtin=True)
+        info["display"] = state()["x11"]["display"]
+
+    def x11_client(log, size="300x200"):
+        guest(f"rm -f {commands}; mkfifo {commands}")
+        return spawn(f"{x_env()} x11-test-client.py --commands {commands} --size {size} "
+                     f"--color c86432 --title 'x11 window'", log)
+
+    def on_demand():
+        current = state()["x11"]
+        number = current["display"][1:]
+        socket = guest(f"test -S /tmp/.X11-unix/X{number} && echo socket; "
+                       f"cat /tmp/.X{number}-lock").split()
+        if current["satellite_pid"] is not None or current["satellite_starts"] != 0:
+            raise Failed(f"xwayland-satellite runs before any X11 client: {current}")
+        if socket[:1] != ["socket"] or len(socket) != 2:
+            raise Failed(f"the socket and the lock of {current['display']}: {socket}")
+        return (f"DISPLAY={current['display']}: /tmp/.X11-unix/X{number} and its lock "
+                f"(process {socket[1]}) are there, xwayland-satellite is not running yet")
+
+    def window():
+        x11_client("x11-client.log")
+        found = wait_for("the X11 window", lambda: mapped(app_id=X11_CLASS), seconds=30)
+        x11 = state()["x11"]
+        if not found["x11"] or found["client_pid"] != x11["satellite_pid"]:
+            raise Failed(f"the window is not known as an X11 window: {found}, {x11}")
+        x, y = found["position"]
+        width, height = found["size"]
+        middle = (x + width // 2, y + height // 2)
+        wait_for("its color on screen", lambda: near(pixels([middle])[0], X11_COLOR), seconds=10)
+        save("window")
+        return (f"xwayland-satellite started (process {x11['satellite_pid']}, "
+                f"{x11['satellite_starts']} start); {found['title']!r} ({found['app_id']}) "
+                f"tiled at {found['position']} {found['size']}, {X11_COLOR} on screen")
+
+    def input_():
+        found = mapped(app_id=X11_CLASS)
+        x, y = found["position"]
+        part.ctl("pointer-motion", str(x + 40), str(y + 30))
+        part.ctl("pointer-button", str(BTN_LEFT), "press")
+        part.ctl("pointer-button", str(BTN_LEFT), "release")
+        part.ctl("key", str(KEY_A), "press")
+        part.ctl("key", str(KEY_A), "release")
+
+        def seen():
+            got = events("x11-client.log")
+            button = next((e for e in got if e["event"] == "button" and e["pressed"]), None)
+            key = next((e for e in got if e["event"] == "key" and e["pressed"]), None)
+            return (button, key) if button and key else None
+
+        button, key = wait_for("the click and the key in the X11 client", seen, seconds=10)
+        if (button["x"], button["y"]) != (40, 30) or key["keysym"] != "a":
+            raise Failed(f"the X11 client got {button} and {key}")
+        return f"button 1 at (40, 30) in the window, key 'a' (X keycode {key['keycode']})"
+
+    def menu_of(**wanted):
+        window = mapped(**wanted)
+        if not window:
+            return None
+        return next((s for s in window["surfaces"] if s["role"] == "popup"), None)
+
+    def popup():
+        send("popup 20 30 120 80 3080c0")
+        menu = wait_for("the menu", lambda: menu_of(app_id=X11_CLASS), seconds=10)
+        if menu["offset"] != [20, 30] or menu["size"] != [120, 80]:
+            raise Failed(f"the menu is at {menu['offset']} {menu['size']}, expected (20, 30) "
+                         f"120x80")
+        x, y = mapped(app_id=X11_CLASS)["position"]
+        inside = (x + 20 + 60, y + 30 + 40)
+        wait_for("the menu on screen", lambda: near(pixels([inside])[0], X11_POPUP_COLOR),
+                 seconds=10)
+        save("popup")
+        windows = len(state()["windows"])
+        send("close-popup")
+        wait_for("the menu to go", lambda: not menu_of(app_id=X11_CLASS), seconds=10)
+        return (f"an override-redirect window became a popup of its window at (20, 30) "
+                f"120x80, {X11_POPUP_COLOR} on screen; {windows} window(s), no toplevel of "
+                f"its own")
+
+    def dialog():
+        main = mapped(app_id=X11_CLASS)
+        send("dialog 200 120 50c040")
+        found = wait_for("the dialog", lambda: mapped(title="x11-test-client dialog"),
+                         seconds=10)
+        if found["parent"] != main["id"] or not found["x11"]:
+            raise Failed(f"the dialog's parent is {found['parent']}, expected {main['id']}")
+
+        def floating():
+            dialog_now = mapped(title="x11-test-client dialog")
+            main_now = mapped(app_id=X11_CLASS)
+            if not dialog_now or not main_now or dialog_now["size"] != [200, 120]:
+                return None
+            centered = [main_now["position"][0] + (main_now["size"][0] - 200) // 2,
+                        main_now["position"][1] + (main_now["size"][1] - 120) // 2]
+            return dialog_now if dialog_now["position"] == centered else None
+
+        found = wait_for("the dialog to float over its window", floating, seconds=10)
+        x, y = found["position"]
+        wait_for("the dialog on screen",
+                 lambda: near(pixels([(x + 100, y + 60)])[0], X11_DIALOG_COLOR), seconds=10)
+        save("dialog")
+        send("close-dialog")
+        wait_for("the dialog to go", lambda: not mapped(title="x11-test-client dialog"),
+                 seconds=10)
+        return (f"a transient window became a toplevel with its window as parent; the "
+                f"tiling script floats it at its own size 200x120, centered at "
+                f"{found['position']}")
+
+    def fullscreen():
+        send("fullscreen on")
+
+        def covering():
+            window = mapped(app_id=X11_CLASS)
+            return window if window and window["fullscreen"] and window["position"] == [0, 0] \
+                and window["size"] == [1280, 800] else None
+
+        found = wait_for("the X11 window fullscreen", covering, seconds=10)
+        wait_for("it to cover the screen", lambda: all(
+            near(v, X11_COLOR) for v in pixels([(2, 2), (1277, 797)])), seconds=10)
+        configured = [e for e in events("x11-client.log") if e["event"] == "configure"
+                      and e["window"] == "main"][-1]
+        save("fullscreen")
+        send("fullscreen off")
+        wait_for("the X11 window tiled again", lambda: (lambda w: w if w and not w[
+            "fullscreen"] and w["position"] == [8, 8] else None)(mapped(app_id=X11_CLASS)),
+            seconds=10)
+        return (f"_NET_WM_STATE_FULLSCREEN: the window covers the output "
+                f"({found['size']}), the X11 window was configured to "
+                f"{configured['width']}x{configured['height']}; and back to its tile")
+
+    def copy_to_wayland():
+        found = mapped(app_id=X11_CLASS)
+        part.ctl("focus-window", str(found["id"]))
+        time.sleep(0.5)
+        send("copy hello-from-x11")
+        wait_for("the selection to come from X11", lambda: "text/plain;charset=utf-8" in (
+            state()["selection"] or []), seconds=10)
+        pasted = guest(f"env -u DISPLAY {wayland} timeout 10 wl-paste -n", check=False)
+        if pasted != "hello-from-x11":
+            raise Failed(f"wl-paste got {pasted!r}")
+        return "copied in the X11 client, pasted with wl-paste"
+
+    def copy_to_x11():
+        spawn(f"env -u DISPLAY {wayland} wl-copy --foreground hello-from-wayland",
+              "wl-copy.log")
+        # wl-copy offers text/plain; what came from the X11 client does not
+        # (UTF8_STRING, STRING and text/plain;charset=utf-8).
+        wait_for("wl-copy to own the selection", lambda: "text/plain" in (
+            state()["selection"] or []), seconds=10)
+        found = mapped(app_id=X11_CLASS)
+        part.ctl("focus-window", str(found["id"]))
+        time.sleep(1.0)
+        send("paste")
+        got = pasted("clipboard")
+        if got != {"event": "pasted", "selection": "clipboard", "text": "hello-from-wayland"}:
+            raise Failed(f"the X11 client got {got}")
+        return "copied with wl-copy, pasted in the X11 client"
+
+    def pasted(which):
+        return wait_for(f"the X11 client to paste {which}", lambda: next(
+            (e for e in events("x11-client.log") if e["event"] in ("pasted", "paste_failed")
+             and e["selection"] == which), None), seconds=10)
+
+    def primary():
+        # X11 to Wayland: what is selected in the X11 client is PRIMARY.
+        found = mapped(app_id=X11_CLASS)
+        part.ctl("focus-window", str(found["id"]))
+        time.sleep(0.5)
+        send("select primary-from-x11")
+        wait_for("the primary selection to come from X11", lambda: "UTF8_STRING" in (
+            state()["primary_selection"] or []), seconds=10)
+        got = guest(f"env -u DISPLAY {wayland} timeout 10 wl-paste --primary -n", check=False)
+        if got != "primary-from-x11":
+            raise Failed(f"wl-paste --primary got {got!r}")
+        # Wayland to X11.
+        spawn(f"env -u DISPLAY {wayland} wl-copy --primary --foreground primary-from-wayland",
+              "wl-copy-primary.log")
+        wait_for("wl-copy to own the primary selection", lambda: "text/plain" in (
+            state()["primary_selection"] or []), seconds=10)
+        part.ctl("focus-window", str(found["id"]))
+        time.sleep(1.0)
+        send("paste-primary")
+        got = pasted("primary")
+        if got.get("text") != "primary-from-wayland":
+            raise Failed(f"the X11 client got {got}")
+        return ("PRIMARY: selected in the X11 client, pasted with wl-paste --primary; and "
+                "the other way with wl-copy --primary")
+
+    def xterm():
+        spawn(f"{x_env()} xterm -fa Monospace -fs 11", "xterm.log")
+        found = wait_for("xterm", lambda: mapped(app_id="XTerm"), seconds=30)
+        if not found["x11"]:
+            raise Failed(f"xterm is not known as an X11 window: {found}")
+        part.ctl("focus-window", str(found["id"]))
+        time.sleep(0.5)
+        vm("type", "echo typed")
+        vm("key", "ret")
+        time.sleep(1.0)
+        save("xterm")
+        found = mapped(app_id="XTerm")
+        # Ctrl and the left button: xterm's main menu, an override-redirect
+        # window, where the pointer is.
+        x, y = found["position"]
+        part.ctl("pointer-motion", str(x + 60), str(y + 60))
+        part.ctl("key", str(KEY_LEFTCTRL), "press")
+        part.ctl("pointer-button", str(BTN_LEFT), "press")
+        try:
+            menu = wait_for("xterm's menu", lambda: menu_of(app_id="XTerm"), seconds=10)
+            save("xterm-menu")
+        finally:
+            # Released away from the menu, so that nothing is chosen.
+            part.ctl("pointer-motion", str(x + 5), str(y + found["size"][1] - 5))
+            part.ctl("pointer-button", str(BTN_LEFT), "release")
+            part.ctl("key", str(KEY_LEFTCTRL), "release")
+        return (f"{found['title']!r} at {found['position']} {found['size']}; ctrl+click "
+                f"opened its menu as a popup at {menu['offset']} {menu['size']}")
+
+    def satellite_ends():
+        wayland_client = spawn(f"{GUEST_BIN}/proto-test-client --socket {part.runtime}/{SOCKET} "
+                               f"--title wayland-client --duration 120", "wayland-client.log")
+        wait_for("the Wayland client", lambda: mapped(title="wayland-client"), seconds=10)
+        pid = state()["x11"]["satellite_pid"]
+        # The process the compositor started, by the id it reported.
+        guest(f"kill -TERM {int(pid)}")
+        after = wait_for("xwayland-satellite to end", lambda: (lambda x: x if x[
+            "satellite_pid"] is None else None)(state()["x11"]), seconds=10)
+        wait_for("the X11 windows to go", lambda: not any(
+            w["x11"] for w in state()["windows"]), seconds=10)
+        save("satellite-ended")
+        if not part.unit_active() or not alive(wayland_client) \
+                or not mapped(title="wayland-client"):
+            raise Failed("the compositor or the Wayland client did not survive")
+        # The next X11 client starts it again.
+        x11_client("x11-client-again.log")
+        wait_for("the X11 window again", lambda: mapped(app_id=X11_CLASS), seconds=30)
+        again = state()["x11"]
+        return (f"killed xwayland-satellite ({pid}): {after['satellite_exits'][-1]}; the X11 "
+                f"windows went, the compositor and the Wayland client stayed; the next X11 "
+                f"client started it again ({again['satellite_starts']} starts)")
+
+    def scaled():
+        part.stop()
+        start("--output-scale", "1.5", "--exit-after", "120")
+        x11_client("x11-client-scaled.log")
+        wait_for("the X11 window", lambda: (lambda w: w if w and w["surfaces"][0][
+            "buffer_size"] else None)(mapped(app_id=X11_CLASS)), seconds=30)
+        spawn(f"{x_env()} xterm -fa Monospace -fs 11", "xterm-scaled.log")
+        wait_for("xterm", lambda: mapped(app_id="XTerm"), seconds=30)
+
+        def sharp():
+            window = mapped(app_id=X11_CLASS)
+            surface = window["surfaces"][0]
+            width, height = window["size"]
+            buffer = surface["buffer_size"] or [0, 0]
+            good = surface["buffer_scale"] == 1 and abs(buffer[0] - width * 1.5) <= 2 \
+                and abs(buffer[1] - height * 1.5) <= 2
+            return (width, height, buffer) if good else None
+
+        try:
+            width, height, buffer = wait_for("a buffer of 1.5 times the window", sharp,
+                                             seconds=10)
+        finally:
+            save("scaled")
+        configured = [e for e in events("x11-client-scaled.log")
+                      if e["event"] == "configure" and e["window"] == "main"][-1]
+        return (f"output scale 1.5: a {width}x{height} window is drawn from a {buffer[0]}x"
+                f"{buffer[1]} buffer (the X11 window is {configured['width']}x"
+                f"{configured['height']}): one buffer pixel per screen pixel")
+
+    part.stop()
+    if not guest("command -v xwayland-satellite || true").strip():
+        part.record("installed", "FAIL", "xwayland-satellite is not in the guest")
+        return
+    # The compositor starts xwayland-satellite through this, for its log.
+    guest(f"mkdir -p {GUEST_DIR} && printf '%s\\n' '#!/bin/sh' "
+          f"'exec env RUST_LOG=debug xwayland-satellite \"$@\"' > {wrapper} && chmod +x {wrapper}")
+    try:
+        start("--exit-after", "300")
+        for name, function in (("on-demand", on_demand), ("window", window), ("input", input_),
+                               ("popup", popup), ("dialog", dialog),
+                               ("fullscreen", fullscreen), ("copy-to-wayland", copy_to_wayland),
+                               ("copy-to-x11", copy_to_x11), ("primary", primary),
+                               ("xterm", xterm),
+                               ("satellite-ends", satellite_ends), ("scaled", scaled)):
+            if not part.item(name, function) and name in ("on-demand", "window"):
+                break
+    except Failed as error:
+        part.record("start", "FAIL", str(error))
+    finally:
+        part.keep_log("end")
+        # Copied, not printed: xwayland-satellite's debug log is large.
+        for log in ("satellite.log", "x11-client.log", "x11-client-again.log",
+                    "x11-client-scaled.log", "xterm.log", "wl-copy.log",
+                    "wl-copy-primary.log"):
+            try:
+                vm("pull", f"{GUEST_DIR}/{log}", os.path.join(part.out, log), check=False,
+                   timeout=120)
+            except Exception:
+                pass
+        part.stop()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--out", help="directory for results and evidence")
     parser.add_argument("--only", default=",".join(DEFAULT_PARTS),
                         help="comma separated parts to check: lavapipe, script, vkms, safety, "
-                             "outputs, ime (the default: all of these), real-hardware (needs "
+                             "outputs, ime, x11 (the default: all of these), real-hardware (needs "
                              "HIZUKURI_VM_CPU=host,-hypervisor)")
     parser.add_argument("--skip-build", action="store_true",
                         help="send the binaries that are already built")
@@ -2508,6 +2873,7 @@ PARTS = {
     "outputs": check_outputs,
     "ime": check_ime,
     "real-hardware": check_real_hardware,
+    "x11": check_x11,
 }
 
 

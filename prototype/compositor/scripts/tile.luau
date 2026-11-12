@@ -4,6 +4,16 @@
 -- is this script's own state; the core is told the resulting position and
 -- size of each window, and which one has the focus.
 --
+-- Some windows are not tiled:
+--   - a window that belongs to another one (a dialog: it has a parent), or
+--     whose client fixed its size (minimum and maximum are the same), floats
+--     above the tiles at the size its client chose, centered over its
+--     parent (or the output);
+--   - a window whose client asked to be fullscreen covers the output, above
+--     everything else, until it asks to stop.
+-- A client's request to activate one of its windows (xdg-activation) moves
+-- the focus there when it came from the user's input.
+--
 -- Keys (with the logo key held):
 --   L / H          focus the window to the right / left
 --   Shift+L / H    swap the focused window with its right / left neighbour
@@ -18,6 +28,10 @@ local KEY_ESC, KEY_Q, KEY_H, KEY_L = 1, 16, 35, 38
 
 -- Window ids, left to right.
 local order = {}
+-- Windows that asked to be fullscreen: id -> true.
+local fullscreen = {}
+-- What each window was last arranged as (see `T.window_changed`).
+local seen = {}
 T.gap = 8
 
 local function index_of(id)
@@ -38,21 +52,69 @@ local function focused()
     return nil
 end
 
+-- Whether a window stays out of the tiles (see the top of this file).
+local function floats(window)
+    if window.parent ~= nil then
+        return true
+    end
+    return window.min_width > 0
+        and window.min_width == window.max_width
+        and window.min_height > 0
+        and window.min_height == window.max_height
+end
+
 -- Recomputes the position and size of every window.
 function T.arrange()
     local output = hz.outputs()[1]
-    local count = #order
-    if not output or count == 0 then
+    if not output or #order == 0 then
         return
     end
-    local gap = T.gap
-    local width = (output.logical_width - gap * (count + 1)) // count
-    local height = output.logical_height - gap * 2
-    for i, id in order do
-        hz.place(id, output.x + gap + (i - 1) * (width + gap), output.y + gap)
-        hz.configure(id, width, height)
+    local windows = {}
+    for _, window in hz.windows() do
+        windows[window.id] = window
     end
-    hz.restack(order)
+    local tiled, floating, full = {}, {}, {}
+    for _, id in order do
+        local window = windows[id]
+        if fullscreen[id] then
+            table.insert(full, id)
+        elseif window and floats(window) then
+            table.insert(floating, id)
+        else
+            table.insert(tiled, id)
+        end
+    end
+    local gap = T.gap
+    local count = #tiled
+    if count > 0 then
+        local width = (output.logical_width - gap * (count + 1)) // count
+        local height = output.logical_height - gap * 2
+        for i, id in tiled do
+            hz.place(id, output.x + gap + (i - 1) * (width + gap), output.y + gap)
+            hz.configure(id, width, height)
+        end
+    end
+    for _, id in floating do
+        local window = windows[id]
+        local over = window.parent and windows[window.parent]
+        local x, y, width, height = output.x, output.y, output.logical_width, output.logical_height
+        if over and over.width then
+            x, y, width, height = over.x, over.y, over.width, over.height
+        end
+        hz.configure(id, nil, nil)
+        hz.place(id, x + (width - (window.width or 0)) // 2, y + (height - (window.height or 0)) // 2)
+    end
+    for _, id in full do
+        hz.place(id, output.x, output.y)
+        hz.configure(id, output.logical_width, output.logical_height)
+    end
+    local stack = {}
+    for _, list in { tiled, floating, full } do
+        for _, id in list do
+            table.insert(stack, id)
+        end
+    end
+    hz.restack(stack)
     hz.request_frame()
 end
 
@@ -97,11 +159,23 @@ function T.init(saved)
     for _, window in others do
         table.insert(order, window.id)
     end
+    fullscreen = {}
+    if saved and saved.fullscreen then
+        for _, id in saved.fullscreen do
+            if present[id] then
+                fullscreen[id] = true
+            end
+        end
+    end
     T.arrange()
 end
 
 function T.save()
-    return { order = order }
+    local full = {}
+    for id in fullscreen do
+        table.insert(full, id)
+    end
+    return { order = order, fullscreen = full }
 end
 
 function T.order()
@@ -112,6 +186,14 @@ function T.window_opened(id)
     if not index_of(id) then
         table.insert(order, id)
     end
+    -- A tiled window has its place already; a floating one is placed again
+    -- once its size is known (`window_changed`).
+    seen[id] = "tiled"
+    for _, window in hz.windows() do
+        if window.id == id and floats(window) then
+            seen[id] = nil
+        end
+    end
     T.arrange()
     hz.focus(id)
 end
@@ -121,11 +203,54 @@ function T.window_closed(id)
     if not index then
         return
     end
+    fullscreen[id] = nil
+    seen[id] = nil
     table.remove(order, index)
     T.arrange()
     -- The neighbour that moved into the gap gets the focus.
     local next_id = order[math.min(index, #order)]
     hz.focus(next_id)
+end
+
+-- A window of this script that floats is centered again when its size
+-- changes, and one whose parent or size limits changed may move in or out
+-- of the tiles. `seen` keeps what the arrangement was made for.
+function T.window_changed(id)
+    if not index_of(id) then
+        return
+    end
+    for _, window in hz.windows() do
+        if window.id == id then
+            local now = "tiled"
+            if floats(window) then
+                now = string.format("floats %dx%d", window.width or 0, window.height or 0)
+            end
+            if seen[id] ~= now then
+                seen[id] = now
+                T.arrange()
+            end
+            return
+        end
+    end
+end
+
+-- What a client asks of the window manager (`kind`: fullscreen,
+-- unfullscreen, activate, maximize, move, ...).
+function T.window_request(id, request)
+    if request.kind == "fullscreen" then
+        fullscreen[id] = true
+        hz.set_states(id, { fullscreen = true })
+        T.arrange()
+        hz.focus(id)
+    elseif request.kind == "unfullscreen" then
+        fullscreen[id] = nil
+        hz.set_states(id, { fullscreen = false })
+        T.arrange()
+    elseif request.kind == "activate" then
+        if request.from_input then
+            hz.focus(id)
+        end
+    end
 end
 
 function T.outputs_changed()

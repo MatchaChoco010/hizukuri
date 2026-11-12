@@ -328,6 +328,33 @@ impl TestClient {
     /// Opens a popup on the window. It appears after a few pumps (the
     /// compositor has to configure it first). One popup at a time.
     pub fn open_popup(&mut self, options: PopupOptions) -> Result<(), ClientError> {
+        self.open_popup_with(
+            (options.width, options.height),
+            options.color,
+            options.grab,
+            |positioner| {
+                positioner.set_anchor_rect(options.x, options.y, 1, 1);
+                positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+                positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+                if options.slide {
+                    positioner.set_constraint_adjustment(
+                        xdg_positioner::ConstraintAdjustment::SlideX
+                            | xdg_positioner::ConstraintAdjustment::SlideY,
+                    );
+                }
+            },
+        )
+    }
+
+    /// Opens a popup of `size` whose positioner `setup` fills in (all but
+    /// the size).
+    pub(crate) fn open_popup_with(
+        &mut self,
+        size: (i32, i32),
+        color: [u8; 4],
+        grab: bool,
+        setup: impl FnOnce(&xdg_positioner::XdgPositioner),
+    ) -> Result<(), ClientError> {
         let state = &mut self.state;
         let (Some(compositor), Some(wm_base), Some(window)) = (
             &state.globals.compositor,
@@ -339,24 +366,14 @@ impl TestClient {
             ));
         };
         let positioner = wm_base.create_positioner(&self.handle, ());
-        positioner.set_size(options.width, options.height);
-        positioner.set_anchor_rect(options.x, options.y, 1, 1);
-        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
-        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
-        if options.slide {
-            positioner.set_constraint_adjustment(
-                xdg_positioner::ConstraintAdjustment::SlideX
-                    | xdg_positioner::ConstraintAdjustment::SlideY,
-            );
-        }
+        positioner.set_size(size.0, size.1);
+        setup(&positioner);
         let surface = compositor.create_surface(&self.handle, ());
         let xdg_surface = wm_base.get_xdg_surface(&surface, &self.handle, PopupTag);
         let popup =
             xdg_surface.get_popup(Some(&window._xdg_surface), &positioner, &self.handle, ());
         positioner.destroy();
-        if options.grab
-            && let Some(seat) = &state.globals.seat
-        {
+        if grab && let Some(seat) = &state.globals.seat {
             popup.grab(seat, state.last_serial);
         }
         surface.commit();
@@ -364,8 +381,8 @@ impl TestClient {
             surface,
             xdg_surface,
             popup,
-            size: (options.width, options.height),
-            color: options.color,
+            size,
+            color,
         });
         Ok(())
     }

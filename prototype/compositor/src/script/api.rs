@@ -299,6 +299,12 @@ pub fn register(
             }
             t.set("activated", window.activated)?;
             t.set("focused", shared.world.focus == Some(window.window))?;
+            t.set("parent", window.parent.map(|p| p.0))?;
+            t.set("min_width", window.min_size.0)?;
+            t.set("min_height", window.min_size.1)?;
+            t.set("max_width", window.max_size.0)?;
+            t.set("max_height", window.max_size.1)?;
+            t.set("x11", window.x11)?;
             t.set(
                 "opacity",
                 shared.opacity.get(&window.window).copied().unwrap_or(1.0),

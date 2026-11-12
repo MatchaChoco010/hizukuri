@@ -79,6 +79,12 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。入力メソッドの候補ウィンドウも、同じである。
 - タイル（`tile.luau`）: `hz.manages_windows()` が真のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
   logo+Q で閉じる。logo+Escape で、ポインターの lock と confine を解く。キーの割り当ても、スクリプトの中にある。
+  - 親のあるウィンドウ（ダイアログ）と、大きさが固定のウィンドウ（最小と最大が同じ）は、並べずに、クライアントの決めた大きさで、
+    親（無ければ出力）の中央に、タイルの上に浮かせる。
+  - fullscreen を求めたウィンドウは、出力の全体を覆い、いちばん上に置く。求めが取り消されると、タイルに戻す。
+  - activate の要求（xdg-activation）は、入力から来たもの（`from_input`）だけに従って、focus を移す。
+  - X11 のウィンドウ（xwayland-satellite が出すもの）も、同じ決まりで扱う。ダイアログ、splash screen、fullscreen の要求は、
+    xwayland-satellite が、これらの形にして送ってくる。
 
 ## コアがスクリプトに見せる口
 
@@ -103,17 +109,29 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `pointer_button(button, pressed, window, surface)` | ポインターのボタン | `true` なら、コアの「クリックで focus」をしない | クリックで focus |
 | `pointer_constraint(c)` | ポインターの制約が、有効になりうるとき（下の「ポインターの制約」） | `true` なら有効にする、`false` なら有効にしない（有効なら解く） | 制約のウィンドウが focus を持つ間、有効 |
 | `pointer_constraint_changed(c)` | 有効な制約が変わった。`c` は、有効になった制約か、`nil`（解けた） | なし | 何もしない |
+| `window_request(id, request)` | クライアントが、ウィンドウ管理の決めることを求めた（下） | なし | 何もしない（プロトコルの層が、内容の変わらない configure で答える） |
 
 - 毎フレーム必ず呼ばれる関数は、無い。アニメーションをするスクリプトは、`hz.request_frame()` で次のフレームを求める。
 - `hit_test` の `accepts(surface, x, y)` は、その点が入力を受けるか（表面の input region）を答える、コアの関数である。
 - ボタンを押している間は、押した表面にイベントを送り続ける。そのときの座標を、`locate` が答える。
+- `window_request` の `request` は、`kind` と、それに付く値の表である。
+
+| `kind` | 元の要求 | 付く値 |
+| --- | --- | --- |
+| `maximize`、`unmaximize` | `xdg_toplevel.set_maximized`、`unset_maximized` | |
+| `fullscreen`、`unfullscreen` | `set_fullscreen`、`unset_fullscreen` | `output`（クライアントが出力を指定したとき、その id） |
+| `minimize` | `set_minimized` | |
+| `move` | `move`（ボタンが押されている間だけ） | |
+| `resize` | `resize`（同じ） | `top`、`bottom`、`left`、`right` |
+| `show_menu` | `show_window_menu` | `x`、`y`（ウィンドウの geometry からの位置） |
+| `activate` | `xdg_activation_v1.activate` | `from_input`（token が、focus を持つクライアントの入力から作られたか） |
 
 ### スクリプトがコアに尋ねるもの
 
 | 関数 | 内容 |
 | --- | --- |
 | `hz.outputs()` | 出力の一覧。id、名前、画素の大きさ、倍率、論理座標での位置と大きさ、リフレッシュレート、画像の形式、色 |
-| `hz.windows()` | ウィンドウの一覧（重なりの順）。id、title、app_id、位置、大きさ、focus、opacity |
+| `hz.windows()` | ウィンドウの一覧（重なりの順）。id、title、app_id、位置、大きさ、focus、opacity、`parent`（親のウィンドウの id）、`min_width`・`min_height`・`max_width`・`max_height`（0 は制限なし）、`x11`（xwayland-satellite のウィンドウか） |
 | `hz.surfaces(window)` | ウィンドウの表面の一覧（subsurface、popup、入力メソッドの候補ウィンドウを含む。奥から手前） |
 | `hz.damage(surface)` | 直前の更新で、クライアントが変わったと伝えた矩形（バッファの画素） |
 | `hz.color_info(color)` | 表面の値の意味。image description の名前、原色、伝達関数、輝度、alpha の持ち方 |
@@ -162,6 +180,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.pointer_constraint()` | 有効な制約（`{ surface, window, kind, active }`。`kind` は `"lock"` か `"confine"`）、または `nil` |
 | `hz.release_pointer_constraint()` | 有効な制約を、クライアントの意向に関わらず解く（下） |
 | `hz.review_pointer_constraints()` | 有効になりうる制約について、`pointer_constraint` に、もう一度尋ねさせる |
+| `hz.set_states(id, { maximized = bool, fullscreen = bool })` | ウィンドウに、最大化されているか、fullscreen かを伝える（無い項目は偽）。位置と大きさは、`hz.place` と `hz.configure` で別に決める |
 | `hz.include(name)` | プロジェクトのモジュールを読む |
 | `hz.debug_composite(image, working)` | 検証用に、合成用のバッファを差し出す（画面の取り込みで EXR に書かれる） |
 | `hz.log(text)` | ログ |

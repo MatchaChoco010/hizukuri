@@ -39,3 +39,4 @@ pub mod selftest;
 pub mod targets;
 pub mod timing;
 pub mod wm;
+pub mod x11;

@@ -198,6 +198,30 @@ struct RunArgs {
 
     #[command(flatten)]
     kms: kms::KmsArgs,
+
+    #[command(flatten)]
+    x11: X11Args,
+}
+
+/// X11 applications, through xwayland-satellite.
+#[derive(Debug, Args)]
+struct X11Args {
+    /// Serve an X11 display and start this xwayland-satellite (a path, or a
+    /// name looked up in PATH) when the first X11 client connects. Without
+    /// it there is no X11 display.
+    #[arg(long, value_name = "PROGRAM")]
+    xwayland_satellite: Option<PathBuf>,
+
+    /// The directory that stands for /tmp: the X11 sockets go to
+    /// DIR/.X11-unix, the display locks to DIR. For tests, which must not
+    /// use the displays of the machine.
+    #[arg(long, value_name = "DIR", default_value = "/tmp")]
+    x11_root: PathBuf,
+
+    /// Append xwayland-satellite's (and Xwayland's) output to this file
+    /// instead of discarding it.
+    #[arg(long, value_name = "FILE")]
+    xwayland_satellite_log: Option<PathBuf>,
 }
 
 /// Whatever draws, before it is wrapped into a scene.
@@ -700,6 +724,8 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         )
         .map_err(|e| format!("failed to register the control socket: {e}"))?;
 
+    let x11 = start_x11(&handle, &args.x11, &args.socket, &mut compositor)?;
+
     insert_common_sources(
         &handle,
         signals,
@@ -723,12 +749,43 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
     let loop_result = event_loop.run(None, &mut app, |app| app.process());
     // Give the display back in an orderly way, whatever happened.
     app.compositor.shutdown();
+    drop(x11);
     loop_result.map_err(|e| format!("event loop error: {e}"))?;
 
     match app.failure {
         Some(message) => Err(message),
         None => Ok(()),
     }
+}
+
+/// Serves the X11 display, when asked to: claims a display number and
+/// watches its sockets; the first X11 client starts xwayland-satellite.
+fn start_x11(
+    handle: &LoopHandle<'static, App>,
+    args: &X11Args,
+    wayland_socket: &str,
+    compositor: &mut Compositor<AnyBackend>,
+) -> Result<Option<proto_compositor::x11::X11Display>, String> {
+    use proto_compositor::x11::{self, Satellite, SatelliteConfig, X11Socket};
+    let Some(program) = &args.xwayland_satellite else {
+        return Ok(None);
+    };
+    let socket = X11Socket::open(&args.x11_root, x11::DISPLAY_NUMBERS)
+        .map_err(|e| format!("failed to serve an X11 display: {e}"))?;
+    let x11_display = socket.display();
+    let satellite = Satellite::new(SatelliteConfig {
+        program: program.clone(),
+        wayland_display: wayland_socket.into(),
+        log: args.xwayland_satellite_log.clone(),
+    });
+    let display = x11::insert_sources(handle, socket, satellite, |app: &mut App, status| {
+        app.compositor.set_x11_status(Some(status));
+    })?;
+    compositor.set_x11_status(Some(display.status()));
+    tracing::info!(
+        "serving X11 clients on DISPLAY={x11_display}; xwayland-satellite starts with the first one"
+    );
+    Ok(Some(display))
 }
 
 /// Sources every mode of running wants: signals that stop the loop (from

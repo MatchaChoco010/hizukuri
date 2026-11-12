@@ -54,6 +54,7 @@
 | `zwp_text_input_manager_v3` | 1 | アプリの入力欄（[入力メソッド](#入力メソッド)） |
 | `zwp_input_method_manager_v2` | 1 | 入力メソッド（IME）。どのクライアントにも見せる |
 | `zwp_virtual_keyboard_manager_v1` | 1 | 仮想キーボード。どのクライアントにも見せる |
+| `xdg_activation_v1` | 1 | activate の要求を、ウィンドウ管理に渡す（下） |
 | `zwp_linux_dmabuf_v1` | 6 または 3 | `--dmabuf` で公開したときだけ（下） |
 | `wp_color_manager_v1` | 3 | parametric な image description だけ。ICC は公開しない（下） |
 
@@ -122,11 +123,22 @@ transform だけを変えて、バッファを付け直さない commit は、�
 | `Move` | `move` | その serial のボタンが、まだ押されているときだけ出す |
 | `Resize { edges }` | `resize` | 同じ |
 | `ShowMenu { position }` | `show_window_menu` | ウィンドウの geometry からの位置 |
+| `Activate { from_input }` | `xdg_activation_v1.activate` | token が、キーボードの focus を持つクライアントの、focus が移った後の入力の serial で作られたなら、`from_input` が真 |
 
 - 最大化と全画面の要求には、configure で答える決まりである。ウィンドウ管理が何も送らなければ、次の `flush_clients` で、
   内容の変わらない configure を送る。
-- 中核は、要求を `WindowManager::window_request` へ渡す。**fallback のウィンドウ管理も、スクリプトのウィンドウ管理も、
-  いまは、要求に応じない**（スクリプトへの口は、未実装である）。
+- 中核は、要求を `WindowManager::window_request` へ渡す。fallback のウィンドウ管理は、要求に応じない。
+  スクリプトのウィンドウ管理は、スクリプトの `window_request` に渡す（[スクリプトの層](script-layer.md)）。
+- xdg-activation の token は、すべて発行する。1 つの token は、1 回の activate に使える。activate の要求に従うか
+  （focus を奪わせるか）は、ウィンドウ管理が決める。
+
+`window` が返す `WindowInfo` は、題名、app id、大きさ、状態のほかに、次のものを持つ。
+
+| 項目 | 内容 |
+| --- | --- |
+| `parent` | `xdg_toplevel.set_parent` の相手のウィンドウ。ダイアログの、もとのウィンドウ |
+| `min_size`、`max_size` | `set_min_size`、`set_max_size` の値（論理座標）。0 は制限なし |
+| `client_pid` | クライアントのプロセスの id（接続の相手を、kernel が答えたもの）。xwayland-satellite のウィンドウを見分けるのに使う |
 
 ## 出力
 

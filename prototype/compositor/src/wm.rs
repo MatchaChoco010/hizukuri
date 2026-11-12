@@ -92,6 +92,12 @@ pub enum WmRequest {
     /// constraint that could be in effect now, as if nothing had been
     /// decided: for a window manager that changed its mind.
     ReviewPointerConstraints,
+    /// Tell a window whether it is maximized and whether it is fullscreen.
+    SetStates {
+        window: WindowId,
+        maximized: bool,
+        fullscreen: bool,
+    },
 }
 
 /// A pointer constraint (lock or confinement) a client asked for, as the
