@@ -46,10 +46,16 @@ pub enum Request {
         x: f64,
         y: f64,
     },
-    /// Moves the pointer by a relative amount, as a mouse does.
+    /// Moves the pointer by a relative amount, as a mouse does. `dx` and
+    /// `dy` are after pointer acceleration; `dx_unaccel` and `dy_unaccel`
+    /// (default: the same) before it.
     PointerMotionRelative {
         dx: f64,
         dy: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dx_unaccel: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dy_unaccel: Option<f64>,
     },
     PointerButton {
         button: u32,

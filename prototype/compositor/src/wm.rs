@@ -45,6 +45,27 @@ impl Modifiers {
 pub enum WmRequest {
     /// Ask a window to close.
     Close(WindowId),
+    /// End the pointer lock or confinement in effect, whatever the client
+    /// wants: the way out for the person at the keyboard. It is not
+    /// offered again until the keyboard focus moves or the pointer leaves
+    /// the surface and comes back.
+    ReleasePointerConstraint,
+    /// Ask [`WindowManager::pointer_constraint`] again about every
+    /// constraint that could be in effect now, as if nothing had been
+    /// decided: for a window manager that changed its mind.
+    ReviewPointerConstraints,
+}
+
+/// A pointer constraint (lock or confinement) a client asked for, as the
+/// window manager sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConstraintView {
+    /// The window of the surface, if it belongs to one.
+    pub window: Option<WindowId>,
+    pub surface: proto_wl::SurfaceId,
+    pub kind: proto_wl::PointerConstraintKind,
+    /// Whether it is in effect now.
+    pub active: bool,
 }
 
 /// See the module documentation.
@@ -78,6 +99,18 @@ pub trait WindowManager {
     /// done about it; a window manager that does nothing is within the
     /// protocol.
     fn window_request(&mut self, _id: WindowId, _request: proto_wl::WindowRequest) {}
+    /// Whether a pointer constraint may be in effect now. Asked when the
+    /// pointer is on its surface, inside its region, and something changed
+    /// since the last answer (the constraint is new, the pointer came back
+    /// onto the surface, the keyboard focus moved). `None`: no opinion, the
+    /// core's default applies (in effect while its window has the keyboard
+    /// focus).
+    fn pointer_constraint(&mut self, _constraint: &ConstraintView) -> Option<bool> {
+        None
+    }
+    /// The constraint in effect changed: one started, or the one there was
+    /// ended (`None`).
+    fn pointer_constraint_changed(&mut self, _active: Option<&ConstraintView>) {}
     /// Runs what the events above queued, once the scene has the current
     /// state of the core. Returns `true` when placement, stacking, focus or
     /// configure hints may have changed.

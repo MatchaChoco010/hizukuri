@@ -15,8 +15,8 @@ use proto_color::{AlphaMode, CompositeSpace, DecodeTransform, ImageDescription, 
 use proto_compositor::control::Request;
 use proto_render::{CompositeImage, EncodedImage};
 use proto_test_client::{
-    ClientEvent, ClientOptions, ExternalDmabuf, Pattern, PixelLayout, PopupOptions, SurfaceKind,
-    TestClient, Transform, create_udmabuf,
+    ClientEvent, ClientOptions, ConstraintRequest, ExternalDmabuf, Pattern, PixelLayout,
+    PopupOptions, SurfaceKind, TestClient, Transform, create_udmabuf,
 };
 use serde_json::{Value, json};
 
@@ -45,6 +45,7 @@ script_tests!(
     a_script_that_fails_on_events_is_taken_out_of_charge,
     a_script_is_reloaded_while_windows_stay_open,
     a_module_that_does_not_compile_is_not_taken,
+    the_script_decides_when_the_pointer_is_held,
 );
 
 // ---------------------------------------------------------------------------
@@ -2545,5 +2546,123 @@ fn a_module_that_does_not_compile_is_not_taken(device: Device) {
     let encoded = session.screenshot_png("module-fixed");
     assert_fallback_marker(&encoded, false, "after the fix");
     session.assert_renderer_clean();
+    session.quit();
+}
+
+// ---------------------------------------------------------------------------
+// Pointer constraints
+// ---------------------------------------------------------------------------
+
+/// Whether a lock may be in effect is the script's to decide, and the way
+/// out is a key of its own (logo+Escape in the built-in tiling).
+fn the_script_decides_when_the_pointer_is_held(device: Device) {
+    let project = script_project(
+        "pointer-held",
+        device,
+        &[(
+            "main",
+            r#"
+            hz.include("session")
+
+            -- Locks only once the script says so; confinements never.
+            local allow = false
+            local asked = {}
+            local changes = {}
+            function pointer_constraint(c)
+                table.insert(asked, c.kind .. ":" .. tostring(c.window ~= nil))
+                return c.kind == "lock" and allow
+            end
+            function pointer_constraint_changed(c)
+                table.insert(changes, c and (c.kind .. ":" .. tostring(c.active)) or "none")
+            end
+            function allow_locks()
+                allow = true
+                hz.review_pointer_constraints()
+            end
+            function report()
+                local current = hz.pointer_constraint()
+                local result = {
+                    asked = asked,
+                    changes = changes,
+                    current = current and current.kind or "none",
+                }
+                asked = {}
+                changes = {}
+                return result
+            end
+            "#,
+        )],
+    );
+    let mut session = Session::start(
+        "pointer-held",
+        device,
+        &[
+            "--output-size",
+            "400x300",
+            "--wm",
+            "script",
+            "--script",
+            project.to_str().unwrap(),
+        ],
+    );
+    let (mut client, _) = session.mapped_client(options("game", 100, 80, RED));
+    wait_keyboard(&mut client);
+    let state = session.wait(&mut [&mut client], "the window tiled", |state| {
+        geometry(state, "game").is_some()
+    });
+    let (position, size) = geometry(&state, "game").unwrap();
+    let center = (
+        (position[0] + size[0] / 2) as f64,
+        (position[1] + size[1] / 2) as f64,
+    );
+    client
+        .constrain_pointer(ConstraintRequest::Lock, None, true)
+        .unwrap();
+    session.wait(&mut [&mut client], "the lock is asked for", |state| {
+        state["pointer_constraints"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty())
+    });
+    pointer_to(&mut session, center);
+
+    // Asked, and refused.
+    let report = session.script("report", json!([]));
+    assert_eq!(report["asked"], json!(["lock:true"]), "{report}");
+    assert_eq!(report["current"], "none");
+    assert_eq!(session.state()["pointer_constraints"][0]["active"], false);
+
+    // The script changes its mind.
+    session.script("allow_locks", json!([]));
+    client
+        .wait_for(common::TIMEOUT, |e| *e == ClientEvent::PointerLocked)
+        .unwrap()
+        .expect("the pointer is locked");
+    let report = session.script("report", json!([]));
+    assert_eq!(report["changes"], json!(["lock:true"]), "{report}");
+    assert_eq!(report["current"], "lock");
+
+    // The way out: the built-in tiling's logo+Escape.
+    logo_key(&mut session, 1, false);
+    client
+        .wait_for(common::TIMEOUT, |e| *e == ClientEvent::PointerUnlocked)
+        .unwrap()
+        .expect("the pointer is free again");
+    let report = session.script("report", json!([]));
+    assert_eq!(report["changes"], json!(["none"]), "{report}");
+    // Not offered again while nothing changes: the pointer moves freely.
+    pointer_to(&mut session, (center.0 + 5.0, center.1));
+    let report = session.script("report", json!([]));
+    // An empty table comes back as an empty JSON object.
+    assert_eq!(report["asked"], json!({}), "{report}");
+    assert_eq!(session.state()["pointer"]["position"][0], center.0 + 5.0);
+
+    // Off the window and back: asked again, and in effect.
+    pointer_to(&mut session, (1.0, 1.0));
+    pointer_to(&mut session, center);
+    client
+        .wait_for(common::TIMEOUT, |e| *e == ClientEvent::PointerLocked)
+        .unwrap()
+        .expect("the pointer is locked again");
+    session.assert_script_healthy();
     session.quit();
 }

@@ -450,7 +450,7 @@ GPU は、要らない。数分で終わる。
 
 | 部 | 内容 | VM の構成 |
 | --- | --- | --- |
-| `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
+| `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
 | `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーの割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、明示して選んだ Rust のレンダラー（`--renderer rust --wm rust`）との画素とフレームの時間の比較、`hzk script` | 既定 |
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |

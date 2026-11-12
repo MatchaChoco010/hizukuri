@@ -25,6 +25,8 @@
 //! from a calloop event loop (the `proto-compositor` binary) as well as from a test
 //! that steps the compositor by hand.
 
+mod constraints;
+
 use std::collections::HashMap;
 use std::io;
 use std::time::Instant;
@@ -138,6 +140,8 @@ pub struct Compositor<B: Backend> {
     unreadable: std::collections::HashSet<SurfaceId>,
     /// How long recent frames took to draw and to present.
     frame_times: FrameTimes,
+    /// What the core remembers about pointer constraints.
+    constraints: constraints::ConstraintPolicy,
     quit: bool,
 }
 
@@ -187,6 +191,7 @@ impl<B: Backend> Compositor<B> {
             start: Instant::now(),
             unreadable: std::collections::HashSet::new(),
             frame_times: FrameTimes::new(),
+            constraints: Default::default(),
             quit: false,
         };
         // Pick up the outputs the backend announced at startup.
@@ -274,6 +279,8 @@ impl<B: Backend> Compositor<B> {
         for request in self.wm.take_requests() {
             match request {
                 WmRequest::Close(window) => self.wl.close_window(to_wl(window)),
+                WmRequest::ReleasePointerConstraint => self.release_pointer_constraint(),
+                WmRequest::ReviewPointerConstraints => self.review_pointer_constraints(),
             }
         }
     }
@@ -507,6 +514,13 @@ impl<B: Backend> Compositor<B> {
             // transformed can still move it here, before the flush at the
             // end of `process`, with `WlServer::place_popup_within`.
             WlEvent::PopupPlacement { .. } => {}
+            WlEvent::PointerConstraintsChanged => self.update_pointer_constraints(),
+            WlEvent::PointerLockWithdrawn { surface, hint } => {
+                if let Some(hint) = hint {
+                    self.warp_to_hint(surface, hint);
+                }
+                self.update_pointer_constraints();
+            }
         }
     }
 
@@ -527,6 +541,9 @@ impl<B: Backend> Compositor<B> {
                 self.configured.insert(window, wanted);
             }
         }
+        // Whether a lock or confinement may be in effect depends on the
+        // focus.
+        self.update_pointer_constraints();
     }
 
     // -----------------------------------------------------------------------
@@ -564,12 +581,17 @@ impl<B: Backend> Compositor<B> {
                     self.wl.keyboard_key(keycode, pressed, time_us);
                 }
             }
-            InputEvent::PointerMotion { dx, dy, time_us } => {
-                let target = (self.pointer.0 + dx, self.pointer.1 + dy);
-                self.move_pointer(self.clamp_to_outputs(target), time_us);
+            InputEvent::PointerMotion {
+                dx,
+                dy,
+                dx_unaccel,
+                dy_unaccel,
+                time_us,
+            } => {
+                self.relative_pointer_motion((dx, dy), (dx_unaccel, dy_unaccel), time_us);
             }
             InputEvent::PointerMotionAbsolute { x, y, time_us } => {
-                self.move_pointer((x, y), time_us);
+                self.absolute_pointer_motion((x, y), time_us);
             }
             InputEvent::PointerButton {
                 button,
@@ -672,6 +694,14 @@ impl<B: Backend> Compositor<B> {
     /// The surface the pointer belongs to at a position of the screen, and
     /// the position inside that surface.
     fn pointer_target(&self, position: (f64, f64)) -> Option<(SurfaceId, (f64, f64))> {
+        // A lock or confinement in effect holds the pointer on its surface,
+        // whatever is drawn above it.
+        if let Some(surface) = self.constrained_surface() {
+            let views = self.window_views();
+            if let Some(local) = self.scene.locate(position, surface, &views) {
+                return Some((surface, local));
+            }
+        }
         // A drag and drop offers the data to whatever is under the pointer.
         let grab = self.pointer_grab.filter(|_| !self.wl.drag_in_progress());
         match grab {
@@ -754,11 +784,16 @@ impl<B: Backend> Compositor<B> {
             }
             _ => false,
         };
-        if !same {
+        // A locked pointer does not move on its surface, even when the
+        // surface moves under it: no `wl_pointer.motion` while locked.
+        let locked = matches!((target, self.pointer_sent),
+            (Some((a, _)), Some((b, _))) if a == b && self.locked_to(a));
+        if !same && !locked {
             self.pointer_sent = target;
             self.wl.pointer_motion(target, self.time_us());
             self.wl.pointer_frame();
         }
+        self.update_pointer_constraints();
     }
 
     fn focus_window_under_pointer(&mut self) {
@@ -982,10 +1017,17 @@ impl<B: Backend> Compositor<B> {
                 });
                 Ok(json!({}))
             }
-            Request::PointerMotionRelative { dx, dy } => {
+            Request::PointerMotionRelative {
+                dx,
+                dy,
+                dx_unaccel,
+                dy_unaccel,
+            } => {
                 self.handle_input(InputEvent::PointerMotion {
                     dx: *dx,
                     dy: *dy,
+                    dx_unaccel: dx_unaccel.unwrap_or(*dx),
+                    dy_unaccel: dy_unaccel.unwrap_or(*dy),
                     time_us,
                 });
                 Ok(json!({ "position": [self.pointer.0, self.pointer.1] }))
@@ -1281,6 +1323,9 @@ impl<B: Backend> Compositor<B> {
                 "pointer_surface": self.wl.pointer_focus().map(|s| s.0),
             },
             "selection": self.wl.selection_mime_types(),
+            "primary_selection": self.wl.primary_selection_mime_types(),
+            // Locks and confinements clients asked for; `active` is in effect.
+            "pointer_constraints": self.describe_pointer_constraints(),
             "pointer": {
                 "position": self.pointer_active.then_some([self.pointer.0, self.pointer.1]),
                 "cursor": match self.wl.cursor() {

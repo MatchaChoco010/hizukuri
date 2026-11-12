@@ -124,7 +124,15 @@ pub enum InputEvent {
         time_us: u64,
     },
     /// Relative pointer motion in logical pixels, as a mouse reports it.
-    PointerMotion { dx: f64, dy: f64, time_us: u64 },
+    /// `dx` and `dy` are after pointer acceleration; `dx_unaccel` and
+    /// `dy_unaccel` before it (what games turn into a view rotation).
+    PointerMotion {
+        dx: f64,
+        dy: f64,
+        dx_unaccel: f64,
+        dy_unaccel: f64,
+        time_us: u64,
+    },
     /// Absolute pointer position in the global logical coordinate space
     /// (tablets, virtual pointers, injected input).
     PointerMotionAbsolute { x: f64, y: f64, time_us: u64 },

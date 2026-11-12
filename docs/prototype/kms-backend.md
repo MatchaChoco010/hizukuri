@@ -173,7 +173,9 @@ tools/vm/vm test tools/vm-check.py --out artifacts/vm-check/run1    # 記録を�
 `lavapipe` の部は、次の項目を検査する: 仮想コンソールからの起動、レンダラーと scanout の経路、モード、
 背景とウィンドウの画素（VNC から読む）、libinput 経由のポインター・クリック・キー、VT の切り替えと復帰、
 実際のアプリ（foot、weston-terminal）、フレームの時間、終了用のキー、自動終了、制御口からの終了、SIGHUP、
-dmabuf を送るクライアントと popup と selection、スクリプトの層、自己診断。
+dmabuf を送るクライアントと popup と selection、
+libinput からの相対的な動きと pointer lock（加速を掛けた後と前の値、lock の間に `wl_pointer.motion` が無いこと）、
+wl-clipboard が data control でクリップボードと primary selection を読み書きすること、スクリプトの層、自己診断。
 
 - compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目のほかは、
   描くだけのプロジェクト（`prototype/compositor/projects/draw-only/`）で動かし、ウィンドウを、項目が置いた場所に保つ。

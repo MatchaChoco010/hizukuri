@@ -186,7 +186,10 @@ fn a_toolkit_menu_opens_as_a_popup_and_is_dismissed_by_a_press_outside() {
 
 /// wl-clipboard against the selection: `wl-copy` owns it and `wl-paste`
 /// reads it; the test client pastes what `wl-copy` copied; `wl-paste`
-/// reads what the test client copied.
+/// reads what the test client copied. wl-clipboard uses data control
+/// (`ext_data_control_manager_v1` or `zwlr_data_control_manager_v1`) when
+/// the compositor offers it, as this one does: it opens no window and
+/// needs no focus.
 #[test]
 fn the_selection_works_with_wl_clipboard() {
     if !wanted("wl-clipboard", &["wl-copy", "wl-paste"]) {
@@ -212,19 +215,17 @@ fn the_selection_works_with_wl_clipboard() {
     // wl-copy to wl-paste.
     let copier = session.spawn_client("wl-copy", "wl-copy", &["--foreground", "copied by wl-copy"]);
     // Wait until it owns the selection, by looking at the compositor, not
-    // by trying to paste. wl-clipboard gets at the selection by opening a
-    // window to receive the keyboard focus; a `wl-paste` started while
-    // `wl-copy` is doing the same takes the focus away from it, and a
-    // client without the focus is not allowed to set the selection. Its
-    // request is dropped, it never tries again, and nothing is ever
-    // copied. Polling with `wl-paste` here did exactly that, once in a
-    // hundred runs.
+    // by trying to paste. Without data control, wl-clipboard gets at the
+    // selection through a window of its own that takes the keyboard focus,
+    // and two of them racing for the focus can lose a copy for good.
     wait_state(&mut session, "wl-copy to own the selection", |s| {
         s["selection"]
             .as_array()
             .is_some_and(|types| types.iter().any(|t| t == "text/plain;charset=utf-8"))
             .then_some(())
     });
+    // Data control: no window.
+    assert_eq!(session.state()["windows"], serde_json::json!([]));
     let types = paste(&session, &["--list-types"]);
     assert!(
         types.lines().any(|t| t == "text/plain;charset=utf-8"),
@@ -275,9 +276,8 @@ fn the_selection_works_with_wl_clipboard() {
     client
         .set_selection(&["text/plain;charset=utf-8"], "copied by the test client")
         .unwrap();
-    // The same care the other way around: the request has to arrive while
-    // our client still has the focus, so it is sent and seen to have taken
-    // effect before `wl-paste` opens its window.
+    // The request has to arrive while our client has the focus, so it is
+    // sent and seen to have taken effect before `wl-paste` runs.
     let deadline = Instant::now() + TIMEOUT;
     loop {
         client.pump(Some(Duration::from_millis(10))).unwrap();
@@ -289,8 +289,8 @@ fn the_selection_works_with_wl_clipboard() {
             "the test client never owned the selection"
         );
     }
-    // wl-paste takes the focus for a moment to read; our client has to
-    // answer while it waits, so it is pumped from here.
+    // Our client has to answer while wl-paste waits for the data, so it is
+    // pumped from here.
     let mut child = session
         .client_command("wl-paste")
         .arg("--no-newline")

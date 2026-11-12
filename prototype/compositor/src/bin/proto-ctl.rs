@@ -72,6 +72,12 @@ enum Command {
         dx: f64,
         #[arg(allow_negative_numbers = true)]
         dy: f64,
+        /// The motion before pointer acceleration, as relative-pointer
+        /// clients see it. Defaults to `dx` and `dy`.
+        #[arg(long, allow_negative_numbers = true)]
+        dx_unaccel: Option<f64>,
+        #[arg(long, allow_negative_numbers = true)]
+        dy_unaccel: Option<f64>,
     },
     /// Press or release a pointer button (Linux evdev code; BTN_LEFT is 272).
     PointerButton { button: u32, action: Press },
@@ -148,7 +154,17 @@ fn main() -> ExitCode {
             pressed: action.pressed(),
         },
         Command::PointerMotion { x, y } => Request::PointerMotion { x, y },
-        Command::PointerMotionRelative { dx, dy } => Request::PointerMotionRelative { dx, dy },
+        Command::PointerMotionRelative {
+            dx,
+            dy,
+            dx_unaccel,
+            dy_unaccel,
+        } => Request::PointerMotionRelative {
+            dx,
+            dy,
+            dx_unaccel,
+            dy_unaccel,
+        },
         Command::PointerButton { button, action } => Request::PointerButton {
             button,
             pressed: action.pressed(),

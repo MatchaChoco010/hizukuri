@@ -28,10 +28,18 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
 use smithay::wayland::output::OutputHandler;
-use smithay::wayland::pointer_constraints::PointerConstraintsHandler;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::selection::data_device::{
     DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler, set_data_device_focus,
+};
+use smithay::wayland::selection::ext_data_control::{
+    DataControlHandler as ExtDataControlHandler, DataControlState as ExtDataControlState,
+};
+use smithay::wayland::selection::primary_selection::{
+    PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
+};
+use smithay::wayland::selection::wlr_data_control::{
+    DataControlHandler as WlrDataControlHandler, DataControlState as WlrDataControlState,
 };
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{
@@ -283,9 +291,10 @@ impl SeatHandler for State {
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        // The selection follows the keyboard focus.
+        // Both selections follow the keyboard focus.
         let client = focused.and_then(|s| self.display_handle.get_client(s.id()).ok());
-        set_data_device_focus(&self.display_handle, seat, client);
+        set_data_device_focus(&self.display_handle, seat, client.clone());
+        set_primary_focus(&self.display_handle, seat, client);
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
@@ -296,10 +305,6 @@ impl SeatHandler for State {
 impl TabletSeatHandler for State {
     type ToolFocus = WlSurface;
 }
-
-// Required for `WlSurface` to be a pointer target. The pointer-constraints
-// global itself is not created.
-impl PointerConstraintsHandler for State {}
 
 impl SelectionHandler for State {
     type SelectionUserData = ();
@@ -314,9 +319,61 @@ impl SelectionHandler for State {
         // without taking part in it. Finding out by pasting would take the
         // keyboard focus, which is what decides whether a client may set
         // the selection in the first place.
-        if target == SelectionTarget::Clipboard {
-            self.selection = source.map(|source| source.mime_types());
+        let mime_types = source.map(|source| source.mime_types());
+        match target {
+            SelectionTarget::Clipboard => self.selection = mime_types,
+            SelectionTarget::Primary => self.primary_selection = mime_types,
         }
+    }
+}
+
+impl State {
+    /// The MIME types of a selection, if a client owns it.
+    ///
+    /// They are noted at `new_selection`. Smithay does not call it when the
+    /// source goes away (its client destroys it, or disconnects): it clears
+    /// the selection silently. Whether one is still there is asked with a
+    /// type no source can offer (a Wayland string has no NUL in it); that
+    /// fails without sending anything, as "no selection" or "not that type".
+    pub(crate) fn selection_mime_types(&self, primary: bool) -> Option<Vec<String>> {
+        use smithay::wayland::selection::{data_device, primary_selection};
+        let noted = if primary {
+            self.primary_selection.as_ref()
+        } else {
+            self.selection.as_ref()
+        }?;
+        let fd: std::os::fd::OwnedFd = std::fs::File::open("/dev/null").ok()?.into();
+        let probe = "\0".to_string();
+        let gone = if primary {
+            matches!(
+                primary_selection::request_primary_client_selection(&self.seat, probe, fd),
+                Err(primary_selection::SelectionRequestError::NoSelection)
+            )
+        } else {
+            matches!(
+                data_device::request_data_device_client_selection(&self.seat, probe, fd),
+                Err(data_device::SelectionRequestError::NoSelection)
+            )
+        };
+        (!gone).then(|| noted.clone())
+    }
+}
+
+impl PrimarySelectionHandler for State {
+    fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
+        &mut self.primary_selection_state
+    }
+}
+
+impl ExtDataControlHandler for State {
+    fn data_control_state(&mut self) -> &mut ExtDataControlState {
+        &mut self.ext_data_control_state
+    }
+}
+
+impl WlrDataControlHandler for State {
+    fn data_control_state(&mut self) -> &mut WlrDataControlState {
+        &mut self.wlr_data_control_state
     }
 }
 

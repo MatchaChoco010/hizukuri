@@ -29,8 +29,16 @@ pub enum RawInput {
         pressed: bool,
         time_us: u64,
     },
-    /// Relative motion in device units after libinput's acceleration.
-    PointerMotion { dx: f64, dy: f64, time_us: u64 },
+    /// Relative motion: after libinput's acceleration (`dx`, `dy`, the
+    /// pixels of a standardized mouse), and before it (`dx_unaccel`,
+    /// `dy_unaccel`, raw device units, so in the device's own resolution).
+    PointerMotion {
+        dx: f64,
+        dy: f64,
+        dx_unaccel: f64,
+        dy_unaccel: f64,
+        time_us: u64,
+    },
     /// Absolute position, each axis normalized to `0.0..1.0` of the
     /// device's range.
     PointerMotionAbsolute { x: f64, y: f64, time_us: u64 },
@@ -196,9 +204,19 @@ impl InputTranslator {
                     time_us,
                 })
             }
-            RawInput::PointerMotion { dx, dy, time_us } => {
-                Translated::Event(InputEvent::PointerMotion { dx, dy, time_us })
-            }
+            RawInput::PointerMotion {
+                dx,
+                dy,
+                dx_unaccel,
+                dy_unaccel,
+                time_us,
+            } => Translated::Event(InputEvent::PointerMotion {
+                dx,
+                dy,
+                dx_unaccel,
+                dy_unaccel,
+                time_us,
+            }),
             RawInput::PointerMotionAbsolute { x, y, time_us } => match output {
                 Some(area) => Translated::Event(InputEvent::PointerMotionAbsolute {
                     x: area.position.0 as f64 + x.clamp(0.0, 1.0) * area.logical_size.0 as f64,
@@ -476,6 +494,8 @@ mod tests {
                 RawInput::PointerMotion {
                     dx: 1.5,
                     dy: -2.0,
+                    dx_unaccel: 1.0,
+                    dy_unaccel: -1.25,
                     time_us: 3
                 },
                 None
@@ -483,6 +503,8 @@ mod tests {
             Translated::Event(InputEvent::PointerMotion {
                 dx: 1.5,
                 dy: -2.0,
+                dx_unaccel: 1.0,
+                dy_unaccel: -1.25,
                 time_us: 3
             })
         );

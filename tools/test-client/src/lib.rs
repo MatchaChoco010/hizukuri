@@ -14,8 +14,10 @@
 //! at `WAYLAND_DISPLAY`, so it cannot end up on the desktop session by
 //! accident.
 
+mod clipboard;
 mod external;
 mod features;
+mod pointer;
 
 use std::collections::HashMap;
 use std::io;
@@ -40,8 +42,10 @@ use wayland_protocols::wp::presentation_time::client::wp_presentation;
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
+pub use clipboard::{DataControlProtocol, SelectionKind};
 pub use external::{ExternalDmabuf, create_udmabuf};
 pub use features::{PopupOptions, SurfaceKind, ToplevelRequest};
+pub use pointer::ConstraintRequest;
 use xkbcommon::xkb;
 
 /// Errors of the test client.
@@ -382,6 +386,44 @@ pub enum ClientEvent {
     },
     DragLeave,
     DragDrop,
+    /// `zwp_relative_pointer_v1.relative_motion`: the motion after
+    /// acceleration and before it, with its time in microseconds.
+    RelativeMotion {
+        time_us: u64,
+        dx: f64,
+        dy: f64,
+        dx_unaccel: f64,
+        dy_unaccel: f64,
+    },
+    /// `zwp_locked_pointer_v1.locked` and `unlocked`.
+    PointerLocked,
+    PointerUnlocked,
+    /// `zwp_confined_pointer_v1.confined` and `unconfined`.
+    PointerConfined,
+    PointerUnconfined,
+    /// The primary selection changed: the MIME types on offer, or none.
+    PrimarySelection {
+        mime_types: Vec<String>,
+    },
+    /// Someone asked this client's primary selection source for its data.
+    PrimarySourceSend {
+        mime_type: String,
+    },
+    PrimarySourceCancelled,
+    /// A data control device saw a selection change.
+    ControlSelection {
+        protocol: DataControlProtocol,
+        selection: SelectionKind,
+        mime_types: Vec<String>,
+    },
+    /// The data control device is no longer valid.
+    ControlFinished,
+    /// Someone asked a source this client set through data control for its
+    /// data.
+    ControlSourceSend {
+        mime_type: String,
+    },
+    ControlSourceCancelled,
 }
 
 #[derive(Default)]
@@ -396,6 +438,21 @@ struct Globals {
     fractional_scale: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
     presentation: Option<wp_presentation::WpPresentation>,
     data_device_manager: Option<wl_data_device_manager::WlDataDeviceManager>,
+    relative_pointer_manager: Option<
+        wayland_protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
+    >,
+    pointer_constraints: Option<
+        wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1::ZwpPointerConstraintsV1,
+    >,
+    primary_selection_manager: Option<
+        wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1,
+    >,
+    ext_data_control_manager: Option<
+        wayland_protocols::ext::data_control::v1::client::ext_data_control_manager_v1::ExtDataControlManagerV1,
+    >,
+    wlr_data_control_manager: Option<
+        wayland_protocols_wlr::data_control::v1::client::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+    >,
 }
 
 struct Window {
@@ -442,6 +499,10 @@ struct State {
     outputs: HashMap<ObjectId, features::OutputEntry>,
     data: features::DataState,
     dmabuf_feedback: features::FeedbackState,
+    pointer: pointer::PointerState,
+    clipboard: clipboard::ClipboardState,
+    /// Never create a window (a clipboard manager has none).
+    windowless: bool,
 }
 
 /// The test client. See the crate documentation.
@@ -485,6 +546,9 @@ impl TestClient {
             outputs: HashMap::new(),
             data: features::DataState::default(),
             dmabuf_feedback: features::FeedbackState::default(),
+            pointer: pointer::PointerState::default(),
+            clipboard: clipboard::ClipboardState::default(),
+            windowless: false,
         };
         Ok(Self {
             connection,
@@ -493,6 +557,14 @@ impl TestClient {
             state,
             cursor: 0,
         })
+    }
+
+    /// Connects without ever creating a window, as a clipboard manager
+    /// does. It has no surface, so it never has the focus.
+    pub fn connect_windowless(stream: UnixStream) -> Result<Self, ClientError> {
+        let mut client = Self::connect(stream, ClientOptions::default())?;
+        client.state.windowless = true;
+        Ok(client)
     }
 
     /// Connects to the Wayland socket at `path`.
@@ -675,6 +747,7 @@ impl State {
         // The window is created once; after a close request it stays gone.
         if self.window.is_none()
             && !self.closed
+            && !self.windowless
             && let (Some(compositor), Some(wm_base), Some(_)) = (
                 &self.globals.compositor,
                 &self.globals.wm_base,
@@ -803,6 +876,7 @@ impl State {
             });
         }
         self.advance_features(handle)?;
+        self.advance_clipboard(handle);
         Ok(())
     }
 }
@@ -914,6 +988,26 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                 "wl_data_device_manager" => {
                     state.globals.data_device_manager =
                         Some(registry.bind(name, version.min(3), handle, ()));
+                }
+                "zwp_relative_pointer_manager_v1" => {
+                    state.globals.relative_pointer_manager =
+                        Some(registry.bind(name, 1, handle, ()));
+                }
+                "zwp_pointer_constraints_v1" => {
+                    state.globals.pointer_constraints = Some(registry.bind(name, 1, handle, ()));
+                }
+                "zwp_primary_selection_device_manager_v1" => {
+                    state.globals.primary_selection_manager =
+                        Some(registry.bind(name, 1, handle, ()));
+                }
+                "ext_data_control_manager_v1" => {
+                    state.globals.ext_data_control_manager =
+                        Some(registry.bind(name, 1, handle, ()));
+                }
+                "zwlr_data_control_manager_v1" => {
+                    // Version 2 has the primary selection.
+                    state.globals.wlr_data_control_manager =
+                        Some(registry.bind(name, version.min(2), handle, ()));
                 }
                 "wl_output" => {
                     let output: wl_output::WlOutput =

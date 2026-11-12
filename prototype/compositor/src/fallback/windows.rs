@@ -253,6 +253,11 @@ impl Windows {
     pub fn request_close(&mut self, id: WindowId) {
         self.requests.push(WmRequest::Close(id));
     }
+
+    /// Queues something else for the core to do (see [`WmRequest`]).
+    pub fn request(&mut self, request: WmRequest) {
+        self.requests.push(request);
+    }
 }
 
 impl WindowManager for Windows {

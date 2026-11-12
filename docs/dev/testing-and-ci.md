@@ -68,7 +68,7 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
 | 色の計算 | `proto-color` の単体テスト | 原色の行列と transfer function を、規格の値と比べる。往復で、元の値に戻ること | 不要 |
 | 配置 | `proto-layout` の単体テスト | 個別の場面と、proptest による不変条件 | 不要 |
 | fallback | `proto-compositor` の `fallback/` の単体テスト | ずらした配置と、ウィンドウの表（`fallback::Windows`）を、`proto-layout` の `Layout` と比べる。当たり判定 | 不要 |
-| プロトコル | `prototype/compositor/tests/protocol.rs`、`proto-wl` の `tests/server.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。何も描かない `NullScene` と、fallback のウィンドウ管理（`Compositor::new`）。configure、focus、キー、ポインター、バッファの解放、subsurface | 不要 |
+| プロトコル | `prototype/compositor/tests/protocol.rs`、`tests/input_protocols.rs`、`proto-wl` の `tests/server.rs` | compositor と検証用のクライアントを、同じスレッドで動かす。何も描かない `NullScene` と、fallback のウィンドウ管理（`Compositor::new`）。configure、focus、キー、ポインター、バッファの解放、subsurface。相対的な動き、ポインターの制約、primary selection、data control | 不要 |
 | バックエンドの取り決め | `prototype/compositor/tests/backend_contract.rs` | 中核を、台本どおりにイベントを出すバックエンドで動かす。`NullScene` と、fallback のウィンドウ管理。出力の追加と削除、フレームの要求、session の一時停止と再開 | 不要 |
 | KMS のロジック | `proto-backend` の単体テスト、`tests/kms_mock.rs`、`tests/kms_fixtures.rs` | 模擬の DRM のデバイスで動かす（下の節） | 不要 |
 | レンダラー | `prototype/render/tests/gpu.rs` | 表面と出力の image description の組み合わせを描き、CPU の参照計算と比べる | 要る |
