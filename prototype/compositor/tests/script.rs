@@ -2219,15 +2219,15 @@ fn a_script_that_fails_on_events_is_taken_out_of_charge(device: Device) {
 
     // A reload puts a working script back: the windows are tiled again.
     // The script that was out of charge handed nothing over, so the new
-    // one starts from what the core knows: the stacking order, in which
-    // the clicked window is on top.
+    // one starts from what the core knows: where the windows are, left to
+    // right (a is still in its tile, b where the core put it).
     session.script("set_fault", json!(["key", Value::Null]));
     session.send(Request::ScriptReload { path: None });
     assert_eq!(session.script_state()["mode"], "running");
     wait_tiles(
         &mut session,
         &mut [&mut a, &mut b, &mut c],
-        &[("b", [8, 8], [308, 384]), ("a", [324, 8], [308, 384])],
+        &[("a", [8, 8], [308, 384]), ("b", [324, 8], [308, 384])],
     );
     session.assert_renderer_clean();
     session.quit();
