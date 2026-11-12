@@ -1,7 +1,9 @@
 #import "lib/hizukuri-slides.typ": *
 
 // 書き方は、skill `release-slides` の SKILL.md にある。
-// 段落と箇条書きの 1 項目は、ソースの 1 行に書く（行の途中で折り返さない）。
+// - 見出しは、題名である。#item と #topic の題に、文を書かない。そのページで言うことは、#slide の caption に書く。
+// - 段落と箇条書きの 1 項目は、ソースの 1 行に書く（行の途中で折り返さない）。
+// - 詰め込まない。段組み（#cols）は、画面や図の横に、その説明を置くときだけ使う。
 
 #let repo-url = "https://github.com/OWNER/REPO"
 #let pr(number) = (label: "PR #" + str(number), url: repo-url + "/pull/" + str(number))
@@ -23,13 +25,20 @@
 
 #summary-section()
 
-#slide(title: [今回のリリースの要点])[
+#topic[今回のリリースの要点]
+
+#slide(caption: [このリリースで、何が変わったか])[
   #lead[
-    今回のリリースで、何が変わったか。2〜3 文で書く。
+    今回のリリースで、何が入ったか。2〜3 文で書く。
   ]
   - *できるようになったこと。*利用者から見て、何が変わるか。
-  - 項目が多いときは、全体の構成と、項目の対応を示すページを、この後に足す。
 ]
+
+#slide(caption: [まだ無いものと、気を付けること])[
+  - まだ無いもの。
+]
+
+// 項目が多いときは、「全体の構成と、項目の対応」の topic を、ここに足す。
 
 #item-list()
 
@@ -38,43 +47,68 @@
 #item(
   kind: "追加",
   area: "変わった部分",
-  title: [何が、どうなったか],
+  title: [変更の名前（題名。文にしない）],
   refs: (issue(0), pr(0)),
 )
 
-#slide(title: [このページで言いたいこと])[
+#slide(caption: [何が入ったか、1 行で])[
   #lead[
     何が入ったか。何のためか。
   ]
-  #cols(widths: (1fr, 1.1fr))[
-    - 仕組みの説明。
-    #note[
-      いまの制約。
-    ]
-  ][
-    #shot("img/NAME.png", caption: [
-      何が写っているか。どう撮ったか。どこを見るか。
-    ])
+  - 仕組みの説明。
+]
+
+#slide(caption: [この画面に、何が写っているか])[
+  #shot("img/NAME.png", height: 318pt, caption: [
+    どう取り込んだか。どこを見るか。
+  ])
+]
+
+#slide(caption: [いまの制約])[
+  - 残っていること。
+  #note[
+    未実装のもの。
   ]
 ]
 
-// -------------------------------------------------------------- 確かめ方
+// ------------------------------------------------------ 手元で動かして試す
 
 #verify-section()
 
-#slide(title: [準備と、全部の検査])[
-  #step("git fetch origin --tags\ngit switch --detach release-YYYYMMDD-N")[
-    確かめる対象を取り出す。
+#topic[いま、手元で試せること]
+
+#slide(caption: [何が、どの形で動かせて、何が、まだ動かせないか])[
+  #table(
+    columns: (auto, auto, 1fr),
+    table.header[動かし方][状態][内容],
+    [検証用の VM の中で], [試せる], [起動して、キーボードとマウスで触れる],
+    [日常のデスクトップとして], [まだ使えない], [足りないもの],
+  )
+]
+
+#topic[動かし方の名前]
+
+#slide(caption: [起動の手順])[
+  #step("起動のコマンド")[
+    何が起きるか。
   ]
-  #step("nix develop --command tools/ci.sh")[
-    何が起きれば、通っているか。
-  ]
+  + 次に、何をするか。
+]
+
+#slide(caption: [触って、見るところ])[
+  #table(
+    columns: (auto, 1fr),
+    table.header[操作][起きること],
+    [キー], [こうなる],
+  )
 ]
 
 // ------------------------------------------------------------------ 付録
 
 #appendix-section()
 
-#slide(title: [PR を通らずに入った commit])[
-  無ければ、このページを消す。
+#topic[PR を通らずに入った commit]
+
+#slide(caption: [無ければ、この topic を消す])[
+  - commit と、その内容、属する項目。
 ]

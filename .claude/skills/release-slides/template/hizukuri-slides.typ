@@ -7,12 +7,20 @@
 //   #show: deck.with(release: "release-20270101-1", ...)
 //   #title-slide()
 //   #summary-section()
-//   #slide(title: [今回のリリースの要点])[ ... ]
+//   #topic[今回のリリースの要点]
+//   #slide(caption: [...])[ ... ]
 //   #item-list()
 //   #item(kind: "追加", area: "検証用の compositor", title: [...], refs: (...))
-//   #slide(title: [...])[ ... ]
+//   #slide(caption: [...])[ ... ]
+//   #slide(caption: [...])[ ... ]
 //   #verify-section()
-//   #slide(title: [...])[ ... ]
+//   #topic[...]
+//   #slide(caption: [...])[ ... ]
+//
+// A slide has no title of its own. Its heading is the title of the unit it
+// belongs to (an item, or a topic in one of the other sections), so every
+// slide of a unit carries the same heading and its position in the unit.
+// What the one slide says goes into its caption, under the heading.
 //
 // Only fonts that the `slides` shell of flake.nix provides are named here.
 
@@ -43,12 +51,11 @@
 // ------------------------------------------------------------------ state
 
 #let deck-info = state("deck-info", (:))
-// The item the following slides belong to: none before the first item and in
-// the closing sections.
-#let current-item = state("current-item", none)
-#let item-counter = counter("item")
-// What the strip above the slide title shows when no item is open.
-#let section-name = state("section-name", none)
+
+// Where a slide belongs is read from markers in the document, not kept in
+// state: `<section>` opens a section, `<unit>` opens an item or a topic,
+// `<item>` marks the units that are items, `<unit-slide>` marks a slide.
+// A slide belongs to the last unit before it.
 
 // ---------------------------------------------------------------- helpers
 
@@ -82,6 +89,12 @@
     .join(h(0.9em))
 }
 
+#let to-text(content) = {
+  if type(content) == str { content } else if content.has("text") { content.text } else if content.has("children") {
+    content.children.map(to-text).join()
+  } else if content.has("body") { to-text(content.body) } else { " " }
+}
+
 // ------------------------------------------------------------------- deck
 
 #let deck(
@@ -104,9 +117,9 @@
   set page(
     width: 960pt,
     height: 540pt,
-    margin: (left: 44pt, right: 44pt, top: 34pt, bottom: 40pt),
+    margin: (left: 60pt, right: 60pt, top: 32pt, bottom: 42pt),
     fill: paper,
-    footer-descent: 12pt,
+    footer-descent: 14pt,
     footer: context {
       let info = deck-info.get()
       set text(size: 9pt, fill: ink-faint)
@@ -122,19 +135,20 @@
       )
     },
   )
-  set text(font: sans, size: 14pt, fill: ink, lang: "ja", region: "JP", weight: 400)
+  set text(font: sans, size: 15pt, fill: ink, lang: "ja", region: "JP", weight: 400)
   // Not justified: lines that mix Japanese with identifiers in boxes cannot
-  // be stretched evenly, least of all in a narrow column.
-  set par(leading: 0.78em, spacing: 1.05em, justify: false)
-  set list(marker: text(fill: ember, sym.bullet), indent: 2pt, body-indent: 7pt, spacing: 0.85em)
-  set enum(indent: 2pt, body-indent: 7pt, spacing: 0.85em, numbering: n => text(fill: ember, weight: 700, str(n) + "."))
+  // be stretched evenly.
+  set par(leading: 0.86em, spacing: 1.25em, justify: false)
+  set list(marker: text(fill: ember, sym.bullet), indent: 2pt, body-indent: 8pt, spacing: 1.05em)
+  set enum(indent: 2pt, body-indent: 8pt, spacing: 1.05em, numbering: n => text(fill: ember, weight: 700, str(n) + "."))
   set strong(delta: 300)
   show emph: it => text(weight: 500, fill: ember, it.body)
 
   // Typst sets raw text at 0.8em; this brings it to 0.88em of the text
   // around it.
+  // Ligatures are off in code: `->` must stay two characters, as typed.
   set raw(theme: none)
-  show raw: set text(font: mono, size: 1.1em)
+  show raw: set text(font: mono, size: 1.1em, ligatures: false, features: (calt: 0))
   show raw.where(block: false): it => box(
     fill: wash,
     radius: 2pt,
@@ -149,12 +163,11 @@
     width: 100%,
     fill: night,
     radius: 3pt,
-    inset: (x: 12pt, y: 10pt),
+    inset: (x: 14pt, y: 12pt),
     {
-      // 0.82em of the text around the block: 11.5pt in body text, and
-      // smaller inside `small`.
+      // 0.82em of the text around the block.
       set text(fill: rgb("#e6e9ed"), size: 0.93em)
-      set par(leading: 0.62em, justify: false)
+      set par(leading: 0.66em, justify: false)
       layout(size => {
         let wide = it.lines.filter(l => measure(l.body).width > size.width + 0.5pt)
         if wide.len() > 0 {
@@ -175,21 +188,49 @@
     it
   }
 
-  // Headings inside a slide.
-  show heading: it => block(above: 1.1em, below: 0.7em, text(size: 12.5pt, weight: 700, fill: ember, it.body))
+  // Headings inside a slide: the title of a part of the slide.
+  show heading: it => block(above: 1.3em, below: 0.8em, text(size: 13pt, weight: 700, fill: ember, it.body))
 
   set table(
     stroke: (x, y) => (bottom: 0.5pt + rule, top: if y == 0 { 1pt + ink } else { none }),
-    inset: (x: 7pt, y: 6.5pt),
+    inset: (x: 9pt, y: 8pt),
     fill: (x, y) => if y == 0 { wash },
   )
-  show table: set text(size: 12pt)
-  show table: set par(justify: false, leading: 0.6em)
+  show table: set text(size: 13pt)
+  show table: set par(justify: false, leading: 0.62em)
   show table.cell.where(y: 0): set text(weight: 700)
 
   deck-info.update((release: release, date: date, range: range, commit: commit, pr: pr, repo: repo))
   body
 }
+
+// ------------------------------------------------------------------ units
+
+// Opens a section that is not made of items: the summary at the start, how
+// to try the release, the appendix. The topics that follow belong to it.
+#let section(name) = [#metadata(name) <section>]
+
+#let summary-section() = section("この報告の内容")
+#let verify-section() = section("手元で動かして試す")
+#let appendix-section() = section("付録")
+
+// Opens an item: one unit of change (a pull request or an issue; several of
+// them when they form one piece of work). The slides that follow belong to
+// it and carry its title as their heading.
+//
+//   kind   one of the keys of `kinds`
+//   area   the part of the project that changed, as the reader would name it
+//   title  the name of the change: a title, not a sentence about it
+//   refs   issues and pull requests: ((label: "Issue #8", url: "..."), (label: "PR #12", url: "..."))
+#let item(kind: none, area: none, title: none, refs: ()) = {
+  assert(kind in kinds, message: "unknown kind: " + repr(kind) + ". Use one of: " + kinds.keys().join(", "))
+  [#metadata((kind: kind, area: area, title: title, refs: refs)) <item>]
+  [#metadata((title: title, item: (kind: kind, area: area, refs: refs))) <unit>]
+}
+
+// Opens a topic: a unit of slides in a section that is not made of items.
+// The slides that follow carry its title as their heading.
+#let topic(title) = [#metadata((title: title, item: none)) <unit>]
 
 // ----------------------------------------------------------------- slides
 
@@ -215,61 +256,74 @@
   }
 })
 
-#let to-text(content) = {
-  if type(content) == str { content } else if content.has("text") { content.text } else if content.has("children") {
-    content.children.map(to-text).join()
-  } else if content.has("body") { to-text(content.body) } else { " " }
-}
-
-// One slide. Belongs to the item that was opened last.
-#let slide(title: none, body) = {
-  pagebreak(weak: true)
-  [#metadata("slide") <slide>]
-  fit(if title == none { "(untitled)" } else { to-text(title) }, {
-    context {
-      let item = current-item.get()
-      let section = section-name.get()
-      set text(size: 10.5pt, fill: ink-soft)
-      set par(justify: false)
-      if item != none {
-        grid(
-          columns: (auto, 1fr, auto),
-          column-gutter: 9pt,
-          align: horizon,
-          text(weight: 700, fill: ember, size: 12pt, two-digits(item.number)),
-          [#kind-tag(item.kind)#h(8pt)#item.area#h(8pt)#text(fill: ink-faint)[｜]#h(8pt)#item.title],
-          ref-links(item.refs),
-        )
-      } else if section != none {
-        text(weight: 700, fill: ember, size: 12pt, section)
-      } else {
-        v(1em)
-      }
-    }
-    v(-4pt)
-    line(length: 100%, stroke: 0.5pt + rule)
-    v(2pt)
-    if title != none {
-      block(below: 14pt, text(size: 23pt, weight: 700, title))
-    }
-    body
-  })
-}
-
-// Opens an item: one unit of change (a pull request or an issue; several of
-// them when they form one piece of work). The slides that follow belong to it.
+// One slide of the unit that was opened last.
 //
-//   kind   one of the keys of `kinds`
-//   area   the part of the project that changed, as the reader would name it
-//   title  what changed, in one phrase
-//   refs   issues and pull requests: ((label: "Issue #8", url: "..."), (label: "PR #12", url: "..."))
-#let item(kind: none, area: none, title: none, refs: ()) = {
-  item-counter.step()
+//   caption  what this slide says, in one line. Shown under the heading.
+#let slide(caption: none, body) = {
+  pagebreak(weak: true)
+  [#metadata(none) <unit-slide>]
+  // Everything that is looked up in the document is looked up here, outside
+  // of what `fit` measures.
   context {
-    let number = item-counter.get().first()
-    current-item.update((number: number, kind: kind, area: area, title: title, refs: refs))
+    let units = query(selector(<unit>).before(here()))
+    assert(units.len() > 0, message: "a slide needs an #item or a #topic before it")
+    let unit = units.last()
+    let following = query(selector(<unit>).after(here()))
+    let of-unit = selector(<unit-slide>).after(unit.location())
+    let total = if following.len() > 0 {
+      query(of-unit.before(following.first().location())).len()
+    } else {
+      query(of-unit).len()
+    }
+    let position = query(of-unit.before(here())).len()
+    let number = query(selector(<item>).before(here())).len()
+    let sections = query(selector(<section>).before(here()))
+    let unit = unit.value
+    let whole = {
+      set par(justify: false)
+      // Above the heading: where the unit belongs.
+      {
+        set text(size: 10.5pt, fill: ink-soft)
+        if unit.item != none {
+          grid(
+            columns: (1fr, auto),
+            align: horizon,
+            [#kind-tag(unit.item.kind)#h(8pt)#unit.item.area],
+            ref-links(unit.item.refs),
+          )
+        } else if sections.len() > 0 {
+          text(weight: 700, fill: ember, sections.last().value)
+        } else {
+          v(1em)
+        }
+      }
+      v(-2pt)
+      // The heading: the title of the unit, the same on all of its slides,
+      // and which of its slides this is.
+      grid(
+        columns: (1fr, auto),
+        column-gutter: 12pt,
+        align: (left + bottom, right + bottom),
+        text(size: 23pt, weight: 700, {
+          if unit.item != none {
+            text(fill: ember, two-digits(number))
+            h(12pt)
+          }
+          unit.title
+        }),
+        text(size: 12pt, fill: ink-faint, weight: 500)[#position / #total],
+      )
+      if caption != none {
+        v(-6pt)
+        text(size: 14.5pt, fill: ink-soft, weight: 500, caption)
+      }
+      v(-3pt)
+      line(length: 100%, stroke: 0.5pt + rule)
+      v(8pt)
+      body
+    }
+    fit(if caption == none { "(no caption)" } else { to-text(caption) }, whole)
   }
-  [#metadata((kind: kind, area: area, title: title, refs: refs)) <item>]
 }
 
 #let title-slide() = {
@@ -311,59 +365,58 @@
   }
 }
 
-// The list of the items, with the page each one starts on. Comes after the
-// slides that summarize the release and before the first item. `note` is
-// shown under the list.
-#let item-list(note: none) = slide(title: [項目の一覧], context {
-  let items = query(<item>)
-  set par(justify: false)
-  let size = if items.len() > 14 { 10pt } else if items.len() > 10 { 10.8pt } else { 12pt }
-  let pad = if items.len() > 14 { 3.9pt } else if items.len() > 10 { 4.6pt } else { 6pt }
-  set text(size: size)
-  show table: set text(size: size)
-  table(
-    columns: (auto, auto, auto, 1fr, auto, auto),
-    inset: (x: 7pt, y: pad),
-    align: (right, left, left, left, left, right),
-    table.header([], [種類], [部分], [内容], [Issue、PR], [ページ]),
-    ..items
-      .enumerate()
-      .map(((i, it)) => {
-        let v = it.value
-        let page = counter(page).at(it.location()).first() + 1
-        (
-          text(weight: 700, fill: ember, two-digits(i + 1)),
-          kind-tag(v.kind),
-          v.area,
-          v.title,
-          ref-links(v.refs),
-          link(it.location(), str(page)),
-        )
-      })
-      .flatten(),
-  )
-  if note != none {
-    v(4pt)
-    text(size: 10.5pt, fill: ink-soft, note)
+// The list of the items, with the pages each one covers. Comes after the
+// slides that summarize the release and before the first item. `pages` is
+// the number of slides the list is spread over: seven items fit on one.
+// `note` is shown under the end of the list.
+#let item-list(pages: 1, note: none) = {
+  topic[項目の一覧]
+  for index in range(pages) {
+    slide(caption: [番号の順は、`develop` に入った順である], context {
+      let items = query(<item>)
+      let per-slide = calc.max(1, calc.ceil(items.len() / pages))
+      let first = calc.min(items.len(), index * per-slide)
+      let last = calc.min(items.len(), first + per-slide)
+      let page-of = location => counter(page).at(location).first()
+      set par(justify: false)
+      show table: set text(size: 12.5pt)
+      table(
+        columns: (auto, auto, 1fr, auto, auto),
+        inset: (x: 9pt, y: 6pt),
+        align: (right + horizon, left + horizon, left, left + horizon, right + horizon),
+        table.header([], [種類], [題と、変わった部分], [Issue、PR], [ページ]),
+        ..range(first, last)
+          .map(i => {
+            let it = items.at(i)
+            let v = it.value
+            // The slides of the item: from its marker to the next unit. The
+            // first unit after the marker is the item's own.
+            let own = selector(<unit-slide>).after(it.location())
+            let units = query(selector(<unit>).after(it.location()))
+            let slides = if units.len() > 1 { query(own.before(units.at(1).location())) } else { query(own) }
+            let start = if slides.len() > 0 { page-of(slides.first().location()) } else { page-of(it.location()) + 1 }
+            let end = if slides.len() > 0 { page-of(slides.last().location()) } else { start }
+            (
+              text(weight: 700, fill: ember, two-digits(i + 1)),
+              kind-tag(v.kind),
+              [#text(weight: 500, v.title) \ #text(size: 10.5pt, fill: ink-soft, v.area)],
+              ref-links(v.refs),
+              link(it.location(), if end > start [#start〜#end] else [#start]),
+            )
+          })
+          .flatten(),
+      )
+      if note != none and index == pages - 1 {
+        v(4pt)
+        text(size: 11.5pt, fill: ink-soft, note)
+      }
+    })
   }
-})
-
-// Opens a section that is not an item: the summary at the start ("この報告の
-// 内容"), how to check the release, the appendix. Closes the item that was
-// open. The slides that follow show `name` in the strip.
-#let section(name) = {
-  current-item.update(none)
-  section-name.update(name)
 }
-
-#let summary-section() = section("この報告の内容")
-#let verify-section() = section("確かめ方")
-#let appendix-section() = section("付録")
 
 // ------------------------------------------------------------- components
 
 // A pointer to another item: its number, as a link to its first slide.
-// For the slide that shows how the items fit together.
 #let see(number) = context {
   let items = query(<item>)
   assert(number >= 1 and number <= items.len(), message: "see(" + str(number) + "): there is no such item")
@@ -376,17 +429,19 @@
   ))
 }
 
-// The first paragraph of an item: what changed, in two or three sentences.
+// The opening paragraph of an item: what changed and what for, in two or
+// three sentences.
 #let lead(body) = block(
   width: 100%,
-  below: 14pt,
+  below: 20pt,
   stroke: (left: 3pt + ember),
-  inset: (left: 12pt, y: 3pt),
-  text(size: 15.5pt, weight: 500, body),
+  inset: (left: 14pt, y: 4pt),
+  text(size: 16.5pt, weight: 500, body),
 )
 
-// Two (or more) columns. `widths` are the column widths.
-#let cols(widths: (1fr, 1fr), gutter: 26pt, ..cells) = grid(
+// Two columns, for a picture next to the text that explains it. Text alone
+// is not set in columns.
+#let cols(widths: (1fr, 1fr), gutter: 32pt, ..cells) = grid(
   columns: widths,
   column-gutter: gutter,
   ..cells.pos()
@@ -394,62 +449,64 @@
 
 // A screenshot or another picture, with a caption that says what the picture
 // shows and how it was taken. `path` is relative to the deck's directory.
-#let shot(path, caption: none, width: 100%, height: auto) = block(width: width, {
+// With a `height`, the picture is centered at that height: for a slide that
+// holds a picture and its caption and nothing else.
+#let shot(path, caption: none, width: 100%, height: auto) = {
   let path = if path.starts-with("/") { path } else { "/" + path }
-  block(
+  let picture = block(
     stroke: 0.75pt + rule,
     radius: 2pt,
     clip: true,
-    image(path, width: 100%, height: height),
+    if height == auto { image(path, width: 100%) } else { image(path, height: height) },
   )
-  if caption != none {
-    v(-5pt)
-    set par(justify: false, leading: 0.55em)
-    text(size: 10pt, fill: ink-soft, caption)
+  let note = if caption != none {
+    set par(justify: false, leading: 0.62em)
+    text(size: 11.5pt, fill: ink-soft, caption)
   }
-})
+  if height == auto {
+    block(width: width, {
+      picture
+      if caption != none { v(-4pt); note }
+    })
+  } else {
+    align(center, picture)
+    if caption != none { v(-2pt); note }
+  }
+}
 
 // A boxed remark: a limit, something not implemented, a thing to watch for.
 #let note(label: "いまの制約", body) = block(
   width: 100%,
   fill: ember-wash,
   radius: 3pt,
-  inset: (x: 11pt, y: 9pt),
+  inset: (x: 14pt, y: 11pt),
   {
-    set text(size: 12pt)
-    set par(justify: false, leading: 0.62em)
-    text(weight: 700, fill: ember, size: 10.5pt, label)
+    set text(size: 13.5pt)
+    set par(justify: false, leading: 0.7em)
+    text(weight: 700, fill: ember, size: 11pt, label)
     v(-5pt)
     body
   },
 )
 
-// Smaller text, for a dense list or a long table.
-#let small(body) = {
-  set text(size: 12pt)
-  set par(leading: 0.66em, spacing: 0.9em)
-  set list(spacing: 0.72em)
-  body
-}
-
-// Terms and what they mean, as two columns.
+// Terms and what they mean.
 #let terms(width: auto, ..pairs) = {
-  set par(justify: false, leading: 0.62em)
+  set par(justify: false, leading: 0.7em)
   grid(
     columns: (width, 1fr),
-    column-gutter: 14pt,
-    row-gutter: 9pt,
-    ..pairs.pos().map(p => (text(weight: 700, size: 12.5pt, p.at(0)), text(size: 12.5pt, p.at(1)))).flatten(),
+    column-gutter: 18pt,
+    row-gutter: 14pt,
+    ..pairs.pos().map(p => (text(weight: 700, p.at(0)), p.at(1))).flatten(),
   )
 }
 
-// A command to run and what it should do. For the slides on how to check
+// A command to run and what should happen. For the slides on how to try
 // the release.
-#let step(command, body) = block(width: 100%, below: 12pt, breakable: false, {
+#let step(command, body) = block(width: 100%, below: 16pt, breakable: false, {
   raw(command, block: true, lang: "sh")
-  v(-6pt)
-  set text(size: 12pt)
-  set par(justify: false, leading: 0.62em)
+  v(-4pt)
+  set text(size: 13.5pt)
+  set par(justify: false, leading: 0.7em)
   body
 })
 
@@ -462,21 +519,21 @@
   fill: if accent { ember-wash } else { fill },
   stroke: if accent { 0.75pt + ember } else { stroke },
   radius: 3pt,
-  inset: (x: 9pt, y: 7pt),
+  inset: (x: 10pt, y: 10pt),
   {
-    set text(size: 11pt)
-    set par(justify: false, leading: 0.55em)
+    set text(size: 12.5pt)
+    set par(justify: false, leading: 0.6em)
     set align(center + horizon)
     body
   },
 )
 
 // Boxes from left to right with arrows between them.
-#let flow(..nodes, gutter: 6pt) = {
+#let flow(..nodes, gutter: 8pt) = {
   let cells = ()
   for (i, n) in nodes.pos().enumerate() {
     if i > 0 {
-      cells.push(align(center + horizon, text(fill: ink-faint, size: 13pt, sym.arrow.r)))
+      cells.push(align(center + horizon, text(fill: ink-faint, size: 14pt, sym.arrow.r)))
     }
     cells.push(n)
   }
@@ -490,7 +547,7 @@
 
 // Rows stacked on top of each other (a layer diagram). Each row is a list
 // of boxes that share the width.
-#let layers(..rows, gutter: 5pt) = stack(
+#let layers(..rows, gutter: 6pt) = stack(
   spacing: gutter,
   ..rows.pos().map(row => if type(row) == array {
     grid(columns: range(row.len()).map(_ => 1fr), column-gutter: gutter, ..row)
