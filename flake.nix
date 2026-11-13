@@ -191,9 +191,12 @@
             fi
 
             # llvmpipe generates code for the CPU it runs on. Fixing the
-            # vector width and the thread count narrows the differences
-            # between machines (docs/dev/testing-and-ci.md).
-            export LP_NATIVE_VECTOR_WIDTH="''${LP_NATIVE_VECTOR_WIDTH:-128}"
+            # thread count narrows the differences between machines
+            # (docs/dev/testing-and-ci.md). The vector width is left to
+            # Mesa: each shader compile rewrites the process-wide width,
+            # first to the CPU's own and then to LP_NATIVE_VECTOR_WIDTH,
+            # without a lock, so any other value lets compiles running on
+            # other threads build mismatched code.
             export LP_NUM_THREADS="''${LP_NUM_THREADS:-4}"
           '';
         };
