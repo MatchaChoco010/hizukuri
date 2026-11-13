@@ -137,7 +137,7 @@ Rust も、ライブラリも、入っていない。リリースの報告のス
 | `CARGO_TARGET_DIR` | `<リポジトリ>/target/nix-<hash>` | システムのライブラリでビルドした結果と、分ける。すでに設定されていれば、変えない |
 | `NIX_LDFLAGS` | `-rpath <vulkan-loader>/lib` など | `dlopen` で読むライブラリを、バイナリの RUNPATH に入れる |
 | `GBM_BACKENDS_PATH`、`__EGL_VENDOR_LIBRARY_FILENAMES` | nixpkgs の Mesa | GBM と EGL が、nixpkgs の Mesa を見つける |
-| `LP_NATIVE_VECTOR_WIDTH`、`LP_NUM_THREADS` | `128`、`4`。すでに設定されていれば、変えない | lavapipe の、CPU による結果の差を小さくする |
+| `LP_NUM_THREADS` | `4`。すでに設定されていれば、変えない | lavapipe の、機械による結果の差を小さくする |
 
 shell に入るときに、システムのファイルを読ませる次の変数を外す。
 

@@ -218,7 +218,9 @@ VM の作りと、試験の部の一覧は、[検証用の VM](vm-environment.md
 lavapipe（llvmpipe）は、実行時に、その CPU 向けのコードを作る。CPU の命令セットが違う機械では、結果が少し違うことがある。
 
 - Mesa と LLVM の版は、`flake.lock` で固定している。
-- devShell は、`LP_NATIVE_VECTOR_WIDTH=128` と `LP_NUM_THREADS=4` を設定している。ベクトルの幅とスレッドの数を、機械によらず同じにする。
+- devShell は、`LP_NUM_THREADS=4` を設定している。スレッドの数を、機械によらず同じにする。
+- ベクトルの幅は、Mesa が CPU から決める（AVX のある CPU では 256 bit、無い CPU では 128 bit）。テストは、どちらの幅でも通る。
+- `LP_NATIVE_VECTOR_WIDTH` は、設定しない。Mesa（26.2）は、shader を compile するたびに、プロセスで 1 つのベクトルの幅を、lock なしで、CPU から決めた値、`LP_NATIVE_VECTOR_WIDTH` の値の順に書き直す。2 つが違うと、別のスレッドで同時に走る compile が、途中で幅を読み違え、食い違ったコードを作る。lavapipe の device を、1 つのプロセスの中で、複数のスレッドが同時に使うと（gfx-core のテスト）、LLVM の中の誤り、heap の破壊、JIT のコードの中での SIGSEGV として現れる。
 - 画素を比べるテストは、完全な一致を前提にしない。符号値の差の上限で判定する。
 
 ## CI
