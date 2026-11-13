@@ -40,11 +40,13 @@ hizukuri で作る Wayland compositor を、**コンポジター**と呼ぶ。�
 
 ## 必ず守ること
 
-- 依存に入れるのは、MIT、Apache-2.0、BSD、Zlib、ISC など、制約の弱い license のものに限る
-  （hizukuri の license は、まだ決まっていない。後で選択を狭めないためである）。
+- hizukuri の license は、MIT と Apache-2.0 の dual license である（`LICENSE-MIT`、`LICENSE-APACHE`、`Cargo.toml` の `license`）。
+  依存に入れるのは、MIT、Apache-2.0、BSD、Zlib、ISC など、制約の弱い license のものに限る
+  （どちらの license を選んだ利用者も、依存の条件を満たせるようにするためである）。
   この決まりの対象は、hizukuri のバイナリに取り込むコード（Rust の crate、静的にリンクするライブラリ、同梱するコード）である。
   システムの共有ライブラリを動的にリンクすること（glibc、libudev、libinput、libseat など）は、対象にしない。
 - 他のプロジェクトのコードを、そのまま取り込まない。どの API を、どう使うかの参考にとどめる。
+  依存の example や文書の例に倣って書いた部分があるときは、その依存の license の表示を、`THIRD-PARTY-NOTICES.md` に置く。
 - **テストと道具は、それを動かす人の環境に触れない。**
   - 動いているデスクトップの session に、つながない。テストが起動する compositor とクライアントは、テスト専用の socket と、
     専用の作業用のディレクトリだけを使う。ウィンドウを、デスクトップに出さない。

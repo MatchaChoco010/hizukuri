@@ -4,6 +4,7 @@ description = "OpenColorIO for Rust: a thin C++ layer over the shared library (p
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [build-dependencies]

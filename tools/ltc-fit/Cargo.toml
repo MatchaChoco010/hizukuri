@@ -4,6 +4,7 @@ description = "Fits linearly transformed cosines to the GGX BRDF and writes the 
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [[bin]]
