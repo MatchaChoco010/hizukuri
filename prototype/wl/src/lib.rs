@@ -1,0 +1,1395 @@
+//! Wayland server side of the verification compositor.
+//!
+//! This crate wraps Smithay's protocol layer and turns protocol requests
+//! into plain state and events. No Smithay type appears in its public API:
+//! surfaces, windows and outputs are identified by ids, pixel data is handed
+//! out as bytes, and input is fed in as numbers. That keeps the rest of
+//! hizukuri (layout, scene, renderer) independent of Smithay.
+//!
+//! The crate does not render and does not decide where windows go. The
+//! caller
+//!
+//! 1. watches [`WlServer::listen_fd`] and [`WlServer::display_fd`] and calls
+//!    [`WlServer::accept_clients`] / [`WlServer::dispatch_clients`],
+//! 2. drains [`WlServer::drain_events`] and reacts (place windows, set the
+//!    focus, configure),
+//! 3. asks for the surfaces of each window ([`WlServer::window_surfaces`])
+//!    and their pixels ([`WlServer::take_buffer_update`]) to draw them,
+//!    dropping each [`BufferUpdate`] once the renderer is done with it,
+//! 4. reports frames back ([`WlServer::send_frame_callbacks`],
+//!    [`WlServer::send_presented`]) and calls [`WlServer::flush_clients`].
+//!
+//! Pointer and touch input is addressed to a surface with surface-local
+//! coordinates. Hit testing is the caller's job, so it works the same
+//! whether windows are laid out flat or placed in 3D.
+
+mod buffer;
+mod color;
+mod constraints;
+mod handlers;
+mod ime;
+mod outside_ime;
+mod selection;
+mod state;
+mod surface;
+mod touch;
+
+use std::borrow::Cow;
+use std::io;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use proto_color::{AlphaMode, ImageDescription};
+use smithay::reexports::wayland_server::{Display, ListeningSocket};
+
+pub use crate::outside_ime::{OutsideCompose, OutsideTextInput, TextInputContent};
+pub use crate::selection::{
+    SelectionEvent, SelectionKind, SelectionOwner, SelectionWriteError, TransferFd,
+};
+use crate::state::{ClientState, State};
+
+/// What a surface without any color information is taken to be: BT.709
+/// primaries with a pure 2.2 power function.
+pub const DEFAULT_SURFACE_IMAGE_DESCRIPTION: ImageDescription = ImageDescription::SRGB_GAMMA22;
+
+/// Identifies a `wl_surface`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SurfaceId(pub u64);
+
+/// Identifies a toplevel window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WindowId(pub u64);
+
+/// Identifies an output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OutputId(pub u64);
+
+/// Errors of the Wayland server.
+#[derive(Debug, thiserror::Error)]
+pub enum WlError {
+    #[error("failed to create the Wayland display: {0}")]
+    Display(String),
+    #[error("failed to bind the Wayland socket {name:?}: {message}")]
+    Bind { name: String, message: String },
+    #[error("failed to set up the keyboard: {0}")]
+    Keyboard(String),
+    #[error("failed to offer zwp_linux_dmabuf_v1: {0}")]
+    Dmabuf(String),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+}
+
+/// Options for [`WlServer::new`].
+#[derive(Debug, Clone, Default)]
+pub struct ServerConfig {
+    /// How clients reach the server.
+    pub socket: SocketConfig,
+    /// Which dmabufs clients may send. `None`: `zwp_linux_dmabuf_v1` is not
+    /// offered, clients use `wl_shm`.
+    pub dmabuf: Option<DmabufConfig>,
+}
+
+/// A DRM format code with a modifier, as in `drm_fourcc.h`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DmabufFormat {
+    pub fourcc: u32,
+    pub modifier: u64,
+}
+
+/// `DRM_FORMAT_ARGB8888` and its siblings: the formats that have a
+/// `wl_shm` equivalent.
+pub const FOURCC_ARGB8888: u32 = u32::from_le_bytes(*b"AR24");
+pub const FOURCC_XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
+pub const FOURCC_ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
+pub const FOURCC_XBGR8888: u32 = u32::from_le_bytes(*b"XB24");
+/// `DRM_FORMAT_MOD_LINEAR`.
+pub const MODIFIER_LINEAR: u64 = 0;
+/// `DRM_FORMAT_MOD_INVALID`: the buffer was allocated without modifiers.
+pub const MODIFIER_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
+
+/// What `zwp_linux_dmabuf_v1` offers. Whoever imports the buffers (the
+/// renderer) decides this; the protocol layer only passes it on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmabufConfig {
+    /// The formats and modifiers that can be imported.
+    pub formats: Vec<DmabufFormat>,
+    /// Device number (`major`, `minor`) of the DRM device clients should
+    /// allocate on: the device that imports. With it the global has
+    /// feedback (version 5); without it clients only get the format list
+    /// (version 3) and pick a device themselves.
+    pub main_device: Option<(u32, u32)>,
+}
+
+impl DmabufConfig {
+    /// The formats [`BufferUpdate::upright_pixels`] can read by mapping the
+    /// buffer: the four 8 bit RGB layouts, in linear memory.
+    pub fn cpu_readable(main_device: Option<(u32, u32)>) -> Self {
+        Self {
+            formats: [
+                FOURCC_ARGB8888,
+                FOURCC_XRGB8888,
+                FOURCC_ABGR8888,
+                FOURCC_XBGR8888,
+            ]
+            .into_iter()
+            .map(|fourcc| DmabufFormat {
+                fourcc,
+                modifier: MODIFIER_LINEAR,
+            })
+            .collect(),
+            main_device,
+        }
+    }
+}
+
+/// Where the listening socket is created.
+#[derive(Debug, Clone, Default)]
+pub enum SocketConfig {
+    /// No listening socket. Clients are added with
+    /// [`WlServer::insert_client`] (used by in-process tests).
+    #[default]
+    None,
+    /// A socket with this name in `XDG_RUNTIME_DIR`.
+    Name(String),
+    /// A socket at this absolute path.
+    Path(PathBuf),
+}
+
+/// Something that happened on the protocol side.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WlEvent {
+    /// A client created a toplevel. It has no contents yet.
+    WindowCreated(WindowId),
+    /// The window, or a surface in its tree, committed new state: contents,
+    /// size, title and so on. Query the window again.
+    WindowChanged(WindowId),
+    /// The toplevel is gone.
+    WindowDestroyed(WindowId),
+    /// A surface is gone. Resources kept for it (textures) can be dropped.
+    SurfaceDestroyed(SurfaceId),
+    /// The cursor image requested by the client under the pointer changed.
+    CursorChanged,
+    /// A client asked for something that is the window manager's to decide:
+    /// to be maximized, made fullscreen, minimized, moved or resized by the
+    /// user, or to have the window menu shown. Nothing has been done about
+    /// it. Whoever manages windows answers with
+    /// [`WlServer::set_window_states`] and [`WlServer::configure_window`],
+    /// or not at all.
+    WindowRequest {
+        window: WindowId,
+        request: WindowRequest,
+    },
+    /// A popup was created, or its client asked for it to be placed anew.
+    /// It has been given a place by the rules of its positioner, inside
+    /// the bounds of its window when those were set
+    /// ([`WlServer::set_popup_bounds`]). Until the next
+    /// [`WlServer::flush_clients`] the place can still be changed
+    /// ([`WlServer::place_popup_within`], [`WlServer::set_popup_geometry`]):
+    /// that is when the client is told.
+    PopupPlacement { window: WindowId, popup: SurfaceId },
+    /// A pointer constraint was asked for, withdrawn, or had its region
+    /// committed. Look at [`WlServer::pointer_constraints`] again.
+    PointerConstraintsChanged,
+    /// The client withdrew a lock that was in effect (it destroyed the
+    /// `zwp_locked_pointer_v1`). The pointer is free again; `hint` is the
+    /// cursor position hint it had, in surface-local coordinates, for
+    /// putting the pointer where the client last drew its cursor.
+    PointerLockWithdrawn {
+        surface: SurfaceId,
+        hint: Option<(f64, f64)>,
+    },
+    /// A client set or cleared a selection, or reads one the caller
+    /// provides. See [`SelectionEvent`].
+    Selection(SelectionEvent),
+}
+
+/// What a client asked for with a request of `xdg_toplevel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowRequest {
+    Maximize,
+    Unmaximize,
+    /// `output` is the output the client would like, if it named one.
+    Fullscreen {
+        output: Option<OutputId>,
+    },
+    Unfullscreen,
+    Minimize,
+    /// The user started to drag the window (a press on a title bar the
+    /// client draws). Only reported while the button of that press is
+    /// still down.
+    Move,
+    /// The user started to drag an edge or corner of the window. Only
+    /// reported while the button of that press is still down.
+    Resize {
+        edges: ResizeEdges,
+    },
+    /// The client asks for the window menu (the one a title bar shows on a
+    /// right click) at this position relative to the window geometry.
+    ShowMenu {
+        position: (i32, i32),
+    },
+    /// A client asks for the window to be activated (raised and focused)
+    /// with an `xdg_activation_v1` token. `from_input`: the token was made
+    /// for an input event of the client that had the keyboard focus (a
+    /// click, a key), not handed out without one. Whether to follow
+    /// (focus stealing) is the window manager's decision.
+    Activate {
+        from_input: bool,
+    },
+}
+
+/// The edges of a window that an interactive resize moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ResizeEdges {
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+/// The states of a window other than its size and whether it is activated:
+/// what the window manager tells a client it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WindowStates {
+    pub maximized: bool,
+    pub fullscreen: bool,
+    /// The user is resizing the window; the client may draw cheaper frames.
+    pub resizing: bool,
+}
+
+/// What a popup asked for, and where it was put.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupRequest {
+    pub window: WindowId,
+    /// The surface the popup belongs to: the window's root surface or
+    /// another popup.
+    pub parent: SurfaceId,
+    /// Where the parent's window geometry starts, relative to the window
+    /// geometry of the toplevel: zero for a popup of the window itself.
+    /// The rectangles below are relative to the parent's geometry.
+    pub parent_origin: (i32, i32),
+    /// The rectangle of the parent the popup is attached to (x, y, width,
+    /// height): a menu button, the pointer position.
+    pub anchor_rect: (i32, i32, i32, i32),
+    /// Where the positioner puts the popup when nothing is in the way.
+    pub wanted: (i32, i32, i32, i32),
+    /// Where the popup is put as things stand.
+    pub geometry: (i32, i32, i32, i32),
+    /// What the positioner allows when `wanted` does not fit.
+    pub may_flip: (bool, bool),
+    pub may_slide: (bool, bool),
+    pub may_resize: (bool, bool),
+}
+
+/// What is going on with input methods (`zwp_input_method_v2`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputMethodStatus {
+    /// A client is the input method of the seat.
+    pub bound: bool,
+    /// The text input with the keyboard focus is enabled, and the input
+    /// method was told so (`activate`).
+    pub active: bool,
+    /// The input method grabbed the keyboard: keys go to it first.
+    pub keyboard_grab: bool,
+    /// The popup surface of the input method, if it made one.
+    pub popup: Option<InputPopupStatus>,
+}
+
+/// The popup of an input method (the candidate window).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputPopupStatus {
+    pub surface: SurfaceId,
+    /// Whether it is shown: the input method is active and a text input
+    /// has the focus.
+    pub shown: bool,
+    /// The window it is shown with.
+    pub window: Option<WindowId>,
+    /// Where its top left corner is, relative to the window geometry.
+    pub position: Option<(i32, i32)>,
+    /// The cursor rectangle the application reported (x, y, width, height),
+    /// relative to its surface.
+    pub cursor_rectangle: (i32, i32, i32, i32),
+    /// The cursor rectangle as the input method was last told it, relative
+    /// to the popup surface.
+    pub sent_rectangle: Option<(i32, i32, i32, i32)>,
+}
+
+/// Memory layout of pixels in a `wl_shm` buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShmFormat {
+    Argb8888,
+    Xrgb8888,
+    Abgr8888,
+    Xbgr8888,
+}
+
+/// Pixel data a surface committed, copied out of the client's buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferContents {
+    pub width: u32,
+    pub height: u32,
+    /// Bytes per row.
+    pub stride: u32,
+    pub format: ShmFormat,
+    pub data: Vec<u8>,
+}
+
+/// One plane of a dmabuf.
+#[derive(Debug)]
+pub struct DmabufPlane {
+    /// A duplicate of the client's file descriptor; closing it does not
+    /// affect the client's buffer.
+    pub fd: OwnedFd,
+    pub offset: u32,
+    pub stride: u32,
+}
+
+/// A dmabuf a surface committed: everything an importer needs.
+#[derive(Debug)]
+pub struct DmabufContents {
+    pub width: u32,
+    pub height: u32,
+    /// DRM format code.
+    pub fourcc: u32,
+    /// DRM format modifier ([`MODIFIER_INVALID`] when the client gave none).
+    pub modifier: u64,
+    pub planes: Vec<DmabufPlane>,
+    /// The first row in memory is the bottom row of the image.
+    pub y_inverted: bool,
+}
+
+/// How a client created a buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BufferKind {
+    /// `wl_shm`: memory shared with the client.
+    Shm,
+    /// `zwp_linux_dmabuf_v1`: usually GPU memory.
+    Dmabuf,
+}
+
+impl BufferKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Shm => "shm",
+            Self::Dmabuf => "dmabuf",
+        }
+    }
+}
+
+/// Where the contents of a committed buffer are.
+#[derive(Debug)]
+pub enum BufferSource {
+    /// Pixels copied out of a `wl_shm` pool.
+    Shm(BufferContents),
+    /// A buffer that lives in GPU (or other device) memory. It has to be
+    /// imported, and the [`BufferUpdate`] kept for as long as the import is
+    /// used: the client may draw into the buffer again once it is released.
+    Dmabuf(DmabufContents),
+}
+
+/// How the client turned the contents before putting them into the buffer
+/// (`wl_surface.set_buffer_transform`). The compositor undoes it.
+///
+/// The names follow `wl_output.transform`: rotations are counter-clockwise,
+/// and the flipped variants mirror around the vertical axis first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BufferTransform {
+    #[default]
+    Normal,
+    Rotate90,
+    Rotate180,
+    Rotate270,
+    Flipped,
+    Flipped90,
+    Flipped180,
+    Flipped270,
+}
+
+impl BufferTransform {
+    /// Whether width and height of the buffer are those of the upright
+    /// image swapped.
+    pub fn swaps_axes(self) -> bool {
+        matches!(
+            self,
+            Self::Rotate90 | Self::Rotate270 | Self::Flipped90 | Self::Flipped270
+        )
+    }
+
+    /// The size of the upright image for a buffer of the given size.
+    pub fn upright_size(self, buffer: (u32, u32)) -> (u32, u32) {
+        if self.swaps_axes() {
+            (buffer.1, buffer.0)
+        } else {
+            buffer
+        }
+    }
+
+    /// Where a pixel of the upright image is in the buffer. `upright` is
+    /// the size of the upright image.
+    pub fn buffer_position(self, upright: (u32, u32), x: u32, y: u32) -> (u32, u32) {
+        let (w, h) = (upright.0 - 1, upright.1 - 1);
+        match self {
+            Self::Normal => (x, y),
+            Self::Flipped => (w - x, y),
+            Self::Rotate90 => (y, w - x),
+            Self::Flipped90 => (y, x),
+            Self::Rotate180 => (w - x, h - y),
+            Self::Flipped180 => (x, h - y),
+            Self::Rotate270 => (h - y, x),
+            Self::Flipped270 => (h - y, w - x),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Rotate90 => "90",
+            Self::Rotate180 => "180",
+            Self::Rotate270 => "270",
+            Self::Flipped => "flipped",
+            Self::Flipped90 => "flipped-90",
+            Self::Flipped180 => "flipped-180",
+            Self::Flipped270 => "flipped-270",
+        }
+    }
+}
+
+/// Why the pixels of a buffer could not be read on the CPU.
+#[derive(Debug, thiserror::Error)]
+pub enum PixelError {
+    #[error("format {fourcc:#x} with modifier {modifier:#x} cannot be read on the CPU")]
+    Unsupported { fourcc: u32, modifier: u64 },
+    #[error("the buffer cannot be mapped: {0}")]
+    Map(String),
+    #[error("the buffer is smaller than its description says")]
+    TooSmall,
+}
+
+/// What a surface committed, together with the reference to the client
+/// buffer it came from.
+///
+/// The client is told that it may reuse the buffer when this value is
+/// dropped. Keep it until the renderer no longer needs the buffer: for
+/// pixels that were copied ([`BufferSource::Shm`], or anything read through
+/// [`Self::upright_pixels`]) that is until they are uploaded; for an
+/// imported dmabuf it is for as long as the import is drawn from.
+pub struct BufferUpdate {
+    pub source: BufferSource,
+    /// The transform the buffer was committed with. [`SurfaceNode`] sizes
+    /// and source rectangles describe the upright image.
+    pub transform: BufferTransform,
+    /// What the client marked as changed since the previous update of this
+    /// surface (`wl_surface.damage` and `damage_buffer`), as the client sent
+    /// it. Empty when the client marked nothing.
+    pub damage: Vec<DamageRect>,
+    /// Smithay's handle of the dmabuf, for mapping it.
+    dmabuf: Option<smithay::backend::allocator::dmabuf::Dmabuf>,
+    _buffer: surface::HeldBuffer,
+}
+
+impl BufferUpdate {
+    /// The contents as upright pixels in CPU memory.
+    ///
+    /// `wl_shm` contents are already there; a transform is undone by
+    /// rearranging them. A dmabuf is mapped and copied, which only works
+    /// for the formats of [`DmabufConfig::cpu_readable`] and for buffers
+    /// the driver lets a process map. This is the slow path for renderers
+    /// that cannot import dmabufs; a renderer that can takes
+    /// [`Self::source`] instead.
+    pub fn upright_pixels(&self) -> Result<Cow<'_, BufferContents>, PixelError> {
+        let contents = match &self.source {
+            BufferSource::Shm(contents) => Cow::Borrowed(contents),
+            BufferSource::Dmabuf(description) => {
+                let dmabuf = self.dmabuf.as_ref().expect("set for dmabuf sources");
+                Cow::Owned(buffer::read_dmabuf(dmabuf, description)?)
+            }
+        };
+        Ok(match self.transform {
+            BufferTransform::Normal => contents,
+            transform => Cow::Owned(buffer::upright(&contents, transform)),
+        })
+    }
+}
+
+/// A rectangle a client marked as changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DamageRect {
+    /// In surface-local logical coordinates (`wl_surface.damage`).
+    Surface {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    },
+    /// In buffer pixels (`wl_surface.damage_buffer`), before the buffer
+    /// transform is undone.
+    Buffer {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    },
+}
+
+/// What a key means in the keymap of the seat, with the keys that are
+/// held (every key of the keyboard, whether it reached a client or not).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeySymbol {
+    /// The xkb name of the keysym the key gives (`a`, `A`, `Return`,
+    /// `BackSpace`, `Super_L`). Empty when it gives none, or several.
+    pub sym: String,
+    /// The text the key types, on a press: what xkb gives for it, unless
+    /// that is empty or holds a control character (Return, Tab, Escape,
+    /// Backspace, a letter with Ctrl). `None` on a release.
+    pub text: Option<String>,
+}
+
+/// What produced a scroll event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AxisSource {
+    Wheel,
+    Finger,
+    Continuous,
+}
+
+/// A touchpad gesture (`zwp_pointer_gestures_v1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GestureKind {
+    Swipe,
+    Pinch,
+    /// Since version 3 of the protocol.
+    Hold,
+}
+
+/// The role of a surface inside a window's surface tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceRole {
+    Toplevel,
+    Subsurface,
+    Popup,
+    /// The surface a client set as the pointer image.
+    Cursor,
+    /// The surface a client attached to a drag.
+    DragIcon,
+    /// The popup of an input method (the candidate window), shown with the
+    /// window whose text input has the focus.
+    InputPopup,
+}
+
+/// A rendering intent of color-management-v1 that is offered: how the
+/// client would like its colors mapped to an output. Both are handled the
+/// same way (white to white, the rest clipped).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderIntent {
+    Perceptual,
+    /// Media-relative colorimetric.
+    Relative,
+}
+
+impl RenderIntent {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Perceptual => "perceptual",
+            Self::Relative => "relative",
+        }
+    }
+}
+
+/// Where the image description of a surface comes from, most important
+/// first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSource {
+    /// The control interface ([`WlServer::set_surface_color`]).
+    Control,
+    /// The client, through `wp_color_management_surface_v1`, with the
+    /// rendering intent it asked for.
+    Protocol(RenderIntent),
+    /// Nobody: [`DEFAULT_SURFACE_IMAGE_DESCRIPTION`].
+    Default,
+}
+
+impl ColorSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Protocol(_) => "protocol",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// One surface of a window, as the scene needs it to draw and hit test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceNode {
+    pub surface: SurfaceId,
+    pub role: SurfaceRole,
+    /// Position of the surface's top left corner relative to the top left
+    /// corner of the window geometry, in logical coordinates.
+    pub offset: (i32, i32),
+    /// Size of the surface in logical coordinates. Zero when it has no
+    /// contents.
+    pub size: (i32, i32),
+    /// Size of the attached buffer in pixels, if any, as the client
+    /// allocated it (before the transform is undone).
+    pub buffer_size: Option<(u32, u32)>,
+    /// How the attached buffer was created, if there is one.
+    pub buffer_kind: Option<BufferKind>,
+    /// How the client turned the contents inside the buffer.
+    pub transform: BufferTransform,
+    /// The part of the upright image that is shown, in buffer pixels
+    /// (x, y, width, height).
+    pub source: Option<(f64, f64, f64, f64)>,
+    pub buffer_scale: i32,
+    /// What the buffer values mean.
+    pub image_description: ImageDescription,
+    pub alpha_mode: AlphaMode,
+    /// Who said what the values mean.
+    pub color_source: ColorSource,
+    /// Counts content changes; a new value means new pixels are available
+    /// from [`WlServer::take_buffer_update`].
+    pub generation: u64,
+}
+
+/// A toplevel window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowInfo {
+    pub id: WindowId,
+    /// The root surface of the window.
+    pub surface: SurfaceId,
+    pub title: Option<String>,
+    pub app_id: Option<String>,
+    /// Whether the window has contents to show.
+    pub mapped: bool,
+    /// Size of the window geometry in logical coordinates, once mapped.
+    pub size: Option<(i32, i32)>,
+    /// Whether the last configure told the window it is activated.
+    pub activated: bool,
+    /// Whether the client was told it is maximized, and acknowledged it.
+    pub maximized: bool,
+    /// Whether the client was told it is fullscreen, and acknowledged it.
+    pub fullscreen: bool,
+    /// The window this one belongs to (`xdg_toplevel.set_parent`): a
+    /// dialog's main window, for example.
+    pub parent: Option<WindowId>,
+    /// The smallest and largest size the client accepts
+    /// (`xdg_toplevel.set_min_size`, `set_max_size`), in logical
+    /// coordinates. Zero on an axis means no limit.
+    pub min_size: (i32, i32),
+    pub max_size: (i32, i32),
+    /// The process id of the client, as the kernel reports it for the
+    /// connection.
+    pub client_pid: Option<i32>,
+    /// Whether the window is seen ([`WlServer::set_window_visible`]).
+    pub visible: bool,
+    /// Whether the client is told it is suspended: it is hidden, and its
+    /// xdg-shell version has the state.
+    pub suspended: bool,
+}
+
+/// Description of an output announced to clients.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputConfig {
+    pub name: String,
+    pub make: String,
+    pub model: String,
+    /// Size of the mode in physical pixels.
+    pub mode_size: (i32, i32),
+    /// Refresh rate in mHz.
+    pub refresh_mhz: i32,
+    pub scale: f64,
+    /// Position of the top left corner in the global logical space.
+    pub position: (i32, i32),
+    /// What the encoded frame means: the image description clients learn
+    /// through `wp_color_management_output_v1`, and the one preferred for
+    /// the surfaces mainly on this output.
+    pub image_description: ImageDescription,
+}
+
+/// What a pointer constraint (`zwp_pointer_constraints_v1`) asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerConstraintKind {
+    /// `lock_pointer`: the pointer stays where it is. Only relative
+    /// motion reaches the client.
+    Lock,
+    /// `confine_pointer`: the pointer stays inside a region of the surface.
+    Confine,
+}
+
+impl PointerConstraintKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Lock => "lock",
+            Self::Confine => "confine",
+        }
+    }
+}
+
+/// A pointer constraint a client asked for on one of its surfaces.
+///
+/// The protocol leaves it to the compositor when a constraint is turned
+/// on and off. This layer keeps the protocol's side of it (one constraint
+/// per surface, the double-buffered region and hint, `locked` and
+/// `unlocked` sent once each way, oneshot constraints gone after their
+/// first deactivation) and turns a constraint on only while the pointer is
+/// on its surface. Everything else is the caller's to decide.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointerConstraint {
+    pub surface: SurfaceId,
+    /// The window the surface belongs to, if any.
+    pub window: Option<WindowId>,
+    pub kind: PointerConstraintKind,
+    /// Whether the constraint is in effect (`locked` or `confined` was
+    /// sent, and no `unlocked` or `unconfined` since).
+    pub active: bool,
+    /// For a lock: where the client draws its own cursor, in surface-local
+    /// coordinates (`set_cursor_position_hint`), once committed.
+    pub cursor_hint: Option<(f64, f64)>,
+}
+
+/// The cursor a client asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorState {
+    Hidden,
+    /// A named cursor shape (e.g. `default`, `text`).
+    Named(String),
+    /// A client surface.
+    Surface(SurfaceId),
+}
+
+/// The Wayland server.
+pub struct WlServer {
+    display: Display<State>,
+    /// Sources the server waits on besides client requests: the dmabufs
+    /// that commits are held back for.
+    event_loop: calloop::EventLoop<'static, State>,
+    state: State,
+    socket: Option<ListeningSocket>,
+    socket_name: Option<String>,
+}
+
+impl WlServer {
+    pub fn new(config: &ServerConfig) -> Result<Self, WlError> {
+        let mut display: Display<State> =
+            Display::new().map_err(|e| WlError::Display(e.to_string()))?;
+        let event_loop: calloop::EventLoop<'static, State> =
+            calloop::EventLoop::try_new().map_err(|e| WlError::Display(e.to_string()))?;
+        // The loop's own descriptor becomes readable when clients have
+        // sent something, too, so that one descriptor covers everything.
+        let display_fd = display
+            .backend()
+            .poll_fd()
+            .try_clone_to_owned()
+            .map_err(|e| WlError::Display(e.to_string()))?;
+        event_loop
+            .handle()
+            .insert_source(
+                calloop::generic::Generic::new(
+                    display_fd,
+                    calloop::Interest::READ,
+                    calloop::Mode::Level,
+                ),
+                // Reading the requests is done by `dispatch_clients`.
+                |_, _, _| Ok(calloop::PostAction::Continue),
+            )
+            .map_err(|e| WlError::Display(e.to_string()))?;
+        let state = State::new(&display.handle(), event_loop.handle(), config)?;
+        let (socket, socket_name) = match &config.socket {
+            SocketConfig::None => (None, None),
+            SocketConfig::Name(name) => {
+                let socket = ListeningSocket::bind(name).map_err(|e| WlError::Bind {
+                    name: name.clone(),
+                    message: e.to_string(),
+                })?;
+                (Some(socket), Some(name.clone()))
+            }
+            SocketConfig::Path(path) => {
+                let name = path.display().to_string();
+                let socket =
+                    ListeningSocket::bind_absolute(path.clone()).map_err(|e| WlError::Bind {
+                        name: name.clone(),
+                        message: e.to_string(),
+                    })?;
+                (Some(socket), Some(name))
+            }
+        };
+        Ok(Self {
+            display,
+            event_loop,
+            state,
+            socket,
+            socket_name,
+        })
+    }
+
+    /// The socket name (or path) clients connect to, for `WAYLAND_DISPLAY`.
+    pub fn socket_name(&self) -> Option<&str> {
+        self.socket_name.as_deref()
+    }
+
+    // -- event loop integration ---------------------------------------------
+
+    /// Readable when a client is waiting to connect. `None` without a
+    /// listening socket.
+    pub fn listen_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.socket.as_ref().map(|s| s.as_fd())
+    }
+
+    /// Readable when [`Self::dispatch_clients`] has something to do:
+    /// clients have sent requests, or a buffer that a commit was waiting
+    /// for has become ready.
+    pub fn display_fd(&mut self) -> BorrowedFd<'_> {
+        self.event_loop.as_fd()
+    }
+
+    /// Accepts all clients waiting on the listening socket. Returns how many
+    /// were accepted.
+    pub fn accept_clients(&mut self) -> io::Result<usize> {
+        let mut streams = Vec::new();
+        if let Some(socket) = &self.socket {
+            while let Some(stream) = socket.accept()? {
+                streams.push(stream);
+            }
+        }
+        let count = streams.len();
+        for stream in streams {
+            self.insert_client(stream)?;
+        }
+        Ok(count)
+    }
+
+    /// Adds a client connected over `stream`.
+    pub fn insert_client(&mut self, stream: UnixStream) -> io::Result<()> {
+        self.display
+            .handle()
+            .insert_client(stream, Arc::new(ClientState::default()))?;
+        Ok(())
+    }
+
+    /// Reads and handles pending client requests, and applies the commits
+    /// whose buffers have become ready in the meantime.
+    ///
+    /// A commit that attaches a dmabuf the client's GPU is still drawing
+    /// into is not applied when it arrives: it waits until the buffer can
+    /// be read, and commits of the same client that depend on it wait with
+    /// it. The compositor never sees a half drawn buffer and never has to
+    /// stall for one.
+    pub fn dispatch_clients(&mut self) -> io::Result<()> {
+        self.event_loop
+            .dispatch(Duration::ZERO, &mut self.state)
+            .map_err(io::Error::other)?;
+        // A client that got the keyboard focus since the last round has
+        // its text inputs watched before its requests are read.
+        self.state.watch_text_inputs();
+        self.display.dispatch_clients(&mut self.state)?;
+        self.state.send_image_information();
+        // An input method may have come or gone inside; a text input may
+        // have been created.
+        self.state.reconcile_outside_ime();
+        self.state.watch_text_inputs();
+        self.state.notice_lost_selections();
+        Ok(())
+    }
+
+    /// Sends queued events to the clients. Before that, popups that were
+    /// created since the last call are told their place, and requests that
+    /// the protocol wants answered are answered if nobody did.
+    pub fn flush_clients(&mut self) -> io::Result<()> {
+        self.state.send_owed_configures();
+        self.display.flush_clients()
+    }
+
+    /// Takes the events collected since the last call.
+    pub fn drain_events(&mut self) -> Vec<WlEvent> {
+        std::mem::take(&mut self.state.events)
+    }
+
+    // -- outputs --------------------------------------------------------------
+
+    /// Announces an output to clients.
+    pub fn add_output(&mut self, config: &OutputConfig) -> OutputId {
+        self.state.add_output(config)
+    }
+
+    /// Changes the mode, scale, position or image description of an
+    /// output. Returns `false` when the output is unknown. The name, make
+    /// and model cannot change.
+    pub fn update_output(&mut self, id: OutputId, config: &OutputConfig) -> bool {
+        self.state.update_output(id, config)
+    }
+
+    /// Withdraws an output from clients. Returns `false` when the output is
+    /// unknown.
+    pub fn remove_output(&mut self, id: OutputId) -> bool {
+        self.state.remove_output(id)
+    }
+
+    // -- windows --------------------------------------------------------------
+
+    /// All toplevel windows, in creation order.
+    pub fn windows(&self) -> Vec<WindowId> {
+        self.state.windows.iter().map(|w| w.id).collect()
+    }
+
+    pub fn window(&self, id: WindowId) -> Option<WindowInfo> {
+        self.state.window_info(id)
+    }
+
+    /// The surfaces of a window (root, subsurfaces, popups), back to front.
+    /// Empty when the window is unknown.
+    pub fn window_surfaces(&self, id: WindowId) -> Vec<SurfaceNode> {
+        self.state.window_surfaces(id)
+    }
+
+    /// Tells a window its size and whether it is activated. `size` of `None`
+    /// lets the client choose. Sends a configure event when something
+    /// changed and the window has been configured before; otherwise the
+    /// state is used for the initial configure.
+    pub fn configure_window(&mut self, id: WindowId, size: Option<(i32, i32)>, activated: bool) {
+        self.state.configure_window(id, size, activated);
+    }
+
+    /// Says which outputs a window is shown on. Its surfaces enter those
+    /// outputs and leave the others, and prefer the largest of their
+    /// scales. The first output is the window's main one: its frames drive
+    /// the window's frame callbacks and presentation feedback.
+    ///
+    /// Until this is called for a window, its surfaces are on no output
+    /// (they are still told a scale to draw for: that of the first one).
+    pub fn set_window_outputs(&mut self, window: WindowId, outputs: &[OutputId]) {
+        self.state.set_window_outputs(window, outputs);
+    }
+
+    /// Says where the popups of a window should stay: a rectangle (x, y,
+    /// width, height) relative to the window geometry, usually the output
+    /// the window is on. Popups created afterwards are flipped, slid or
+    /// resized into it, as far as their positioner allows. `None`: popups
+    /// go exactly where their positioner says.
+    pub fn set_popup_bounds(&mut self, window: WindowId, bounds: Option<(i32, i32, i32, i32)>) {
+        self.state.set_popup_bounds(window, bounds);
+    }
+
+    /// Tells a window whether it is maximized, fullscreen or being
+    /// resized. Sends a configure when something changed. The size that
+    /// goes with it is the one of [`Self::configure_window`]; set that
+    /// first when both change.
+    pub fn set_window_states(&mut self, id: WindowId, states: WindowStates) {
+        self.state.set_window_states(id, states);
+    }
+
+    /// What a popup asked for and where it was put. `None` when the surface
+    /// is not a popup.
+    pub fn popup_request(&self, popup: SurfaceId) -> Option<PopupRequest> {
+        self.state.popup_request(popup)
+    }
+
+    /// Places a popup by the rules of its positioner inside `bounds`: a
+    /// rectangle (x, y, width, height) relative to the geometry of the
+    /// popup's parent. Returns the place it got.
+    ///
+    /// This is for whoever draws windows somewhere else than where they
+    /// are laid out flat (scaled down, moved, rotated): only it knows which
+    /// part of the parent's coordinate space is on screen. Call it after
+    /// [`WlEvent::PopupPlacement`], before the next
+    /// [`Self::flush_clients`]; later the client has been told already.
+    pub fn place_popup_within(
+        &mut self,
+        popup: SurfaceId,
+        bounds: (i32, i32, i32, i32),
+    ) -> Option<(i32, i32, i32, i32)> {
+        self.state.place_popup_within(popup, bounds)
+    }
+
+    /// Puts a popup at a rectangle (x, y, width, height) relative to the
+    /// geometry of its parent, whatever its positioner says. The same
+    /// timing as [`Self::place_popup_within`] applies. Returns `false`
+    /// when the surface is not a popup.
+    pub fn set_popup_geometry(&mut self, popup: SurfaceId, geometry: (i32, i32, i32, i32)) -> bool {
+        self.state.set_popup_geometry(popup, geometry)
+    }
+
+    /// Asks a window to close.
+    pub fn close_window(&mut self, id: WindowId) {
+        self.state.close_window(id);
+    }
+
+    // -- surfaces ---------------------------------------------------------------
+
+    /// Takes what a surface committed since the last call, if anything.
+    ///
+    /// `wl_shm` pixels are read from the client's buffer now, not at commit
+    /// time. The buffer stays held until the returned value is dropped.
+    pub fn take_buffer_update(&mut self, surface: SurfaceId) -> Option<BufferUpdate> {
+        self.state.take_buffer_update(surface)
+    }
+
+    /// Whether a point in surface-local logical coordinates is inside the
+    /// surface and its input region.
+    pub fn surface_accepts_input(&self, surface: SurfaceId, x: f64, y: f64) -> bool {
+        self.state.surface_accepts_input(surface, x, y)
+    }
+
+    /// Overrides what the values of a surface mean, for tests: from now on
+    /// this wins over what the client says through color-management-v1,
+    /// and gives the alpha mode (color-representation-v1 is not
+    /// implemented).
+    pub fn set_surface_color(
+        &mut self,
+        surface: SurfaceId,
+        image_description: ImageDescription,
+        alpha_mode: AlphaMode,
+    ) -> bool {
+        self.state
+            .set_surface_color(surface, image_description, alpha_mode)
+    }
+
+    /// Calls the frame callbacks of the surfaces whose main output is
+    /// `output` (see [`Self::set_window_outputs`]), or of every surface
+    /// with `None`. `time_ms` is the frame time in milliseconds on an
+    /// arbitrary monotonic base. Hidden windows are left out
+    /// ([`Self::set_window_visible`]).
+    pub fn send_frame_callbacks(&mut self, output: Option<OutputId>, time_ms: u32) {
+        self.state.send_frame_callbacks(output, time_ms);
+    }
+
+    /// Says whether a window is seen; every window is, until it is said
+    /// otherwise. While a window is hidden:
+    ///
+    /// - its surfaces (subsurfaces, popups and the input method's popup
+    ///   included) get no frame callbacks from [`Self::send_frame_callbacks`];
+    ///   they wait, for [`Self::send_window_frame_callbacks`] and
+    ///   [`Self::send_hidden_frame_callbacks`];
+    /// - their presentation feedback is not reported (see
+    ///   [`Self::send_presented`]);
+    /// - a client whose `xdg_wm_base` is version 6 or later is told the
+    ///   `suspended` state, with a configure; an older one is told
+    ///   nothing.
+    ///
+    /// Returns whether that changed anything.
+    pub fn set_window_visible(&mut self, id: WindowId, visible: bool) -> bool {
+        self.state.set_window_visible(id, visible)
+    }
+
+    /// Calls the frame callbacks that wait on the surfaces of one window,
+    /// hidden or not: for a window that is seen again, which should draw
+    /// at once rather than a frame later.
+    pub fn send_window_frame_callbacks(&mut self, id: WindowId, time_ms: u32) {
+        self.state.send_window_frame_callbacks(id, time_ms);
+    }
+
+    /// Calls the frame callbacks that wait on the surfaces of every hidden
+    /// window. A compositor calls it now and then (once a second, say):
+    /// a client may wait for a frame callback inside a call that also
+    /// keeps it from reading anything else (a swap with a swap interval of
+    /// one), and would not see that it is asked to close. Returns how many
+    /// windows are hidden.
+    pub fn send_hidden_frame_callbacks(&mut self, time_ms: u32) -> usize {
+        self.state.send_hidden_frame_callbacks(time_ms)
+    }
+
+    /// Reports to the `wp_presentation` feedback objects of the surfaces
+    /// whose main output is `output` that their contents were shown at
+    /// `time` (CLOCK_MONOTONIC). The feedback of hidden windows waits: a
+    /// later commit replaces it (it is then reported discarded), or it is
+    /// reported with the first frame after the window is seen again.
+    pub fn send_presented(
+        &mut self,
+        output: OutputId,
+        time: Duration,
+        refresh: Duration,
+        seq: u64,
+    ) {
+        self.state.send_presented(output, time, refresh, seq);
+    }
+
+    // -- input ------------------------------------------------------------------
+
+    /// Gives the keyboard focus to the root surface of a window, or to
+    /// nothing. While a popup of some window holds a grab (an open menu),
+    /// the popup keeps the keyboard; the focus asked for here takes effect
+    /// when the grab ends.
+    pub fn set_keyboard_focus(&mut self, window: Option<WindowId>) {
+        self.state.set_keyboard_focus(window);
+    }
+
+    /// Whether the surface with the keyboard focus asked for the
+    /// compositor's own shortcuts (keyboard-shortcuts-inhibit).
+    pub fn shortcuts_inhibited(&self) -> bool {
+        self.state.shortcuts_inhibited()
+    }
+
+    /// Grants or withdraws the keyboard-shortcuts-inhibit of the surface
+    /// with the keyboard focus, which is told. `false` when it asked for
+    /// none.
+    pub fn set_shortcuts_inhibit(&mut self, active: bool) -> bool {
+        self.state.set_shortcuts_inhibit(active)
+    }
+
+    /// Replaces the keymap of the seat with one in the xkb text format (a
+    /// nested compositor takes over its parent's).
+    pub fn set_keymap(&mut self, keymap: String) -> Result<(), String> {
+        self.state.set_keymap(keymap)
+    }
+
+    /// Feeds a key. `keycode` is a Linux evdev key code (`KEY_A` is 30).
+    /// Input times are in microseconds on an arbitrary monotonic base.
+    pub fn keyboard_key(&mut self, keycode: u32, pressed: bool, time_us: u64) {
+        self.state.keyboard_key(keycode, pressed, time_us);
+    }
+
+    /// The first half of [`Self::keyboard_key`]: the keymap of the seat
+    /// takes the key in (what the keys held mean changes with it), and
+    /// says what the key is. The key reaches no client until
+    /// [`Self::keyboard_key_forward`]: a compositor that keeps a key for
+    /// itself still lets the keymap see it, so that what the next key
+    /// types follows the keys that are really held.
+    ///
+    /// `None` when the event changes nothing (the key was already held, or
+    /// already up); it must not be forwarded then.
+    pub fn keyboard_key_input(&mut self, keycode: u32, pressed: bool) -> Option<KeySymbol> {
+        self.state.keyboard_key_input(keycode, pressed)
+    }
+
+    /// The second half of [`Self::keyboard_key`]: the key, which went
+    /// through [`Self::keyboard_key_input`], goes on to the client with the
+    /// keyboard focus (or the input method's grab).
+    pub fn keyboard_key_forward(&mut self, keycode: u32, pressed: bool, time_us: u64) {
+        self.state.keyboard_key_forward(keycode, pressed, time_us);
+    }
+
+    /// Moves the pointer onto a surface at surface-local logical
+    /// coordinates, or off every surface with `None`.
+    pub fn pointer_motion(&mut self, target: Option<(SurfaceId, (f64, f64))>, time_us: u64) {
+        self.state.pointer_motion(target, time_us);
+    }
+
+    /// Feeds a pointer button. `button` is a Linux evdev code (`BTN_LEFT`
+    /// is 0x110).
+    pub fn pointer_button(&mut self, button: u32, pressed: bool, time_us: u64) {
+        self.state.pointer_button(button, pressed, time_us);
+    }
+
+    /// Feeds a scroll. Values follow `wl_pointer.axis` (positive is down or
+    /// right); `v120` is the high resolution wheel value, when the source is
+    /// a wheel.
+    pub fn pointer_axis(
+        &mut self,
+        horizontal: f64,
+        vertical: f64,
+        v120: Option<(i32, i32)>,
+        source: AxisSource,
+        time_us: u64,
+    ) {
+        self.state
+            .pointer_axis(horizontal, vertical, v120, source, time_us);
+    }
+
+    /// Ends a group of pointer events (`wl_pointer.frame`).
+    pub fn pointer_frame(&mut self) {
+        self.state.pointer_frame();
+    }
+
+    /// The surface that has the keyboard focus.
+    pub fn keyboard_focus(&self) -> Option<SurfaceId> {
+        self.state.keyboard_focus()
+    }
+
+    /// The surface the pointer is on.
+    pub fn pointer_focus(&self) -> Option<SurfaceId> {
+        self.state.pointer_focus()
+    }
+
+    /// The surfaces of the icon a client attached to the drag in progress,
+    /// back to front, with offsets relative to the pointer position. Empty
+    /// when nothing is dragged or the drag has no icon.
+    pub fn drag_icon_surfaces(&self) -> Vec<SurfaceNode> {
+        self.state.drag_icon_surfaces()
+    }
+
+    /// Whether a drag and drop holds the pointer. While it does, what the
+    /// compositor passes to [`Self::pointer_motion`] is the surface the data
+    /// is offered to, so it must be what is under the pointer, not the
+    /// surface the button was pressed on.
+    pub fn drag_in_progress(&self) -> bool {
+        self.state.dragging
+    }
+
+    /// The MIME types of the selection (the clipboard), when a client owns
+    /// it. For inspection: reading it this way does not involve the focus.
+    pub fn selection_mime_types(&self) -> Option<Vec<String>> {
+        self.state.selection_mime_types(false)
+    }
+
+    /// The MIME types of the primary selection (what middle click pastes),
+    /// when a client owns it.
+    pub fn primary_selection_mime_types(&self) -> Option<Vec<String>> {
+        self.state.selection_mime_types(true)
+    }
+
+    // -- relative motion and pointer constraints --------------------------------
+
+    /// Reports a relative motion of the pointer to the client the pointer
+    /// is on (`zwp_relative_pointer_v1.relative_motion`). `delta` is after
+    /// pointer acceleration, `unaccelerated` before it, both in logical
+    /// pixels. It is not clipped at the edges of the outputs, and it is
+    /// sent while the pointer is locked, when `wl_pointer.motion` is not.
+    pub fn pointer_relative_motion(
+        &mut self,
+        delta: (f64, f64),
+        unaccelerated: (f64, f64),
+        time_us: u64,
+    ) {
+        self.state
+            .pointer_relative_motion(delta, unaccelerated, time_us);
+    }
+
+    /// The pointer constraints clients asked for, in effect or not.
+    pub fn pointer_constraints(&self) -> Vec<PointerConstraint> {
+        self.state.pointer_constraints()
+    }
+
+    /// The constraint on a surface, if there is one.
+    pub fn pointer_constraint(&self, surface: SurfaceId) -> Option<PointerConstraint> {
+        self.state.pointer_constraint(surface)
+    }
+
+    /// Whether a surface-local point is where the constraint on the surface
+    /// applies: inside the region the client gave (the whole surface
+    /// without one), and inside the surface's input region. A lock may
+    /// only start there, and a confinement keeps the pointer there.
+    pub fn pointer_constraint_region_contains(&self, surface: SurfaceId, x: f64, y: f64) -> bool {
+        self.state.pointer_constraint_region_contains(surface, x, y)
+    }
+
+    /// Turns the constraint on a surface on or off, and tells the client.
+    ///
+    /// Turning one on only works while the pointer is on the surface (the
+    /// protocol promises that to the client); `false` otherwise, and when
+    /// there is no constraint. Turning a oneshot constraint off ends it.
+    /// The pointer leaving the surface turns its constraint off by itself.
+    pub fn set_pointer_constraint_active(&mut self, surface: SurfaceId, active: bool) -> bool {
+        self.state.set_pointer_constraint_active(surface, active)
+    }
+
+    /// What is going on with input methods: whether there is one, whether
+    /// it is active and holds the keyboard, and where its popup is.
+    pub fn input_method_status(&self) -> InputMethodStatus {
+        self.state.input_method_status()
+    }
+
+    /// Says whether an input method outside the compositor (a parent
+    /// compositor's) can take text input for the session. While it can and
+    /// no input method is bound inside, the compositor acts as the seat's
+    /// input method: applications can enable their text inputs, the
+    /// enabled one is [`Self::outside_text_input`], and what the input
+    /// method outside sends goes in with [`Self::outside_input_method_compose`].
+    /// An input method bound inside takes precedence.
+    pub fn set_outside_input_method(&mut self, available: bool) {
+        self.state.set_outside_input_method(available);
+    }
+
+    /// Whether the compositor acts as the input method for one outside now.
+    pub fn outside_input_method_serving(&self) -> bool {
+        self.state.outside_input_method_serving()
+    }
+
+    /// The enabled text input and what its application last committed on
+    /// it, while the input method outside serves the seat.
+    pub fn outside_text_input(&self) -> Option<OutsideTextInput> {
+        self.state.outside_text_input()
+    }
+
+    /// Sends what the input method outside composed into the enabled text
+    /// input, with its `done`.
+    pub fn outside_input_method_compose(&mut self, compose: &OutsideCompose) {
+        self.state.outside_input_method_compose(compose);
+    }
+
+    // -- touch and touchpad gestures -------------------------------------------
+
+    /// Offers the touch capability on the seat (`wl_seat.capabilities`), or
+    /// withdraws it. Offer it while a touchscreen is there: clients take
+    /// its presence as a sign that the user can touch.
+    pub fn set_touch_available(&mut self, available: bool) {
+        self.state.set_touch_available(available);
+    }
+
+    pub fn touch_available(&self) -> bool {
+        self.state.touch_available()
+    }
+
+    /// A finger touched a surface at surface-local logical coordinates, or
+    /// touched nothing (`None`). The touch belongs to that surface until it
+    /// is up: its motions go there, wherever the finger moves. `slot` names
+    /// it until then. While a popup holds a grab, a touch on a surface of
+    /// another client dismisses the popup.
+    pub fn touch_down(&mut self, slot: u32, target: Option<(SurfaceId, (f64, f64))>, time_us: u64) {
+        self.state.touch_down(slot, target, time_us);
+    }
+
+    /// A touch moved. `position` is in the coordinates of the surface it
+    /// went down on. Nothing is sent for a slot that is not down.
+    pub fn touch_motion(&mut self, slot: u32, position: (f64, f64), time_us: u64) {
+        self.state.touch_motion(slot, position, time_us);
+    }
+
+    pub fn touch_up(&mut self, slot: u32, time_us: u64) {
+        self.state.touch_up(slot, time_us);
+    }
+
+    /// Ends a set of touch events that belong together (`wl_touch.frame`),
+    /// for every client that got one of them.
+    pub fn touch_frame(&mut self) {
+        self.state.touch_frame();
+    }
+
+    /// Voids every touch in progress (`wl_touch.cancel`). The clients are
+    /// not told that the fingers came up.
+    pub fn touch_cancel(&mut self, time_us: u64) {
+        self.state.touch_cancel(time_us);
+    }
+
+    /// The touches in progress: slot, and the surface each went down on
+    /// (`None` for nothing, or a surface that is gone). Ordered by slot.
+    pub fn touch_points(&self) -> Vec<(u32, Option<SurfaceId>)> {
+        self.state.touch_points()
+    }
+
+    /// A touchpad gesture began. It goes to the surface the pointer is on.
+    pub fn gesture_begin(&mut self, kind: GestureKind, fingers: u32, time_us: u64) {
+        self.state.gesture_begin(kind, fingers, time_us);
+    }
+
+    /// The gesture moved: `delta` of the fingers' center in logical pixels;
+    /// for a pinch also the scale since the begin and the rotation since the
+    /// previous update, in degrees. Holds have no updates.
+    pub fn gesture_update(
+        &mut self,
+        kind: GestureKind,
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_us: u64,
+    ) {
+        self.state
+            .gesture_update(kind, delta, scale, rotation, time_us);
+    }
+
+    pub fn gesture_end(&mut self, kind: GestureKind, cancelled: bool, time_us: u64) {
+        self.state.gesture_end(kind, cancelled, time_us);
+    }
+
+    /// The cursor requested by the client under the pointer.
+    pub fn cursor(&self) -> CursorState {
+        self.state.cursor.clone()
+    }
+
+    /// The surfaces of the cursor image, when the client set a surface as
+    /// the cursor ([`CursorState::Surface`]), back to front. Offsets are
+    /// relative to the pointer position: the hotspot is already applied.
+    pub fn cursor_surfaces(&self) -> Vec<SurfaceNode> {
+        self.state.cursor_surfaces()
+    }
+}

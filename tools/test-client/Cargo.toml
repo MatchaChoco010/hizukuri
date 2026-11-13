@@ -1,0 +1,19 @@
+[package]
+name = "proto-test-client"
+description = "Wayland client for verifying hizukuri: shows solid fills and records the input it receives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+xkbcommon = "0.9.0"
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
+rustix = { version = "1", features = ["fs", "event", "pipe", "mm", "param"] }
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true

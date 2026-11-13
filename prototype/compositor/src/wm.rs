@@ -1,0 +1,284 @@
+//! Window management: where windows are, which one has the focus, what they
+//! are told to be.
+//!
+//! [`WindowManager`] is the second seam of the core, next to
+//! [`Scene`](crate::scene::Scene). The core tells the window manager what
+//! happens (windows and outputs come and go, keys and buttons are pressed)
+//! and reads back the placement, the stacking order, the focus and the size
+//! each window should be configured with. It then makes the protocol side
+//! agree.
+//!
+//! [`ScriptWm`](crate::script::ScriptWm) asks a script.
+//! [`fallback::Windows`](crate::fallback::Windows) is what the core does
+//! where nobody else decides; it runs without a script and without a GPU.
+//!
+//! This module also holds the vocabulary both use: window and output ids,
+//! [`Placement`] and [`ConfigureHint`], on the integer logical geometry of
+//! [`crate::geometry`].
+
+pub use crate::geometry::{Point, Rect, Size};
+
+/// Identifies a window. Allocated by the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WindowId(pub u64);
+
+/// Identifies an output. Allocated by the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OutputId(pub u64);
+
+/// Where a window is, logically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement {
+    pub window: WindowId,
+    /// The output the window was placed on, if any output exists.
+    pub output: Option<OutputId>,
+    /// Position of the window geometry in global logical coordinates.
+    pub position: Point,
+    /// Size of the window geometry. `None` until the window reports one.
+    pub size: Option<Size>,
+}
+
+impl Placement {
+    /// The rectangle the window occupies, once its size is known.
+    pub fn rect(&self) -> Option<Rect> {
+        self.size.map(|size| Rect::from_parts(self.position, size))
+    }
+}
+
+/// What a window is to be told when it is configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfigureHint {
+    /// The size it is asked to have. `None` lets the client choose.
+    pub size: Option<Size>,
+    /// Whether the window has the focus.
+    pub activated: bool,
+}
+
+use crate::scene::Hit;
+
+/// What the window manager made of a pointer button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonUse {
+    /// Nothing: the core focuses the window under the pointer on a press.
+    Unused,
+    /// It decided the focus itself. The button still reaches the client.
+    FocusDecided,
+    /// On a press with no other button held: it takes the pointer (see
+    /// [`WindowManager::pointer_button`]).
+    Taken,
+}
+
+/// Which modifier keys are held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub logo: bool,
+    /// Not a key: the window with the keyboard focus asked that the
+    /// compositor's own shortcuts go to it (keyboard-shortcuts-inhibit).
+    /// Whether to honor that is the window manager's decision.
+    pub inhibited: bool,
+}
+
+impl Modifiers {
+    /// Updates the state for a key event. `keycode` is a Linux evdev code.
+    pub fn update(&mut self, keycode: u32, pressed: bool) {
+        match keycode {
+            29 | 97 => self.ctrl = pressed,
+            56 | 100 => self.alt = pressed,
+            42 | 54 => self.shift = pressed,
+            125 | 126 => self.logo = pressed,
+            _ => {}
+        }
+    }
+}
+
+/// Something a window manager asks the core to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WmRequest {
+    /// Ask a window to close.
+    Close(WindowId),
+    /// End the pointer lock or confinement in effect, whatever the client
+    /// wants: the way out for the person at the keyboard. It is not
+    /// offered again until the keyboard focus moves or the pointer leaves
+    /// the surface and comes back.
+    ReleasePointerConstraint,
+    /// Ask [`WindowManager::pointer_constraint`] again about every
+    /// constraint that could be in effect now, as if nothing had been
+    /// decided: for a window manager that changed its mind.
+    ReviewPointerConstraints,
+    /// Tell a window whether it is maximized and whether it is fullscreen.
+    SetStates {
+        window: WindowId,
+        maximized: bool,
+        fullscreen: bool,
+    },
+}
+
+/// A pointer constraint (lock or confinement) a client asked for, as the
+/// window manager sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConstraintView {
+    /// The window of the surface, if it belongs to one.
+    pub window: Option<WindowId>,
+    pub surface: proto_wl::SurfaceId,
+    pub kind: proto_wl::PointerConstraintKind,
+    /// Whether it is in effect now.
+    pub active: bool,
+}
+
+/// The start of a touchpad gesture, as the window manager sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GestureStart {
+    pub kind: proto_wl::GestureKind,
+    pub fingers: u32,
+    /// What the pointer is on: where the gesture goes when the window
+    /// manager does not take it.
+    pub hit: Option<Hit>,
+}
+
+/// A step of a gesture the window manager took.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GestureStep {
+    pub kind: proto_wl::GestureKind,
+    /// Motion of the fingers' center in logical pixels.
+    pub dx: f64,
+    pub dy: f64,
+    /// Pinch: scale since the start (1.0 at the start), rotation in degrees
+    /// since the previous step.
+    pub scale: f64,
+    pub rotation: f64,
+}
+
+/// See the module documentation.
+pub trait WindowManager {
+    /// Short name for state dumps.
+    fn name(&self) -> &'static str;
+
+    // -- what happened --------------------------------------------------------
+
+    /// An output exists now, or its rectangle changed.
+    fn set_output(&mut self, id: OutputId, rect: Rect);
+    fn remove_output(&mut self, id: OutputId);
+    /// A window was created. It has no contents and no size yet.
+    fn add_window(&mut self, id: WindowId) -> Placement;
+    fn remove_window(&mut self, id: WindowId);
+    /// The client committed a window geometry of this size.
+    fn set_window_size(&mut self, id: WindowId, size: Size) -> bool;
+    /// The person now presses another key for the logo key (see
+    /// [`proto_backend::BackendEvent::LogoKey`]). Key events still say logo.
+    fn logo_key_changed(&mut self, _key: proto_backend::LogoKey) {}
+    /// A key was pressed or released. `symbol` is what the key is in the
+    /// keymap of the seat with the keys held (its keysym, and on a press
+    /// the text it types). Returns `true` when the window manager used it;
+    /// the key then does not reach a client.
+    fn key(
+        &mut self,
+        _keycode: u32,
+        _pressed: bool,
+        _modifiers: Modifiers,
+        _symbol: &proto_wl::KeySymbol,
+    ) -> bool {
+        false
+    }
+    /// A pointer button was pressed or released over `hit`, with
+    /// `modifiers` held.
+    ///
+    /// A window manager that answers a press with [`ButtonUse::Taken`]
+    /// holds the pointer until every button is released (moving a window
+    /// about, choosing something on a screen of its own): that press, the
+    /// buttons after it and their releases reach no client, clients see
+    /// the pointer leave, and every motion comes to
+    /// [`Self::pointer_motion`]. While it holds the pointer, `hit` is
+    /// `None`.
+    fn pointer_button(
+        &mut self,
+        _button: u32,
+        _pressed: bool,
+        _hit: Option<&Hit>,
+        _modifiers: Modifiers,
+    ) -> ButtonUse {
+        ButtonUse::Unused
+    }
+    /// The pointer moved to `position` (global logical) while the window
+    /// manager holds it.
+    fn pointer_motion(&mut self, _position: (f64, f64)) {}
+    /// A finger touched the screen at `position` (global logical), over
+    /// `hit`. Returns `true` when the window manager decided the focus
+    /// itself; otherwise the core focuses the window that was touched. The
+    /// touch reaches the client either way.
+    fn touch_down(&mut self, _slot: u32, _position: (f64, f64), _hit: Option<&Hit>) -> bool {
+        false
+    }
+    /// A touchpad gesture starts. Returns `true` when the window manager
+    /// takes it: then the rest of it comes to [`Self::gesture_step`] and
+    /// [`Self::gesture_end`], and no client sees any of it. Otherwise it goes
+    /// to the client the pointer is on, and the window manager hears no more
+    /// of it.
+    fn gesture_begin(&mut self, _gesture: &GestureStart) -> bool {
+        false
+    }
+    /// The gesture the window manager took moved.
+    fn gesture_step(&mut self, _step: &GestureStep) {}
+    /// The gesture the window manager took ended; `cancelled` when the
+    /// fingers did not complete it.
+    fn gesture_end(&mut self, _kind: proto_wl::GestureKind, _cancelled: bool) {}
+    /// The client of a window asked for it to be maximized, fullscreen,
+    /// minimized, moved, resized, or for its window menu. Nothing has been
+    /// done about it; a window manager that does nothing is within the
+    /// protocol.
+    fn window_request(&mut self, _id: WindowId, _request: proto_wl::WindowRequest) {}
+    /// Whether a pointer constraint may be in effect now. Asked when the
+    /// pointer is on its surface, inside its region, and something changed
+    /// since the last answer (the constraint is new, the pointer came back
+    /// onto the surface, the keyboard focus moved). `None`: no opinion, the
+    /// core's default applies (in effect while its window has the keyboard
+    /// focus).
+    fn pointer_constraint(&mut self, _constraint: &ConstraintView) -> Option<bool> {
+        None
+    }
+    /// The constraint in effect changed: one started, or the one there was
+    /// ended (`None`).
+    fn pointer_constraint_changed(&mut self, _active: Option<&ConstraintView>) {}
+    /// Runs what the events above queued, once the scene has the current
+    /// state of the core. Returns `true` when placement, stacking, focus or
+    /// configure hints may have changed.
+    fn dispatch(&mut self) -> bool {
+        false
+    }
+
+    // -- requests from outside (the control interface) --------------------------
+
+    fn move_window(&mut self, id: WindowId, position: Point) -> bool;
+    /// Gives the focus to a window and raises it, or clears the focus.
+    fn focus_window(&mut self, id: Option<WindowId>) -> bool;
+
+    // -- what the core reads back ----------------------------------------------
+
+    fn focus(&self) -> Option<WindowId>;
+    fn placement(&self, id: WindowId) -> Option<Placement>;
+    /// All placements in stacking order, bottom to top.
+    fn placements(&self) -> Vec<Placement>;
+    /// What a window should be told when it is configured.
+    fn configure_hint(&self, id: WindowId) -> ConfigureHint;
+    /// Where the popups of a window should be kept: a rectangle relative to
+    /// its window geometry, which they are flipped, slid or resized into as
+    /// far as their positioners allow. For a window manager that shows the
+    /// window somewhere else than its placement on an output says (scaled,
+    /// on a screen inside a 3D scene). `None`: the output the window is on.
+    fn popup_bounds(&self, _id: WindowId) -> Option<Rect> {
+        None
+    }
+    fn take_requests(&mut self) -> Vec<WmRequest> {
+        Vec::new()
+    }
+    /// Whether a window is seen: its client should keep drawing. Every
+    /// window is, unless the window manager says otherwise (a window on
+    /// a workspace out of view, one that waits for a place). The core
+    /// holds the frame callbacks of a window that is not, and tells its
+    /// client it is suspended.
+    fn is_visible(&self, _id: WindowId) -> bool {
+        true
+    }
+}

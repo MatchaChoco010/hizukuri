@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Runs inside the guest. Starts a command on a virtual terminal inside a real
+# logind session, the way a display manager or a console login would.
+#
+# An SSH session has no seat and no VT, so a DRM/KMS compositor started from
+# SSH cannot take a libseat (logind) session. This wrapper creates one with
+# systemd-run and PAM (pam_systemd), bound to /dev/ttyN.
+set -euo pipefail
+
+UNIT="hizukuri-tty"
+LOG="$HOME/tty-run.log"
+vt=7
+seatd=0
+wait=()
+env_args=()
+
+usage() {
+    echo "usage: tty-run [-t VT] [-e NAME=VALUE]... [--seatd] [--wait] CMD [ARGS...]" >&2
+    echo "       tty-run --log | --stop | --status" >&2
+    exit 2
+}
+
+case "${1:-}" in
+    --log)
+        exec cat "$LOG"
+        ;;
+    --stop)
+        sudo systemctl stop "$UNIT.service" 2>/dev/null || true
+        sudo systemctl reset-failed "$UNIT.service" 2>/dev/null || true
+        sudo chvt 1
+        exit 0
+        ;;
+    --status)
+        systemctl show "$UNIT.service" -p ActiveState -p SubState -p ExecMainStatus -p MainPID
+        echo "active VT: $(sudo fgconsole)"
+        exit 0
+        ;;
+esac
+
+while (($#)); do
+    case "$1" in
+        -t) vt="$2"; shift 2 ;;
+        -e) env_args+=(-E "$2"); shift 2 ;;
+        --seatd) seatd=1; shift ;;
+        # Block until the command exits and return its exit status.
+        --wait) wait=(--wait); shift ;;
+        --) shift; break ;;
+        -*) usage ;;
+        *) break ;;
+    esac
+done
+(($#)) || usage
+
+# Replace a previous run, so repeated calls behave the same way every time.
+sudo systemctl stop "$UNIT.service" 2>/dev/null || true
+sudo systemctl reset-failed "$UNIT.service" 2>/dev/null || true
+
+if ((seatd)); then
+    sudo systemctl start seatd.service
+    env_args+=(-E LIBSEAT_BACKEND=seatd)
+fi
+
+# The command opens the log itself, as the user.
+: >"$LOG"
+
+# A login shell, so that the command gets the environment a console login
+# has (PATH, XDG_DATA_DIRS, the cursor theme).
+shell="$(command -v bash)"
+
+sudo chvt "$vt"
+status=0
+sudo systemd-run --quiet --unit="$UNIT" --collect "${wait[@]}" \
+    -p PAMName=login \
+    -p User="$USER" \
+    -p WorkingDirectory="$HOME" \
+    -p TTYPath="/dev/tty$vt" \
+    -p TTYReset=yes \
+    -p TTYVHangup=yes \
+    -p TTYVTDisallocate=yes \
+    -p StandardInput=tty-fail \
+    -p StandardOutput=tty \
+    -p StandardError=tty \
+    -p UtmpIdentifier="tty$vt" \
+    -p UtmpMode=user \
+    -E XDG_SESSION_TYPE=wayland \
+    -E XDG_SEAT=seat0 \
+    -E XDG_VTNR="$vt" \
+    "${env_args[@]}" \
+    -- "$shell" -l -c 'exec "$@" >"$0" 2>&1' "$LOG" "$@" || status=$?
+if ((${#wait[@]})); then
+    sudo chvt 1
+    exit "$status"
+fi
+echo "tty-run: started on tty$vt (log: $LOG)"
