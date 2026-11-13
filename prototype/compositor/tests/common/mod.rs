@@ -531,8 +531,10 @@ impl Session {
     /// - Its home and configuration are empty directories of this session,
     ///   so it neither reads the settings of whoever runs the tests nor
     ///   writes history or state into their home. The cache directory is
-    ///   left alone (font and shader caches are safe to share and slow to
-    ///   rebuild).
+    ///   left alone (font caches are safe to share and slow to rebuild).
+    ///   The shader caches of the drivers are not in it: the application
+    ///   inherits the variables that point them elsewhere, or turn them off
+    ///   (tools/ci.sh, .cargo/config.toml).
     /// - The system's configuration directory is the only other one it
     ///   looks in: the list it inherited may hold directories of the person
     ///   who runs the tests (a per-user profile).

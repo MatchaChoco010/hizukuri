@@ -118,6 +118,28 @@ run_tests() {
     fi
 }
 
+# The drivers keep the shaders they compile in a cache on disk, by default
+# in the home of whoever runs the tests. The tests, and every process they
+# start, use a cache of their own instead, empty at the start of the run and
+# removed at its end: a run never writes into the person's cache, and it
+# compiles what a fresh CI runner compiles (a warm cache would let the
+# drivers skip most of their shader compiler). One cache for the whole run,
+# so that a shader the run has compiled once is not compiled again.
+# .cargo/config.toml turns the caches off for a cargo test started without
+# this script; the variables here take their place.
+SHADER_CACHE=""
+use_own_shader_cache() {
+    SHADER_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/hizukuri-shader-cache.XXXXXX")"
+    trap 'rm -rf "$SHADER_CACHE"' EXIT
+    mkdir "$SHADER_CACHE/mesa" "$SHADER_CACHE/nvidia"
+    # Mesa (lavapipe, RADV, ANV and the other Mesa drivers).
+    export MESA_SHADER_CACHE_DISABLE=false
+    export MESA_SHADER_CACHE_DIR="$SHADER_CACHE/mesa"
+    # The NVIDIA driver.
+    export __GL_SHADER_DISK_CACHE=1
+    export __GL_SHADER_DISK_CACHE_PATH="$SHADER_CACHE/nvidia"
+}
+
 test_all() {
     # The gfx crates read this instead of the HIZUKURI_ variable.
     if [ "${HIZUKURI_TEST_VALIDATION:-}" = "1" ]; then
@@ -127,6 +149,8 @@ test_all() {
     if [ -n "${HIZUKURI_TEST_SKIP_UDMABUF:-}" ]; then
         echo "== note: HIZUKURI_TEST_SKIP_UDMABUF is set; the tests that need /dev/udmabuf are left out"
     fi
+
+    use_own_shader_cache
 
     local failed=0
     local devices="${HIZUKURI_TEST_DEVICES:-lavapipe}"

@@ -62,6 +62,15 @@ nix develop --command tools/ci.sh           # devShell の中で。CI と同じ�
   テストを走らせる利用者が、このデバイスを開けることが要る。開けるようにできない環境では、`HIZUKURI_TEST_SKIP_UDMABUF=1` で外す。
   対象のテストと、`HIZUKURI_TEST_REAL_CLIENTS` に並べられる名前は、[検証用の compositor](../prototype/README.md)にある。
 - 実行バイナリを使うテストは、テストごとに、専用の `XDG_RUNTIME_DIR` を作り、終わったら消す。
+- **テストは、ドライバーの shader の cache に、テストを走らせる人のもの（既定では `~/.cache` の下）を使わない。**
+  - `tools/ci.sh test` は、実行ごとに、空の cache の場所（`${TMPDIR:-/tmp}/hizukuri-shader-cache.*`）を作り、終わったら消す。
+    テストのプロセスと、テストが起動するプロセス（compositor、アプリ）は、`MESA_SHADER_CACHE_DIR`（Mesa のドライバー。lavapipe、RADV など）と
+    `__GL_SHADER_DISK_CACHE_PATH`（NVIDIA）を引き継いで、そこを使う。1 回の実行の中では、1 つの cache を共有する。
+  - 毎回、空の cache から始まるので、ドライバーの shader の compiler（lavapipe では LLVM の JIT）を、CI の runner と同じだけ通る。
+    温まった cache があると、lavapipe は、変種の多くを cache から読み、LLVM の codegen をほとんど飛ばす。JIT の中の不具合は、そのとき再現しない。
+  - `tools/ci.sh` を通さずに `cargo test` を走らせると、`.cargo/config.toml` の `[env]` が、cache を切る
+    （`MESA_SHADER_CACHE_DISABLE=true`、`__GL_SHADER_DISK_CACHE=0`）。環境にすでに値があれば、そちらが使われる。
+    cache を使わないので、同じ shader を何度も compile し、`tools/ci.sh` より遅い。`[env]` は、`cargo run` で動かしたプログラムにも付く。
 - 取り込んだ画像と、`proto-compositor` のログは、`target/test-output/<テスト名>-<デバイス>/` に残る
   （devShell の中では、`$CARGO_TARGET_DIR/test-output/`）。
 - **`tools/ci.sh` は、最後に、テストが起動したプロセスが残っていないことを確かめる。**
