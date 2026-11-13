@@ -4,6 +4,7 @@ description = "The verification compositor of hizukuri, a foundation for buildin
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

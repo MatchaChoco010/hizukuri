@@ -648,37 +648,36 @@ impl XdgShellHandler for State {
             // told the client.
             return;
         };
+        // A device that something holds already is taken over only from
+        // the menu's own chain: the grab that began with the serial of this
+        // request (the press that opened the menu), or the menu before this
+        // one (a submenu). Held by anything else, the request is too late,
+        // and the menu is dismissed.
+        let chain = [Some(serial), grab.previous_serial()];
         if let Some(keyboard) = seat.get_keyboard() {
+            let held = keyboard.is_grabbed();
+            let by_another = held_outside_chain(chain, held, |s| keyboard.has_grab(s));
             // An input method that grabbed the keyboard keeps it: the menu
             // gets the focus, and the keys the input method does not use
             // come back to it through the virtual keyboard. Replacing that
             // grab would leave the input method without keys, and Smithay
             // offers no way to give it back afterwards.
-            let input_method_grab = seat.input_method().keyboard_grabbed()
-                && keyboard.is_grabbed()
-                && (self.menu_grab.is_some()
-                    || !(keyboard.has_grab(serial)
-                        || keyboard.has_grab(grab.previous_serial().unwrap_or(serial))));
-            if input_method_grab {
+            let input_method_keeps_it = held
+                && seat.input_method().keyboard_grabbed()
+                && (self.menu_grab.is_some() || by_another);
+            if input_method_keeps_it {
                 self.menu_grab = Some(grab.clone());
                 self.set_keyboard_focus_surface(grab.current_grab());
+            } else if by_another {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
             } else {
-                if keyboard.is_grabbed()
-                    && !(keyboard.has_grab(serial)
-                        || keyboard.has_grab(grab.previous_serial().unwrap_or(serial)))
-                {
-                    grab.ungrab(PopupUngrabStrategy::All);
-                    return;
-                }
                 keyboard.set_focus(self, grab.current_grab(), serial);
                 keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
             }
         }
         if let Some(pointer) = seat.get_pointer() {
-            if pointer.is_grabbed()
-                && !(pointer.has_grab(serial)
-                    || pointer.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial())))
-            {
+            if held_outside_chain(chain, pointer.is_grabbed(), |s| pointer.has_grab(s)) {
                 grab.ungrab(PopupUngrabStrategy::All);
                 return;
             }
@@ -741,6 +740,18 @@ impl XdgDecorationHandler for State {
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
         set_server_side_decoration(&toplevel);
     }
+}
+
+/// Whether a device is held by a grab that is not part of a popup grab
+/// chain. `chain` holds the serials the grabs of the chain began with (the
+/// ones that are known), `held` is whether anything holds the device, and
+/// `began_with` asks the device whether what holds it began with a serial.
+fn held_outside_chain(
+    chain: [Option<Serial>; 2],
+    held: bool,
+    began_with: impl Fn(Serial) -> bool,
+) -> bool {
+    held && !chain.into_iter().flatten().any(began_with)
 }
 
 fn set_server_side_decoration(toplevel: &ToplevelSurface) {

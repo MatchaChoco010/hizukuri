@@ -4,6 +4,7 @@ description = "Checks the area light shader of a project on a GPU: against the C
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [[bin]]
