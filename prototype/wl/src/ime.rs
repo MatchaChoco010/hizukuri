@@ -301,8 +301,9 @@ impl State {
         }
     }
 
-    /// Whether a virtual keyboard belongs to the input method that holds
-    /// the keyboard grab.
+    /// True for the virtual keyboard an input method types through while
+    /// it holds the keyboard grab itself: what comes from it must go past
+    /// the grab, or the input method would be handed its own keys again.
     fn belongs_to_grab_holder(&self, device: &VirtualKeyboardDevice) -> bool {
         let holder = self.seat.input_method().keyboard_grab_client();
         holder.is_some() && holder == device.client()
