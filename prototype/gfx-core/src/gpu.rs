@@ -977,7 +977,7 @@ impl Gpu {
         if desc.usage.is_empty() {
             bail!(InvalidArgument, "image usage must not be empty");
         }
-        let full_chain = 32 - desc.width.max(desc.height).leading_zeros();
+        let full_chain = desc.width.max(desc.height).bit_width();
         if extra.mip_levels == 0 || extra.mip_levels > full_chain {
             bail!(
                 InvalidArgument,

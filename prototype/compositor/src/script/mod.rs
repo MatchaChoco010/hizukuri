@@ -1751,16 +1751,18 @@ impl Scene for ScriptScene {
                 Format::Rgba16Float => gpu
                     .read_image(image)
                     .ok()?
-                    .chunks_exact(2)
-                    .map(|b| u16::from_ne_bytes([b[0], b[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| u16::from_ne_bytes(*b))
                     .collect(),
                 Format::Rgba32Float => gpu
                     .read_image(image)
                     .ok()?
-                    .chunks_exact(4)
-                    .map(|b| {
-                        crate::image::f32_to_half(f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
-                    })
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| crate::image::f32_to_half(f32::from_ne_bytes(*b)))
                     .collect(),
                 _ => return None,
             };

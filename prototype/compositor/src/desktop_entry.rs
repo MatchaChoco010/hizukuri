@@ -199,7 +199,7 @@ impl Group {
         let mut inside = false;
         let mut found = false;
         for line in text.lines() {
-            let line = line.strip_suffix('\r').unwrap_or(line);
+            let line = line.trim_suffix('\r');
             let trimmed = line.trim_start();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
@@ -267,7 +267,7 @@ impl Group {
             return Some(value);
         }
         self.values.iter().find_map(|(k, v)| {
-            let written = k.strip_prefix(key)?.strip_prefix('[')?.strip_suffix(']')?;
+            let written = k.strip_prefix(key)?.strip_circumfix('[', ']')?;
             (strip_encoding(written) == postfix).then_some(v.as_str())
         })
     }

@@ -82,7 +82,9 @@ fn bytes(points: &[[f32; 4]]) -> Vec<u8> {
 
 fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
     bytes
-        .chunks_exact(16)
+        .as_chunks::<16>()
+        .0
+        .iter()
         .map(|c| {
             std::array::from_fn(|i| f32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().unwrap()))
         })

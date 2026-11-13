@@ -50,8 +50,10 @@ fn triangle() {
     assert_close8(px8(&pixels, 64, 2, 2), clear, tolerance, "outside");
     // The triangle covers half of a 32x32 box: 512 pixels, give or take the edges.
     let covered = pixels
-        .chunks_exact(4)
-        .filter(|p| close8((*p).try_into().unwrap(), inside, tolerance))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| close8(**p, inside, tolerance))
         .count();
     assert!((480..=544).contains(&covered), "covered {covered} pixels");
     assert_no_validation_errors();

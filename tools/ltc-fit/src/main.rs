@@ -218,9 +218,9 @@ fn run_reads(args: &[String]) -> Result<(), String> {
     println!("| lobe | perpendicular | peak | mean direction | lifted mean |");
     println!("| --- | --- | --- | --- | --- |");
     for (lobe, name) in ["diffuse", "specular"].iter().enumerate() {
-        let rms: Vec<String> = (0..4)
-            .map(|k| format!("{:.3}", (squared[lobe][k] / weight[lobe]).sqrt()))
-            .collect();
+        let rms: Vec<String> = Vec::from_fn(4, |k| {
+            format!("{:.3}", (squared[lobe][k] / weight[lobe]).sqrt())
+        });
         println!("| {name} | {} |", rms.join(" | "));
     }
     println!();

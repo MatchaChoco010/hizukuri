@@ -248,8 +248,8 @@ impl Fixture {
         gpu.draw(3, 1, 0, 0).unwrap();
         self.end(gpu);
         let pixels = gpu.read_image(self.target).unwrap();
-        for pixel in pixels.chunks_exact(4) {
-            assert_eq!(pixel, [0, 255, 0, 255]);
+        for pixel in pixels.as_chunks::<4>().0 {
+            assert_eq!(*pixel, [0, 255, 0, 255]);
         }
     }
 }

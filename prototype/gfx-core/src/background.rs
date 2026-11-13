@@ -20,6 +20,7 @@
 //!   `Gpu` was dropped) is destroyed, not leaked.
 
 use std::collections::{HashMap, HashSet};
+use std::mem::DropGuard;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use vulkan::vk;
@@ -123,16 +124,6 @@ pub(crate) struct Inner {
     pub bindings: Vec<PipelineBinding>,
 }
 
-/// Counts a job as running until it is dropped, also if the job panics.
-struct Running<'a>(&'a Background);
-
-impl Drop for Running<'_> {
-    fn drop(&mut self) {
-        self.0.lock().running -= 1;
-        self.0.idle.notify_all();
-    }
-}
-
 impl PipelineJob {
     pub(crate) fn new(inner: Inner) -> Self {
         Self { inner: Some(inner) }
@@ -150,7 +141,12 @@ impl PipelineJob {
             }
             state.running += 1;
         }
-        let running = Running(&job.shared);
+        // Counts the job as running until it is dropped, also if the job
+        // panics.
+        let running = DropGuard::new(&*job.shared, |shared: &Background| {
+            shared.lock().running -= 1;
+            shared.idle.notify_all();
+        });
         // SAFETY: the description, the shaders and the bindings passed the
         // checks of `Gpu::prepare_render_pipeline`. The device is alive:
         // `Background::close`, which precedes its destruction, waits while

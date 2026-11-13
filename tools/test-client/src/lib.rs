@@ -1333,8 +1333,10 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
                 states,
             } => {
                 let states: Vec<u32> = states
-                    .chunks_exact(4)
-                    .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_ne_bytes(*c))
                     .collect();
                 let has = |wanted: xdg_toplevel::State| states.contains(&(wanted as u32));
                 if let Some(window) = &mut state.window {

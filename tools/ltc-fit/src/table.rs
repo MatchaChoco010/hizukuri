@@ -173,7 +173,9 @@ fn bytes(texels: &[[f32; 4]]) -> Vec<u8> {
 
 fn texels(bytes: &[u8]) -> Vec<[f32; 4]> {
     bytes
-        .chunks_exact(16)
+        .as_chunks::<16>()
+        .0
+        .iter()
         .map(|texel| {
             std::array::from_fn(|c| f32::from_le_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap()))
         })

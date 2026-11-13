@@ -17,14 +17,13 @@ members = [
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.100"
 publish = false
 
 [workspace.dependencies]
 proto-color = { path = "prototype/color" }
 proto-wl = { path = "prototype/wl" }
 proto-backend = { path = "prototype/backend" }
-proto-compositor = { path = "prototype/compositor" }
 proto-test-client = { path = "tools/test-client" }
 
 # Pinned to the published vulkan-rs revision. Only proto-gfx-core may
@@ -61,7 +60,6 @@ calloop = "0.14.5"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
-anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

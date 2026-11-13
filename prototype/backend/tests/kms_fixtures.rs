@@ -76,7 +76,7 @@ fn the_snapshot_describes_the_machine() {
         let mut again = bytes.clone();
         proto_backend::kms::blob::anonymize_edid(&mut again);
         assert_eq!(again, bytes, "{}", connector.name);
-        for block in bytes.chunks_exact(128) {
+        for block in bytes.as_chunks::<128>().0 {
             assert_eq!(block.iter().fold(0u8, |s, b| s.wrapping_add(*b)), 0);
         }
         let identity = proto_backend::kms::blob::edid_identity(&bytes).unwrap();

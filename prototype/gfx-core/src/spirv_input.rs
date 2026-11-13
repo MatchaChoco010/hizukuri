@@ -41,8 +41,10 @@ pub(crate) fn words_from_bytes(bytes: &[u8]) -> Result<Vec<u32>, String> {
         ));
     }
     let words: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
         .collect();
     match words[0] {
         MAGIC => Ok(words),

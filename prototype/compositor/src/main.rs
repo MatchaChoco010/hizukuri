@@ -7,6 +7,7 @@
 //! ```
 
 use std::io::{self, BufRead, BufReader, Write};
+use std::mem::DropGuard;
 use std::os::fd::AsFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -1198,7 +1199,10 @@ fn run(
     // Control socket.
     let listener = UnixListener::bind(&control_path)
         .map_err(|e| format!("failed to bind {}: {e}", control_path.display()))?;
-    let _control_guard = RemoveOnDrop(control_path.clone());
+    // Removes the socket on exit.
+    let _control_guard = DropGuard::new(control_path.clone(), |path| {
+        let _ = std::fs::remove_file(path);
+    });
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("failed to configure the control socket: {e}"))?;
@@ -1417,15 +1421,6 @@ fn insert_control_connection(
         )
         .map(|_| ())
         .map_err(|e| io::Error::other(e.to_string()))
-}
-
-/// Removes a file when dropped (the control socket, on exit).
-struct RemoveOnDrop(PathBuf);
-
-impl Drop for RemoveOnDrop {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
 }
 
 /// Refuses to take over a display on real hardware unless that was asked

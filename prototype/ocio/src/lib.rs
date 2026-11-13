@@ -260,9 +260,7 @@ pub fn quiet() {
 pub fn builtin_configs() -> Vec<String> {
     // SAFETY: plain queries of a registry that lives for the process.
     let count = unsafe { ffi::hz_ocio_builtin_count() };
-    (0..count)
-        .map(|i| unsafe { copy(ffi::hz_ocio_builtin_name(i)) })
-        .collect()
+    Vec::from_fn(count, |i| unsafe { copy(ffi::hz_ocio_builtin_name(i)) })
 }
 
 /// A dynamic property: a control of a processor that can change without

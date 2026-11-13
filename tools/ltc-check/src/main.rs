@@ -348,7 +348,9 @@ impl Check {
             .read_image(image)
             .map_err(|e| format!("read the probes: {e}"))?;
         Ok(bytes
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|texel| {
                 std::array::from_fn(|c| {
                     f32::from_ne_bytes(texel[c * 4..c * 4 + 4].try_into().unwrap())
@@ -847,7 +849,9 @@ impl Check {
             .read_image(image)
             .map_err(|e| format!("read the scene: {e}"))?;
         Ok(bytes
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|texel| {
                 std::array::from_fn(|c| {
                     half::f16::from_bits(u16::from_ne_bytes([texel[c * 2], texel[c * 2 + 1]]))

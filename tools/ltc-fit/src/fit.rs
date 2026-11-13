@@ -119,20 +119,16 @@ pub fn nelder_mead(
     max_iterations: usize,
 ) -> (Vec<f64>, f64) {
     let dim = start.len();
-    let mut simplex: Vec<(Vec<f64>, f64)> = (0..=dim)
-        .map(|k| {
-            let mut point = start.to_vec();
-            if k > 0 {
-                point[k - 1] += step;
-            }
-            let value = f(&point);
-            (point, value)
-        })
-        .collect();
+    let mut simplex: Vec<(Vec<f64>, f64)> = Vec::from_fn(dim + 1, |k| {
+        let mut point = start.to_vec();
+        if k > 0 {
+            point[k - 1] += step;
+        }
+        let value = f(&point);
+        (point, value)
+    });
     let along = |centroid: &[f64], worst: &[f64], t: f64| -> Vec<f64> {
-        (0..dim)
-            .map(|d| centroid[d] + t * (worst[d] - centroid[d]))
-            .collect()
+        Vec::from_fn(dim, |d| centroid[d] + t * (worst[d] - centroid[d]))
     };
     for _ in 0..max_iterations {
         simplex.sort_by(|a, b| a.1.total_cmp(&b.1));

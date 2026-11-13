@@ -200,7 +200,7 @@ pub fn anonymize_edid(edid: &mut [u8]) {
         anonymize_descriptor(&mut base[54 + index * 18..54 + (index + 1) * 18]);
     }
     fix_block_checksum(base);
-    for block in extensions.chunks_exact_mut(128) {
+    for block in extensions.as_chunks_mut::<128>().0 {
         match block[0] {
             0x02 => anonymize_cta_block(block),
             0x70 => anonymize_displayid_block(block),
@@ -405,7 +405,7 @@ mod tests {
         let original = edid.clone();
         anonymize_edid(&mut edid);
 
-        for block in edid.chunks_exact(128) {
+        for block in edid.as_chunks::<128>().0 {
             assert!(checksum_ok(block));
         }
         let (cta, displayid) = (&edid[128..256], &edid[256..384]);
