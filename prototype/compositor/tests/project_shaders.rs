@@ -10,6 +10,7 @@ use proto_compositor::control::Request;
 device_tests!(
     a_project_draws_with_its_own_shaders,
     a_shader_without_spirv_is_an_error_value,
+    a_source_without_an_entry_point_is_a_module_of_the_project,
 );
 
 /// Fills the output with one colour: linear (0.25, 0.5, 0.75), encoded with
@@ -86,6 +87,53 @@ fn a_project_draws_with_its_own_shaders(device: Device) {
     let image = session.screenshot_png("fill");
     // sRGB of 0.25, 0.5 and 0.75, give or take 1 (UNORM rounding).
     let pixel = image.pixel(32, 24);
+    for (c, expected) in [137u16, 188, 225].into_iter().enumerate() {
+        assert!(pixel[c].abs_diff(expected) <= 1, "{pixel:?}");
+    }
+}
+
+/// A module of the project: no entry point, imported by the shader next to
+/// it.
+const PAINT: &str = r#"
+module paint;
+
+public float3 paint() {
+    return float3(0.25, 0.5, 0.75);
+}
+"#;
+
+/// A `.slang` without an entry point is a module: the build compiles nothing
+/// from it alone, and the project's shaders import it by its file name.
+fn a_source_without_an_entry_point_is_a_module_of_the_project(device: Device) {
+    let project = script_project("project-shaders-module", device, &[("main", MAIN)]);
+    std::fs::create_dir_all(project.join("shaders")).unwrap();
+    std::fs::write(project.join("shaders/paint.slang"), PAINT).unwrap();
+    std::fs::write(
+        project.join("shaders/fill.slang"),
+        FILL.replace("import color;", "import color;\nimport paint;")
+            .replace("float3(0.25, 0.5, 0.75)", "paint()"),
+    )
+    .unwrap();
+    let mut session = Session::start(
+        "project-shaders-module",
+        device,
+        &[
+            "--output-size",
+            "64x48",
+            "--script",
+            project.to_str().unwrap(),
+        ],
+    );
+    let output = proto_compositor::shaders::output_dir(&project);
+    assert!(output.join("fill.slang.fs_main.spv").is_file());
+    let of_the_module: Vec<_> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with("paint.slang") && name.ends_with(".spv"))
+        .collect();
+    assert!(of_the_module.is_empty(), "{of_the_module:?}");
+    assert_eq!(session.script_state()["mode"], "running");
+    let pixel = session.screenshot_png("fill").pixel(32, 24);
     for (c, expected) in [137u16, 188, 225].into_iter().enumerate() {
         assert!(pixel[c].abs_diff(expected) <= 1, "{pixel:?}");
     }

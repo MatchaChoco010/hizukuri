@@ -168,10 +168,39 @@ pub enum Request {
     ScriptMode {
         mode: String,
     },
+    /// Chooses the OCIO display and view an output is shown through, and
+    /// its exposure (stops) and gamma. Without `output`: every output that
+    /// has no setting of its own. A missing display or view is the config's
+    /// default; `clear` goes back to the conversion without OCIO. Answers
+    /// the state, as `ocio_state` does.
+    OcioSet {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exposure: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gamma: Option<f64>,
+        #[serde(default)]
+        clear: bool,
+    },
+    /// The OCIO config, the working colour space, what each output is shown
+    /// through and whether a conversion is being compiled.
+    OcioState,
     /// Moves the clock frames are timed with forward, when it is a manual
     /// one (`--clock manual`). Answers the new time (`now_ms`).
     AdvanceClock {
         milliseconds: f64,
+    },
+    /// Grants (`active`) or withdraws the keyboard-shortcuts-inhibit the
+    /// surface with the keyboard focus asked for, as the toggle key of a
+    /// compositor does: the client is told (`active` / `inactive`). Fails
+    /// when that surface asked for none. For tests.
+    SetShortcutsInhibit {
+        active: bool,
     },
     /// Stops the compositor.
     Quit,

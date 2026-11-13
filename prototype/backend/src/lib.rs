@@ -25,18 +25,23 @@
 //! or timers registers them on the caller's calloop event loop and calls
 //! [`BackendHost::backend_wake`] when new events are waiting.
 //!
-//! There are two backends: [`headless`] (virtual outputs, nothing shown)
-//! and [`kms`] (a DRM/KMS session). The KMS backend is split so that
-//! everything except the thin device and session layers runs without
-//! hardware; see its module documentation.
+//! There are three backends: [`headless`] (virtual outputs, nothing shown),
+//! [`kms`] (a DRM/KMS session) and [`nested`] (a window of another Wayland
+//! compositor). The KMS backend is split so that everything except the thin
+//! device and session layers runs without hardware; see its module
+//! documentation.
 
 pub mod headless;
 pub mod kms;
+#[cfg(feature = "nested")]
+pub mod nested;
+pub mod selection;
 pub mod target;
 
 use std::time::Duration;
 
 use proto_color::ImageDescription;
+pub use selection::{SelectionCrossing, SelectionEvent, SelectionKind, TransferFd};
 pub use target::{
     DRM_FORMAT_XRGB8888, DmabufPlane, OutputFormat, TargetDesc, TargetError, TargetId,
     TargetProvider, Targets,
@@ -261,6 +266,63 @@ pub struct Presentation {
     pub sequence: u64,
 }
 
+/// The key of the keyboard that reaches the core as the logo (Super) key.
+/// Key events of the core always say logo; this is which key the person
+/// presses for it, for what shows key combinations to them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LogoKey {
+    #[default]
+    Super,
+    Alt,
+    Ctrl,
+}
+
+impl LogoKey {
+    /// `super`, `alt` or `ctrl`.
+    pub fn name(self) -> &'static str {
+        match self {
+            LogoKey::Super => "super",
+            LogoKey::Alt => "alt",
+            LogoKey::Ctrl => "ctrl",
+        }
+    }
+}
+
+/// The text input with the keyboard focus inside, as a backend whose input
+/// method is outside the session (a parent compositor's) needs it.
+/// Lengths and positions are in bytes of UTF-8, as text-input-v3 has them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextInputState {
+    /// Counts the times a text input was enabled inside: a new value is
+    /// another text field, whose state starts afresh.
+    pub activation: u64,
+    /// The text around the cursor, the cursor and the anchor.
+    pub surrounding: Option<(String, u32, u32)>,
+    /// `zwp_text_input_v3.change_cause`.
+    pub change_cause: u32,
+    pub content_hint: u32,
+    pub content_purpose: u32,
+    /// Where the text cursor is seen, in the global logical space
+    /// (x, y, width, height): after whatever the scene does to the window.
+    pub cursor: Option<(i32, i32, i32, i32)>,
+}
+
+/// What an input method outside the session sent for the text input with
+/// the focus, all at once (its `done`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextCompose {
+    /// The text being composed and the cursor inside it (begin, end, in
+    /// bytes). `None`: nothing is being composed.
+    pub preedit: Option<(String, i32, i32)>,
+    /// Finished text.
+    pub commit: Option<String>,
+    /// Bytes to delete before and after the cursor.
+    pub delete: Option<(u32, u32)>,
+    /// The input method worked from a state of the text input that has
+    /// changed since.
+    pub stale: bool,
+}
+
 /// Something a backend reports to the compositor core.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackendEvent {
@@ -281,6 +343,23 @@ pub enum BackendEvent {
         presentation: Presentation,
     },
     Input(InputEvent),
+    /// The keyboard the input comes from has this keymap (xkb text format).
+    /// Sent by a backend whose keys were already laid out by someone else
+    /// (a parent compositor); the seat should use the same one.
+    Keymap(String),
+    /// From now on the person presses this key for what reaches the core
+    /// as the logo key. Sent by a backend that hands another modifier on as
+    /// the logo, because whoever owns the keyboard (a parent compositor)
+    /// keeps Super combinations to itself; sent again when that changes.
+    /// Until the first one, it is [`LogoKey::Super`].
+    LogoKey(LogoKey),
+    /// An input method outside the session (a parent compositor's) can
+    /// take text input for it, or no longer can. Until the first one, none
+    /// can.
+    TextInputAvailable(bool),
+    /// Text from the input method outside, for the text input with the
+    /// focus.
+    TextCompose(TextCompose),
     /// The session lost its devices (VT switch away). Do not render.
     SessionPaused,
     /// The session has its devices again. Everything needs a redraw.
@@ -292,6 +371,10 @@ pub enum BackendEvent {
     /// The user asked the compositor to stop with the emergency key
     /// combination, which the backend handles before anything else.
     QuitRequested,
+    /// A selection outside the session changed, or something outside reads
+    /// one inside. Sent by a backend whose session lives inside another
+    /// one; see [`selection`].
+    Selection(SelectionEvent),
 }
 
 /// Implemented by the loop data of the event loop a backend registers its
@@ -322,6 +405,13 @@ pub trait Backend {
     /// different one each time. `None` when the backend runs without a
     /// target provider, the output is unknown, or the session is paused.
     fn render_target(&mut self, output: OutputId) -> Option<TargetId>;
+
+    /// The target that holds the frame last handed to [`Backend::present`]:
+    /// what a capture of the output reads. A backend that flips between
+    /// buffers has moved on to another [`Backend::render_target`] by then.
+    fn shown_target(&mut self, output: OutputId) -> Option<TargetId> {
+        self.render_target(output)
+    }
 
     /// Asks for a [`BackendEvent::Frame`] as soon as the output can take a
     /// new frame. Asking again before it arrives has no further effect.
@@ -355,6 +445,36 @@ pub trait Backend {
             "the {} backend cannot change the image description of an output",
             self.name()
         )))
+    }
+
+    /// The core holds the pointer in place for a client (a pointer lock is
+    /// in effect), or lets it go again. A backend whose pointer belongs to
+    /// someone else (a parent compositor) asks that one to hold it too, and
+    /// reports motion as relative while it does.
+    fn set_pointer_lock(&mut self, _locked: bool) {}
+
+    /// The text input with the keyboard focus inside changed, or none is
+    /// enabled any more. A backend whose input method is outside (a parent
+    /// compositor's) passes it on.
+    fn set_text_input(&mut self, _state: Option<&TextInputState>) {}
+
+    /// A client inside set a selection (these MIME types), or there is
+    /// none any more. A backend whose session lives inside another one
+    /// offers it there too; see [`selection`].
+    fn offer_selection(&mut self, _kind: SelectionKind, _mime_types: Option<&[String]>) {}
+
+    /// A client inside reads the selection outside that was announced with
+    /// [`SelectionEvent::Outer`] as `generation`: have its owner write it
+    /// into `fd`. False when that selection is gone; the caller then closes
+    /// `fd`, and the reader gets nothing.
+    fn receive_outer_selection(
+        &mut self,
+        _kind: SelectionKind,
+        _generation: u64,
+        _mime_type: &str,
+        _fd: std::os::fd::OwnedFd,
+    ) -> bool {
+        false
     }
 
     /// Describes the backend's own state for state dumps and diagnostics.

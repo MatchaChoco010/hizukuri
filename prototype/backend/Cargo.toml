@@ -7,7 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = ["kms"]
+default = ["kms", "nested"]
+# The nested backend: a window of another Wayland compositor.
+nested = ["dep:wayland-client", "dep:wayland-protocols"]
 # The parts of the KMS backend that touch real devices: the DRM device over
 # the `drm` crate, and the libseat / udev / libinput session. Without this
 # feature the planning code, the backend logic and the mock device are
@@ -22,6 +24,8 @@ tracing.workspace = true
 rustix = { version = "1", features = ["time", "mm", "fs"] }
 serde.workspace = true
 serde_json.workspace = true
+wayland-client = { version = "0.31.15", optional = true }
+wayland-protocols = { version = "0.32.13", optional = true, features = ["client", "staging", "unstable"] }
 drm = { version = "0.15", optional = true }
 drm-ffi = { version = "0.9", optional = true }
 smithay = { workspace = true, optional = true, features = [

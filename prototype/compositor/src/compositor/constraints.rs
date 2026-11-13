@@ -260,6 +260,10 @@ impl<B: Backend> Compositor<B> {
         if active != self.constraints.announced {
             self.constraints.announced = active;
             self.wm.pointer_constraint_changed(active.as_ref());
+            // Whoever owns the pointer the backend reads has to hold it too.
+            self.backend.set_pointer_lock(
+                active.is_some_and(|view| view.kind == PointerConstraintKind::Lock),
+            );
         }
     }
 

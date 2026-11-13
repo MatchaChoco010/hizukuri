@@ -73,13 +73,38 @@ pub(crate) struct Heap {
 pub(crate) struct DeviceLimits {
     pub max_push_data_size: u32,
     pub max_image_dimension: u32,
+    pub max_image_dimension_3d: u32,
+    pub max_image_dimension_cube: u32,
+    pub max_sampler_anisotropy: f32,
+    pub max_sampler_lod_bias: f32,
     pub max_buffer_size: u64,
     pub max_color_attachments: u32,
+    /// Bit masks of the sample counts colour and depth attachments can have.
+    pub color_sample_counts: u32,
+    pub depth_sample_counts: u32,
     pub max_compute_group_count: [u32; 3],
     pub largest_heap_bytes: u64,
     pub sampler_descriptor_size: u64,
     pub image_descriptor_size: u64,
     pub buffer_descriptor_size: u64,
+}
+
+/// Device features the API uses when the device has them. Each call that
+/// needs one checks it and returns `Unsupported` otherwise.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct OptionalFeatures {
+    pub sampler_anisotropy: bool,
+    pub depth_bias_clamp: bool,
+    pub independent_blend: bool,
+    // Features behind SPIR-V capabilities (`spirv_check`).
+    pub shader_draw_parameters: bool,
+    pub shader_clip_distance: bool,
+    pub sample_rate_shading: bool,
+    pub shader_float16: bool,
+    pub shader_int8: bool,
+    pub shader_int16: bool,
+    pub shader_int64: bool,
+    pub shader_image_gather_extended: bool,
 }
 
 /// The Vulkan objects that live as long as a `Gpu`.
@@ -107,6 +132,7 @@ pub(crate) struct DeviceCtx {
     pub dmabuf_formats: Vec<crate::dmabuf::DmabufFormat>,
     pub physical_device: vk::PhysicalDevice,
     pub limits: DeviceLimits,
+    pub optional: OptionalFeatures,
     pub format_caps: Vec<FormatCaps>,
     pub resource_heap: Heap,
     pub sampler_heap: Heap,
@@ -250,7 +276,17 @@ impl DeviceCtx {
             // on the CPU, so the device has to.
             let features = vk::PhysicalDeviceFeatures::default()
                 .robust_buffer_access(true)
-                .shader_sampled_image_array_dynamic_indexing(true);
+                .shader_sampled_image_array_dynamic_indexing(true)
+                .sampler_anisotropy(picked.optional.sampler_anisotropy)
+                .depth_bias_clamp(picked.optional.depth_bias_clamp)
+                .independent_blend(picked.optional.independent_blend)
+                .shader_clip_distance(picked.optional.shader_clip_distance)
+                .sample_rate_shading(picked.optional.sample_rate_shading)
+                .shader_int16(picked.optional.shader_int16)
+                .shader_int64(picked.optional.shader_int64)
+                .shader_image_gather_extended(picked.optional.shader_image_gather_extended);
+            let mut features11 = vk::PhysicalDeviceVulkan11Features::default()
+                .shader_draw_parameters(picked.optional.shader_draw_parameters);
             let mut heap_features =
                 vk::PhysicalDeviceDescriptorHeapFeaturesEXT::default().descriptor_heap(true);
             let mut untyped_features =
@@ -258,7 +294,9 @@ impl DeviceCtx {
                     .shader_untyped_pointers(true);
             let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true)
-                .shader_sampled_image_array_non_uniform_indexing(true);
+                .shader_sampled_image_array_non_uniform_indexing(true)
+                .shader_float16(picked.optional.shader_float16)
+                .shader_int8(picked.optional.shader_int8);
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
                 .synchronization2(true)
                 .dynamic_rendering(true)
@@ -274,6 +312,7 @@ impl DeviceCtx {
                     .enabled_features(&features)
                     .push_next(&mut heap_features)
                     .push_next(&mut untyped_features)
+                    .push_next(&mut features11)
                     .push_next(&mut features12)
                     .push_next(&mut features13)
                     .push_next(&mut features14),
@@ -304,11 +343,25 @@ impl DeviceCtx {
             let format_caps = Format::ALL
                 .iter()
                 .map(|f| {
-                    FormatCaps::from_features(
+                    let mut caps = FormatCaps::from_features(
                         instance
                             .get_physical_device_format_properties(picked.physical_device, f.vk())
                             .optimal_tiling_features,
-                    )
+                    );
+                    let mut properties3 = vk::FormatProperties3::default();
+                    {
+                        let mut properties2 =
+                            vk::FormatProperties2::default().push_next(&mut properties3);
+                        instance.get_physical_device_format_properties2(
+                            picked.physical_device,
+                            f.vk(),
+                            &mut properties2,
+                        );
+                    }
+                    caps.depth_compare = properties3
+                        .optimal_tiling_features
+                        .contains(vk::FormatFeatureFlags2::SAMPLED_IMAGE_DEPTH_COMPARISON);
+                    caps
                 })
                 .collect();
 
@@ -387,14 +440,21 @@ impl DeviceCtx {
                 limits: DeviceLimits {
                     max_push_data_size: hp.max_push_data_size.min(u64::from(u32::MAX)) as u32,
                     max_image_dimension: limits.max_image_dimension2_d,
+                    max_image_dimension_3d: limits.max_image_dimension3_d,
+                    max_image_dimension_cube: limits.max_image_dimension_cube,
+                    max_sampler_anisotropy: limits.max_sampler_anisotropy,
+                    max_sampler_lod_bias: limits.max_sampler_lod_bias,
                     max_buffer_size: picked.max_buffer_size,
                     max_color_attachments: limits.max_color_attachments,
+                    color_sample_counts: limits.framebuffer_color_sample_counts.as_raw(),
+                    depth_sample_counts: limits.framebuffer_depth_sample_counts.as_raw(),
                     max_compute_group_count: limits.max_compute_work_group_count,
                     largest_heap_bytes,
                     sampler_descriptor_size: hp.sampler_descriptor_size,
                     image_descriptor_size: hp.image_descriptor_size,
                     buffer_descriptor_size: hp.buffer_descriptor_size,
                 },
+                optional: picked.optional,
                 format_caps,
                 resource_heap,
                 sampler_heap,
@@ -447,6 +507,7 @@ struct Picked {
     physical_device: vk::PhysicalDevice,
     queue_family: u32,
     properties: vk::PhysicalDeviceProperties,
+    optional: OptionalFeatures,
     heap_properties: vk::PhysicalDeviceDescriptorHeapPropertiesEXT<'static>,
     max_buffer_size: u64,
     device_name: String,
@@ -504,13 +565,15 @@ unsafe fn pick_physical_device(
             let mut heap_features = vk::PhysicalDeviceDescriptorHeapFeaturesEXT::default();
             let mut untyped_features =
                 vk::PhysicalDeviceShaderUntypedPointersFeaturesKHR::default();
+            let mut features11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
             let mut features14 = vk::PhysicalDeviceVulkan14Features::default();
-            let (robust_buffer_access, dynamic_indexing) = {
+            let (robust_buffer_access, dynamic_indexing, mut optional) = {
                 let mut features2 = vk::PhysicalDeviceFeatures2::default()
                     .push_next(&mut heap_features)
                     .push_next(&mut untyped_features)
+                    .push_next(&mut features11)
                     .push_next(&mut features12)
                     .push_next(&mut features13)
                     .push_next(&mut features14);
@@ -520,8 +583,26 @@ unsafe fn pick_physical_device(
                     features2
                         .features
                         .shader_sampled_image_array_dynamic_indexing,
+                    OptionalFeatures {
+                        sampler_anisotropy: features2.features.sampler_anisotropy != 0,
+                        depth_bias_clamp: features2.features.depth_bias_clamp != 0,
+                        independent_blend: features2.features.independent_blend != 0,
+                        shader_clip_distance: features2.features.shader_clip_distance != 0,
+                        sample_rate_shading: features2.features.sample_rate_shading != 0,
+                        shader_int16: features2.features.shader_int16 != 0,
+                        shader_int64: features2.features.shader_int64 != 0,
+                        shader_image_gather_extended: features2
+                            .features
+                            .shader_image_gather_extended
+                            != 0,
+                        // Filled in below, from the other structures.
+                        ..OptionalFeatures::default()
+                    },
                 )
             };
+            optional.shader_draw_parameters = features11.shader_draw_parameters != 0;
+            optional.shader_float16 = features12.shader_float16 != 0;
+            optional.shader_int8 = features12.shader_int8 != 0;
             if heap_features.descriptor_heap == 0
                 || untyped_features.shader_untyped_pointers == 0
                 || features12.buffer_device_address == 0
@@ -598,7 +679,7 @@ unsafe fn pick_physical_device(
                 vk::PhysicalDeviceType::VIRTUAL_GPU => 1,
                 _ => 0,
             };
-            if drm_node.is_some() && drm_primary == drm_node {
+            if drm_node.is_some() && (drm_primary == drm_node || drm_render == drm_node) {
                 score += 10;
             }
             if best.as_ref().is_none_or(|(s, _)| score > *s) {
@@ -608,6 +689,7 @@ unsafe fn pick_physical_device(
                         physical_device,
                         queue_family: queue_family as u32,
                         properties,
+                        optional,
                         heap_properties: vk::PhysicalDeviceDescriptorHeapPropertiesEXT {
                             p_next: std::ptr::null_mut(),
                             ..heap_properties

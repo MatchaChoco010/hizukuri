@@ -22,4 +22,7 @@ proto-slangc.workspace = true
 
 [dev-dependencies]
 half.workspace = true
+# The 3D example writes its shaders in Slang and can save its picture.
+proto-slangc.workspace = true
+png = "0.18"
 rustix = { version = "1", features = ["time"] }

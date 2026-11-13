@@ -8,6 +8,8 @@
 //!                   [--color-manager VERSION] [--image-description SPEC]
 //!                   [--color-info]
 //!                   [--touch] [--gestures]
+//!                   [--xdg-version N] [--animate] [--pause-when-suspended]
+//!                   [--quiet]
 //! ```
 //!
 //! Shows a solid window and prints every event it receives as one JSON
@@ -25,6 +27,15 @@
 //! (`tf=st2084_pq,primaries=bt2020`; `tf=power:2.4` for a power function;
 //! luminances in cd/m²). `--color-info` reads the image descriptions of the
 //! outputs and the one preferred for the window.
+//!
+//! `--animate` draws again after every frame callback, as an animation
+//! does (each picture a slightly other color); `--pause-when-suspended`
+//! stops it while the window is told it is suspended. `--xdg-version`
+//! binds `xdg_wm_base` with at most that version (3 by default: popups can
+//! be reactive and repositioned; the
+//! `suspended` state needs 6). `--quiet` prints no events, but a summary
+//! line once a second and when it ends: how many pictures it drew and how
+//! many frame callbacks it got so far.
 //!
 //! ```text
 //! proto-test-client --as-xwayland-satellite :N -listenfd FD [-listenfd FD]...
@@ -179,6 +190,7 @@ fn run() -> Result<(), String> {
     // the pointer exists.
     let mut touch = false;
     let mut gestures = false;
+    let mut quiet = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -233,6 +245,15 @@ fn run() -> Result<(), String> {
                 duration = Some(Duration::from_secs_f64(seconds));
             }
             "--touch" => touch = true,
+            "--animate" => options.redraw_on_frame = true,
+            "--pause-when-suspended" => options.pause_when_suspended = true,
+            "--quiet" => quiet = true,
+            "--xdg-version" => {
+                let text = value("--xdg-version")?;
+                options.xdg_wm_base_version = text
+                    .parse()
+                    .map_err(|_| format!("invalid version {text:?}"))?;
+            }
             "--gestures" => gestures = true,
             "--relative-pointer" => relative = true,
             "--lock-pointer" => constraint = Some(ConstraintRequest::Lock),
@@ -256,7 +277,8 @@ fn run() -> Result<(), String> {
                      [--text-input X,Y,W,H] [--input-method echo] \
                      [--no-window] \
                      [--color-manager VERSION] [--image-description SPEC] [--color-info] \
-                     [--touch] [--gestures]"
+                     [--touch] [--gestures] \
+                     [--xdg-version N] [--animate] [--pause-when-suspended] [--quiet]"
                 );
                 return Ok(());
             }
@@ -274,7 +296,14 @@ fn run() -> Result<(), String> {
     if touch {
         client.request_touch();
     }
-    let deadline = duration.map(|d| Instant::now() + d);
+    let started = Instant::now();
+    let deadline = duration.map(|d| started + d);
+    let mut summary = Summary {
+        drawn: 0,
+        frame_done: 0,
+        suspended: 0,
+        printed: started,
+    };
     let mut printed = 0;
     let mut printed_ime = 0;
     let mut color = ColorProgress::default();
@@ -297,6 +326,16 @@ fn run() -> Result<(), String> {
             constraint = None;
         }
         advance_color(&mut client, &mut color, description.as_ref(), color_info)?;
+        if quiet {
+            count_and_forget(&mut client, &mut summary);
+            // What it counted so far, once a second.
+            if summary.printed.elapsed() >= Duration::from_secs(1) {
+                summary.printed = Instant::now();
+                let mut out = stdout.lock();
+                writeln!(out, "{}", summary.line(started)).map_err(|e| e.to_string())?;
+                out.flush().map_err(|e| e.to_string())?;
+            }
+        }
         let events = client.events();
         if printed < events.len() {
             let mut out = stdout.lock();
@@ -318,9 +357,50 @@ fn run() -> Result<(), String> {
             printed_ime = ime_events.len();
         }
         if client.is_closed() || deadline.is_some_and(|d| Instant::now() >= d) {
+            if quiet {
+                let mut out = stdout.lock();
+                writeln!(out, "{}", summary.line(started)).map_err(|e| e.to_string())?;
+                out.flush().map_err(|e| e.to_string())?;
+            }
             return Ok(());
         }
     }
+}
+
+/// What `--quiet` counts.
+struct Summary {
+    drawn: u64,
+    frame_done: u64,
+    /// How often the window was told it is suspended.
+    suspended: u64,
+    /// When the counts were last printed.
+    printed: Instant,
+}
+
+impl Summary {
+    fn line(&self, started: Instant) -> serde_json::Value {
+        serde_json::json!({
+            "event": "summary",
+            "drawn": self.drawn,
+            "frame_done": self.frame_done,
+            "suspended": self.suspended,
+            "seconds": started.elapsed().as_secs_f64(),
+        })
+    }
+}
+
+/// Counts the events received so far and forgets them, so that a long run
+/// keeps nothing.
+fn count_and_forget(client: &mut TestClient, summary: &mut Summary) {
+    for event in client.events() {
+        match event {
+            ClientEvent::Drawn { .. } => summary.drawn += 1,
+            ClientEvent::FrameDone { .. } => summary.frame_done += 1,
+            ClientEvent::Suspended { suspended: true } => summary.suspended += 1,
+            _ => {}
+        }
+    }
+    client.clear_events();
 }
 
 /// Takes the next steps of color management that are due.

@@ -16,4 +16,6 @@ rustix = { version = "1", features = ["fs"] }
 # Writes the SPIR-V of the short shaders the tests give as WGSL.
 naga.workspace = true
 half.workspace = true
+# The tests of the 3D features write their shaders in Slang.
+proto-slangc.workspace = true
 rustix = { version = "1", features = ["fs"] }

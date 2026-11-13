@@ -19,7 +19,9 @@ use calloop::signals::{Signal, Signals};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, Interest, LoopHandle, LoopSignal, Mode, PostAction};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use proto_backend::SelectionCrossing;
 use proto_backend::headless::{HeadlessBackend, HeadlessConfig, HeadlessOutputConfig};
+use proto_backend::nested::{LogoKey, LogoKeyChoice, NestedBackend, NestedBuffers, NestedConfig};
 use proto_backend::{
     Backend, BackendError, BackendEvent, BackendHost, OutputId, OutputInfo, TimeSource,
 };
@@ -45,14 +47,41 @@ enum BackendKind {
     Headless,
     /// A DRM/KMS session on a virtual terminal: takes over the display.
     Kms,
+    /// A window of another Wayland compositor (`--nested-socket`, or the
+    /// one `WAYLAND_DISPLAY` names).
+    Nested,
     /// `kms` when started from a bare console, `headless` when a desktop
     /// session is around (`WAYLAND_DISPLAY` or `DISPLAY` is set).
     Auto,
 }
 
+/// `--nested-buffers`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum NestedBuffersArg {
+    /// dma-bufs when the parent compositor and the device can, else
+    /// `wl_shm`.
+    Auto,
+    /// Copy every frame into shared memory.
+    Shm,
+    /// dma-bufs, or fail.
+    Dmabuf,
+}
+
+/// `--nested-logo-key`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum NestedLogoKey {
+    /// Super while the parent passes its shortcuts to the window
+    /// (keyboard-shortcuts-inhibit), Alt while it does not.
+    Auto,
+    /// The parent's logo key.
+    Super,
+    Alt,
+    Ctrl,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum CursorMode {
-    /// Drawn on KMS, not drawn headless.
+    /// Drawn on KMS and nested, not drawn headless.
     Auto,
     On,
     Off,
@@ -119,7 +148,11 @@ fn build_shaders(args: BuildShadersArgs) -> Result<(), String> {
                 eprintln!("{warning}");
             }
             for (rel, entries) in &built.compiled {
-                println!("compiled shaders/{rel}: {}", entries.join(", "));
+                if entries.is_empty() {
+                    println!("shaders/{rel}: a module (no entry point)");
+                } else {
+                    println!("compiled shaders/{rel}: {}", entries.join(", "));
+                }
             }
             if !built.up_to_date.is_empty() {
                 println!("{} up to date", built.up_to_date.len());
@@ -160,7 +193,8 @@ struct RunArgs {
     /// Headless: size of the virtual output in physical pixels, as
     /// WIDTHxHEIGHT. Give it several times for several outputs
     /// (`HEADLESS-1`, `HEADLESS-2`, ...), which are placed side by side
-    /// from left to right.
+    /// from left to right. Nested: the size of the window, in the parent's
+    /// logical coordinates, when the parent leaves it to the window.
     #[arg(long, default_value = "1280x720", value_parser = parse_size)]
     output_size: Vec<(u32, u32)>,
 
@@ -175,9 +209,11 @@ struct RunArgs {
 
     /// What the frames sent to the output mean: one of srgb-gamma22,
     /// srgb-piecewise, display-p3, adobe-rgb, bt2020-gamma24, bt2020-pq,
-    /// bt2020-linear, scrgb-linear.
-    #[arg(long, default_value = "srgb-gamma22", value_parser = parse_image_description)]
-    output_image_description: ImageDescription,
+    /// bt2020-linear, scrgb-linear. Default: srgb-gamma22; an output that is
+    /// shown through an OCIO display then follows that display, which one
+    /// given here does not.
+    #[arg(long, value_parser = parse_image_description)]
+    output_image_description: Option<ImageDescription>,
 
     /// Headless: format of the encoded frames: rgba8, rgba16 or bgra8.
     #[arg(long, default_value = "rgba8", value_parser = parse_output_format)]
@@ -244,6 +280,12 @@ struct RunArgs {
     #[arg(long, default_value_t = 256)]
     script_memory_mb: usize,
 
+    /// GPU memory (buffers and images) the script may allocate, in MiB.
+    /// A 3840x2160 RGBA32F buffer alone takes about 127 MiB, and a renderer
+    /// keeps several of them, more while it replaces them on a resize.
+    #[arg(long, default_value_t = 4096)]
+    script_gpu_memory_mb: u64,
+
     /// With `--script-on-error hold`: how long a script that failed to draw
     /// is left alone before it is asked again, in milliseconds.
     #[arg(long, default_value_t = 1000)]
@@ -254,11 +296,165 @@ struct RunArgs {
     #[arg(long)]
     script_wait_gpu: bool,
 
+    /// The OpenColorIO config: a file, or an `ocio://` name of a config built
+    /// into OCIO (such as `ocio://studio-config-latest`). Without it: what
+    /// the environment variable `OCIO` names, or OCIO's default config.
+    #[cfg(feature = "ocio")]
+    #[arg(long, value_name = "CONFIG")]
+    ocio_config: Option<String>,
+
+    /// Show an output through an OCIO display: `<output>=<display>`, or
+    /// `<display>` for every output. May be repeated. Without `--view`, the
+    /// display's default view is used.
+    #[cfg(feature = "ocio")]
+    #[arg(long = "display", value_name = "[OUTPUT=]DISPLAY")]
+    ocio_display: Vec<String>,
+
+    /// Show an output through an OCIO view: `<output>=<view>`, or `<view>`
+    /// for every output. May be repeated. Without `--display`, the config's
+    /// default display is used.
+    #[cfg(feature = "ocio")]
+    #[arg(long = "view", value_name = "[OUTPUT=]VIEW")]
+    ocio_view: Vec<String>,
+
+    /// Exposure in front of an output's OCIO view, in stops:
+    /// `<output>=<stops>`, or `<stops>` for every output.
+    #[cfg(feature = "ocio")]
+    #[arg(long, value_name = "[OUTPUT=]STOPS", allow_hyphen_values = true)]
+    ocio_exposure: Vec<String>,
+
+    /// Gamma behind an output's OCIO view: `<output>=<gamma>`, or `<gamma>`
+    /// for every output.
+    #[cfg(feature = "ocio")]
+    #[arg(long, value_name = "[OUTPUT=]GAMMA")]
+    ocio_gamma: Vec<String>,
+
+    /// The colour space of the OCIO config that the compositor works in.
+    /// Default: `ACEScg`, or the config's `scene_linear` role.
+    #[cfg(feature = "ocio")]
+    #[arg(long, value_name = "COLOR_SPACE")]
+    ocio_working: Option<String>,
+
+    /// Where the compiled OCIO shaders are kept. Default: `hizukuri/ocio`
+    /// under `XDG_CACHE_HOME`.
+    #[cfg(feature = "ocio")]
+    #[arg(long, value_name = "DIR")]
+    ocio_cache: Option<PathBuf>,
+
+    /// The `slangc` that compiles the OCIO shaders. Default: the one that
+    /// `HIZUKURI_SLANGC` names, one next to this executable, one on `PATH`.
+    #[cfg(feature = "ocio")]
+    #[arg(long, value_name = "FILE")]
+    ocio_slangc: Option<PathBuf>,
+
+    /// For tests: make every OCIO compilation take this much longer, in
+    /// milliseconds.
+    #[cfg(feature = "ocio")]
+    #[arg(long, hide = true)]
+    ocio_compile_delay_ms: Option<u64>,
+    /// Primaries of the linear working space scripts composite in: acescg,
+    /// bt2020, srgb, display-p3, adobe-rgb.
+    #[arg(long)]
+    working_space: Option<String>,
+
+    /// Format of the buffers that hold colors of the working space:
+    /// rgba32float, rgba16float, or auto (the most exact one the device can
+    /// draw to, blend in and filter).
+    #[arg(long)]
+    color_format: Option<String>,
+
+    /// The font file scripts get from `hz.load_font()`. Without it, the
+    /// environment variable HIZUKURI_FONT, then the first well-known font
+    /// found where systems keep them.
+    #[arg(long)]
+    font: Option<PathBuf>,
+
     #[command(flatten)]
     kms: kms::KmsArgs,
 
     #[command(flatten)]
+    nested: NestedArgs,
+
+    #[command(flatten)]
     x11: X11Args,
+}
+
+/// The nested backend (`--backend nested`).
+#[derive(Debug, Args)]
+struct NestedArgs {
+    /// The Wayland socket of the parent compositor: a name in
+    /// XDG_RUNTIME_DIR, or an absolute path. Without it, the one
+    /// `WAYLAND_DISPLAY` names.
+    #[arg(long, value_name = "SOCKET")]
+    nested_socket: Option<String>,
+
+    /// How frames are handed to the parent.
+    #[arg(long, value_enum, default_value = "auto")]
+    nested_buffers: NestedBuffersArg,
+
+    /// The key of the parent that is the logo (Super) key inside, for a
+    /// parent that keeps its Super shortcuts to itself. `auto` follows the
+    /// parent: Super while it passes its shortcuts to the window, Alt while
+    /// it does not.
+    #[arg(long, value_enum, default_value = "auto")]
+    nested_logo_key: NestedLogoKey,
+
+    /// Do not ask the parent to pass its keyboard shortcuts to the window
+    /// (keyboard-shortcuts-inhibit).
+    #[arg(long)]
+    nested_keep_parent_shortcuts: bool,
+
+    /// Ask the parent to show the window fullscreen.
+    #[arg(long)]
+    nested_fullscreen: bool,
+
+    /// Which way copy and paste cross between the parent and the inside.
+    #[arg(long, value_enum, default_value = "both")]
+    nested_clipboard: NestedClipboard,
+
+    /// Whether the primary selection (select, middle click) crosses too,
+    /// the way `--nested-clipboard` says.
+    #[arg(long, value_enum, default_value = "on")]
+    nested_primary_selection: OnOff,
+}
+
+/// `--nested-clipboard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum NestedClipboard {
+    /// What is copied inside can be pasted in the parent, and the other
+    /// way round.
+    Both,
+    /// Only what is copied inside reaches the parent.
+    ToParent,
+    /// Only what is copied in the parent reaches the inside.
+    FromParent,
+    /// Neither: the selections inside stay inside.
+    Off,
+}
+
+/// `on` or `off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+/// Where the parent compositor's socket is: `given`, or else what
+/// `WAYLAND_DISPLAY` names. A name is looked up in XDG_RUNTIME_DIR.
+fn nested_socket(given: Option<&str>) -> Result<PathBuf, String> {
+    let name = match given {
+        Some(name) => name.to_string(),
+        None => std::env::var("WAYLAND_DISPLAY")
+            .ok()
+            .filter(|name| !name.is_empty())
+            .ok_or("--backend nested: no parent compositor (pass --nested-socket, or set WAYLAND_DISPLAY)")?,
+    };
+    if name.starts_with('/') {
+        return Ok(PathBuf::from(name));
+    }
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .ok_or("XDG_RUNTIME_DIR is not set; pass --nested-socket with an absolute path")?;
+    Ok(PathBuf::from(runtime_dir).join(name))
 }
 
 /// X11 applications, through xwayland-satellite.
@@ -303,6 +499,70 @@ impl Drawing {
 /// GPU.
 pub type MakeDrawing<'a> = dyn FnMut(Option<(u32, u32)>) -> Result<(Drawing, bool), String> + 'a;
 
+/// The OCIO part of the arguments. `--display` and `--view` name an output
+/// with `<output>=`, or every output without it; the two are put together
+/// per output.
+#[cfg(feature = "ocio")]
+fn ocio_options(args: &RunArgs) -> Result<proto_compositor::ocio::Options, String> {
+    type Setting = (Option<String>, Option<String>, Option<String>);
+    let mut outputs: Vec<Setting> = Vec::new();
+    let split = |text: &str| match text.split_once('=') {
+        Some((output, value)) => (Some(output.to_string()), value.to_string()),
+        None => (None, text.to_string()),
+    };
+    let entry = |outputs: &mut Vec<Setting>, output: Option<String>| -> usize {
+        match outputs.iter().position(|o| o.0 == output) {
+            Some(index) => index,
+            None => {
+                outputs.push((output, None, None));
+                outputs.len() - 1
+            }
+        }
+    };
+    for text in &args.ocio_display {
+        let (output, display) = split(text);
+        let index = entry(&mut outputs, output);
+        outputs[index].1 = Some(display);
+    }
+    for text in &args.ocio_view {
+        let (output, view) = split(text);
+        let index = entry(&mut outputs, output);
+        outputs[index].2 = Some(view);
+    }
+    // The setting for every output comes first: an output's own setting
+    // starts from it.
+    outputs.sort_by_key(|o| o.0.is_some());
+    let mut controls = Vec::new();
+    for (texts, is_exposure) in [(&args.ocio_exposure, true), (&args.ocio_gamma, false)] {
+        for text in texts {
+            let (output, value) = split(text);
+            let value = value.parse::<f64>().map_err(|_| {
+                format!(
+                    "--ocio-{}: {value:?} is not a number",
+                    if is_exposure { "exposure" } else { "gamma" }
+                )
+            })?;
+            controls.push(if is_exposure {
+                (output, Some(value), None)
+            } else {
+                (output, None, Some(value))
+            });
+        }
+    }
+    controls.sort_by_key(|c| c.0.is_some());
+    Ok(proto_compositor::ocio::Options {
+        config: args.ocio_config.clone(),
+        working: args.ocio_working.clone(),
+        cache_dir: args.ocio_cache.clone(),
+        outputs,
+        controls,
+        slangc: args.ocio_slangc.clone(),
+        compile_delay: args.ocio_compile_delay_ms.map(Duration::from_millis),
+        // An image description that was asked for stays.
+        outputs_follow_display: args.output_image_description.is_none(),
+    })
+}
+
 fn parse_size(text: &str) -> Result<(u32, u32), String> {
     let (w, h) = text
         .split_once('x')
@@ -344,6 +604,7 @@ fn parse_color(text: &str) -> Result<[f32; 3], String> {
 enum AnyBackend {
     Headless(HeadlessBackend),
     Kms(kms::RealKmsBackend),
+    Nested(NestedBackend),
 }
 
 impl AnyBackend {
@@ -351,6 +612,7 @@ impl AnyBackend {
         match self {
             AnyBackend::Headless(backend) => backend,
             AnyBackend::Kms(backend) => backend,
+            AnyBackend::Nested(backend) => backend,
         }
     }
 
@@ -358,6 +620,7 @@ impl AnyBackend {
         match self {
             AnyBackend::Headless(backend) => backend,
             AnyBackend::Kms(backend) => backend,
+            AnyBackend::Nested(backend) => backend,
         }
     }
 }
@@ -375,6 +638,9 @@ impl Backend for AnyBackend {
     fn render_target(&mut self, output: OutputId) -> Option<TargetId> {
         self.inner_mut().render_target(output)
     }
+    fn shown_target(&mut self, output: OutputId) -> Option<TargetId> {
+        self.inner_mut().shown_target(output)
+    }
     fn request_frame(&mut self, output: OutputId) {
         self.inner_mut().request_frame(output);
     }
@@ -386,6 +652,37 @@ impl Backend for AnyBackend {
     }
     fn shutdown(&mut self, targets: Targets<'_>) {
         self.inner_mut().shutdown(targets);
+    }
+    fn set_pointer_lock(&mut self, locked: bool) {
+        self.inner_mut().set_pointer_lock(locked);
+    }
+    fn set_text_input(&mut self, state: Option<&proto_backend::TextInputState>) {
+        self.inner_mut().set_text_input(state);
+    }
+    fn offer_selection(
+        &mut self,
+        kind: proto_backend::SelectionKind,
+        mime_types: Option<&[String]>,
+    ) {
+        self.inner_mut().offer_selection(kind, mime_types);
+    }
+    fn receive_outer_selection(
+        &mut self,
+        kind: proto_backend::SelectionKind,
+        generation: u64,
+        mime_type: &str,
+        fd: std::os::fd::OwnedFd,
+    ) -> bool {
+        self.inner_mut()
+            .receive_outer_selection(kind, generation, mime_type, fd)
+    }
+    fn set_output_image_description(
+        &mut self,
+        output: OutputId,
+        description: ImageDescription,
+    ) -> Result<(), BackendError> {
+        self.inner_mut()
+            .set_output_image_description(output, description)
     }
     fn describe(&self) -> serde_json::Value {
         self.inner().describe()
@@ -442,6 +739,9 @@ fn main() -> ExitCode {
         Some(Command::KmsInfo(_) | Command::BuildShaders(_)) => None,
         None => cli.run.vulkan_icd.clone(),
     };
+    // What applications started later are given back: the drivers named
+    // with `--vulkan-icd` are for this process.
+    let outer_drivers = icd.is_some().then(|| std::env::var("VK_DRIVER_FILES").ok());
     if let Some(icd) = icd {
         // SAFETY: single-threaded at this point, see above.
         unsafe { std::env::set_var("VK_DRIVER_FILES", icd) };
@@ -460,7 +760,7 @@ fn main() -> ExitCode {
         Some(Command::KmsInfo(args)) => kms::info(args),
         Some(Command::KmsSelftest(args)) => stop_signals().and_then(|s| kms::selftest(args, s)),
         Some(Command::BuildShaders(args)) => build_shaders(args),
-        None => stop_signals().and_then(|s| run(cli.run, s)),
+        None => stop_signals().and_then(|s| run(cli.run, s, outer_drivers)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -556,8 +856,15 @@ pub fn gpu_config(device: &str, validation: bool, drm_node: Option<(u32, u32)>) 
     }
 }
 
-fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
+fn run(
+    args: RunArgs,
+    signals: Signals,
+    outer_drivers: Option<Option<String>>,
+) -> Result<(), String> {
     let backend_kind = choose_backend(args.backend, desktop_session_present());
+    let output_image_description = args
+        .output_image_description
+        .unwrap_or(ImageDescription::SRGB_GAMMA22);
 
     let socket = if args.socket.contains('/') {
         SocketConfig::Path(PathBuf::from(&args.socket))
@@ -612,6 +919,11 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
     // What draws is created by the backend's setup, because on KMS it should
     // run on the GPU that drives the display, which is only known once the
     // session is open.
+    let working = match &args.working_space {
+        Some(name) => proto_color::Primaries::from_name(name)
+            .ok_or_else(|| format!("--working-space: unknown primaries {name:?}"))?,
+        None => proto_compositor::script::DEFAULT_WORKING,
+    };
     let script_options = ScriptOptions {
         project: match &args.script {
             Some(dir) => Project::Dir(dir.clone()),
@@ -627,6 +939,45 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         retry_after: std::time::Duration::from_millis(args.script_retry_ms),
         wait_for_gpu: args.script_wait_gpu,
         clock: clock.clone(),
+        #[cfg(feature = "ocio")]
+        ocio: ocio_options(&args)?,
+        // Applications the script starts are clients of this compositor,
+        // and of nothing it was itself started in.
+        app_env: vec![
+            (
+                "WAYLAND_DISPLAY".to_string(),
+                // A socket given as a path is found by its absolute path.
+                Some(if args.socket.contains('/') {
+                    std::path::absolute(&args.socket)
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| args.socket.clone())
+                } else {
+                    args.socket.clone()
+                }),
+            ),
+            ("DISPLAY".to_string(), None),
+            ("XDG_ACTIVATION_TOKEN".to_string(), None),
+            ("DESKTOP_STARTUP_ID".to_string(), None),
+        ]
+        .into_iter()
+        .chain(outer_drivers.map(|drivers| ("VK_DRIVER_FILES".to_string(), drivers)))
+        .collect(),
+        working,
+        font: args
+            .font
+            .clone()
+            .or_else(|| std::env::var_os("HIZUKURI_FONT").map(PathBuf::from)),
+        color_format: match args.color_format.as_deref() {
+            None => proto_compositor::script::DEFAULT_COLOR_FORMAT,
+            Some("auto") => None,
+            Some("rgba32float") => Some(proto_gfx_core::Format::Rgba32Float),
+            Some("rgba16float") => Some(proto_gfx_core::Format::Rgba16Float),
+            Some(other) => {
+                return Err(format!(
+                    "--color-format: {other:?} is not rgba32float, rgba16float or auto"
+                ));
+            }
+        },
         ..ScriptOptions::default()
     };
     let mut make_drawing = |display_gpu: Option<(u32, u32)>| -> Result<(Drawing, bool), String> {
@@ -635,15 +986,19 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         }
         let mut options = script_options.clone();
         options.gpu = gpu_config(&args.vulkan_device, args.vulkan_validation, display_gpu);
+        options.gpu.limits.max_memory_bytes = args.script_gpu_memory_mb.max(1) << 20;
         let runtime = ScriptRuntime::new(options)?;
-        let on_display_gpu = display_gpu.is_some() && runtime.device().drm_primary == display_gpu;
+        let device = runtime.device();
+        let on_display_gpu = display_gpu.is_some()
+            && (device.drm_primary == display_gpu || device.drm_render == display_gpu);
         Ok((
             Drawing::Script(Box::new(ScriptScene::new(Rc::clone(&runtime))), runtime),
             on_display_gpu,
         ))
     };
 
-    let composite_space = HeadlessConfig::default().composite_space;
+    // What the state dumps describe: the space scripts start in.
+    let composite_space = proto_color::CompositeSpace { primaries: working };
     let (backend, drawing, draw_cursor, watchdog) = match backend_kind {
         BackendKind::Headless => {
             let (mut drawing, _) = make_drawing(None)?;
@@ -660,7 +1015,7 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
                         height: size.1,
                         scale,
                         refresh_mhz: (args.output_refresh * 1000.0).round().max(1.0) as u32,
-                        image_description: args.output_image_description,
+                        image_description: output_image_description,
                         format: args.output_format,
                     })
                     .collect(),
@@ -685,7 +1040,7 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
                 &args.kms,
                 &mut make_drawing,
                 output_scales(&args.output_scale, 1)?[0],
-                args.output_image_description,
+                output_image_description,
                 composite_space,
             )?;
             (
@@ -693,6 +1048,78 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
                 started.drawing,
                 args.cursor != CursorMode::Off,
                 started.watchdog,
+            )
+        }
+        BackendKind::Nested => {
+            let parent = nested_socket(args.nested.nested_socket.as_deref())?;
+            // Never a window of itself.
+            let own = match &socket {
+                SocketConfig::Path(path) => Some(path.clone()),
+                SocketConfig::Name(name) => {
+                    std::env::var_os("XDG_RUNTIME_DIR").map(|dir| PathBuf::from(dir).join(name))
+                }
+                SocketConfig::None => None,
+            };
+            if own.as_ref() == Some(&parent) {
+                return Err(format!(
+                    "--socket and the parent compositor's socket are the same ({})",
+                    parent.display()
+                ));
+            }
+            let config = NestedConfig {
+                socket: parent,
+                size: args.output_size[0],
+                title: match &args.script {
+                    Some(dir) => format!("hizukuri: {}", dir.display()),
+                    None => "hizukuri".to_string(),
+                },
+                app_id: "hizukuri.nested".to_string(),
+                image_description: output_image_description,
+                composite_space,
+                buffers: match args.nested.nested_buffers {
+                    NestedBuffersArg::Auto => NestedBuffers::Auto,
+                    NestedBuffersArg::Shm => NestedBuffers::Shm,
+                    NestedBuffersArg::Dmabuf => NestedBuffers::Dmabuf,
+                },
+                logo_key: match args.nested.nested_logo_key {
+                    NestedLogoKey::Auto => LogoKeyChoice::Auto,
+                    NestedLogoKey::Super => LogoKeyChoice::Fixed(LogoKey::Super),
+                    NestedLogoKey::Alt => LogoKeyChoice::Fixed(LogoKey::Alt),
+                    NestedLogoKey::Ctrl => LogoKeyChoice::Fixed(LogoKey::Ctrl),
+                },
+                inhibit_shortcuts: !args.nested.nested_keep_parent_shortcuts,
+                hide_parent_cursor: args.cursor != CursorMode::Off,
+                fullscreen: args.nested.nested_fullscreen,
+                selection: match args.nested.nested_clipboard {
+                    NestedClipboard::Both => SelectionCrossing::BOTH,
+                    NestedClipboard::ToParent => SelectionCrossing {
+                        to_outside: true,
+                        from_outside: false,
+                    },
+                    NestedClipboard::FromParent => SelectionCrossing {
+                        to_outside: false,
+                        from_outside: true,
+                    },
+                    NestedClipboard::Off => SelectionCrossing::NONE,
+                },
+                primary_selection: args.nested.nested_primary_selection == OnOff::On,
+            };
+            let mut backend = NestedBackend::connect(&config)
+                .map_err(|e| format!("failed to create the nested backend: {e}"))?;
+            // Draw with the device the parent composites with, so that
+            // frames can be handed over without a copy.
+            let (mut drawing, on_parent_device) = make_drawing(backend.parent_device())?;
+            backend
+                .start(drawing.targets(), on_parent_device)
+                .map_err(|e| format!("failed to create the nested output: {e}"))?;
+            backend
+                .insert_sources(&handle)
+                .map_err(|e| format!("failed to register the backend: {e}"))?;
+            (
+                AnyBackend::Nested(backend),
+                drawing,
+                args.cursor != CursorMode::Off,
+                None,
             )
         }
         BackendKind::Auto => unreachable!("resolved by choose_backend"),
@@ -737,6 +1164,10 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         composite_space,
         draw_cursor,
         clock,
+    };
+    let script_runtime = match &drawing {
+        Drawing::Script(_, runtime) => Some(Rc::clone(runtime)),
+        Drawing::Nothing => None,
     };
     let (scene, wm): (Box<dyn Scene>, Box<dyn WindowManager>) = match drawing {
         Drawing::Nothing => (
@@ -796,6 +1227,10 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         .map_err(|e| format!("failed to register the control socket: {e}"))?;
 
     let x11 = start_x11(&handle, &args.x11, &args.socket, &mut compositor)?;
+    if let (Some(x11), Some(runtime)) = (&x11, &script_runtime) {
+        runtime.set_app_env("DISPLAY", Some(x11.status().display));
+    }
+    drop(script_runtime);
 
     insert_common_sources(
         &handle,
@@ -804,6 +1239,15 @@ fn run(args: RunArgs, signals: Signals) -> Result<(), String> {
         watchdog,
         |app: &mut App| app.signal.stop(),
     )?;
+    // Wakes the core once a second, also when nothing happens: the frame
+    // callbacks of hidden windows are let through that often (the core
+    // looks at the time after every wake-up).
+    handle
+        .insert_source(
+            Timer::from_duration(Duration::from_secs(1)),
+            |_, _, _: &mut App| TimeoutAction::ToDuration(Duration::from_secs(1)),
+        )
+        .map_err(|e| format!("failed to register the timer of hidden windows: {e}"))?;
 
     tracing::info!(
         backend = compositor.backend().name(),

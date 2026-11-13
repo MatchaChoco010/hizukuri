@@ -314,6 +314,132 @@ pub struct PopupOptions {
     pub slide: bool,
 }
 
+/// A point of the anchor rectangle (`xdg_positioner.anchor`), or the
+/// direction a popup extends from it (`xdg_positioner.gravity`). Both enums
+/// of the protocol have these values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PopupEdge {
+    #[default]
+    None,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    BottomLeft,
+    TopRight,
+    BottomRight,
+}
+
+impl PopupEdge {
+    fn value(self) -> u32 {
+        match self {
+            PopupEdge::None => 0,
+            PopupEdge::Top => 1,
+            PopupEdge::Bottom => 2,
+            PopupEdge::Left => 3,
+            PopupEdge::Right => 4,
+            PopupEdge::TopLeft => 5,
+            PopupEdge::BottomLeft => 6,
+            PopupEdge::TopRight => 7,
+            PopupEdge::BottomRight => 8,
+        }
+    }
+}
+
+/// What the compositor may do to a popup that does not fit
+/// (`xdg_positioner.set_constraint_adjustment`), per axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PopupAdjustments {
+    pub slide_x: bool,
+    pub slide_y: bool,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub resize_x: bool,
+    pub resize_y: bool,
+}
+
+impl PopupAdjustments {
+    /// Every adjustment, as toolkits ask for menus.
+    pub fn all() -> Self {
+        Self {
+            slide_x: true,
+            slide_y: true,
+            flip_x: true,
+            flip_y: true,
+            resize_x: true,
+            resize_y: true,
+        }
+    }
+
+    fn bits(self) -> u32 {
+        [
+            (self.slide_x, 1),
+            (self.slide_y, 2),
+            (self.flip_x, 4),
+            (self.flip_y, 8),
+            (self.resize_x, 16),
+            (self.resize_y, 32),
+        ]
+        .iter()
+        .filter(|(set, _)| *set)
+        .map(|(_, bit)| bit)
+        .sum()
+    }
+}
+
+/// Every rule of an `xdg_positioner`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupPositioner {
+    pub width: i32,
+    pub height: i32,
+    /// x, y, width, height, relative to the parent's window geometry.
+    pub anchor_rect: (i32, i32, i32, i32),
+    pub anchor: PopupEdge,
+    pub gravity: PopupEdge,
+    pub offset: (i32, i32),
+    pub adjustments: PopupAdjustments,
+    /// `set_reactive`: to be placed again when what it was placed by
+    /// changes.
+    pub reactive: bool,
+}
+
+impl PopupPositioner {
+    /// A menu below a 1x1 point of the window that may be moved in every
+    /// way, as toolkits open context menus.
+    pub fn menu_at(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self {
+            width,
+            height,
+            anchor_rect: (x, y, 1, 1),
+            anchor: PopupEdge::BottomRight,
+            gravity: PopupEdge::BottomRight,
+            offset: (0, 0),
+            adjustments: PopupAdjustments::all(),
+            reactive: false,
+        }
+    }
+
+    fn apply(&self, positioner: &xdg_positioner::XdgPositioner) {
+        positioner.set_size(self.width, self.height);
+        let (x, y, w, h) = self.anchor_rect;
+        positioner.set_anchor_rect(x, y, w, h);
+        if let Ok(anchor) = xdg_positioner::Anchor::try_from(self.anchor.value()) {
+            positioner.set_anchor(anchor);
+        }
+        if let Ok(gravity) = xdg_positioner::Gravity::try_from(self.gravity.value()) {
+            positioner.set_gravity(gravity);
+        }
+        positioner.set_offset(self.offset.0, self.offset.1);
+        positioner.set_constraint_adjustment(
+            xdg_positioner::ConstraintAdjustment::from_bits_truncate(self.adjustments.bits()),
+        );
+        if self.reactive {
+            positioner.set_reactive();
+        }
+    }
+}
+
 pub(crate) struct Popup {
     pub surface: wl_surface::WlSurface,
     xdg_surface: xdg_surface::XdgSurface,
@@ -388,6 +514,44 @@ impl TestClient {
         Ok(())
     }
 
+    /// Opens a popup whose positioner says everything `positioner` says.
+    /// Like [`Self::open_popup`] otherwise.
+    pub fn open_positioned_popup(
+        &mut self,
+        positioner: PopupPositioner,
+        color: [u8; 4],
+        grab: bool,
+    ) -> Result<(), ClientError> {
+        self.open_popup_with((positioner.width, positioner.height), color, grab, |p| {
+            positioner.apply(p)
+        })
+    }
+
+    /// Asks for the open popup to be placed anew by `positioner`
+    /// (`xdg_popup.reposition`, version 3). The compositor answers with
+    /// [`ClientEvent::PopupRepositioned`] carrying `token`, then a
+    /// configure.
+    pub fn reposition_popup(
+        &mut self,
+        positioner: PopupPositioner,
+        token: u32,
+    ) -> Result<(), ClientError> {
+        let state = &mut self.state;
+        let (Some(wm_base), Some(popup)) = (&state.globals.wm_base, &mut state.popup) else {
+            return Err(ClientError::Protocol("no popup is open".to_string()));
+        };
+        if popup.popup.version() < 3 {
+            return Err(ClientError::Protocol(
+                "the compositor has no xdg_popup.reposition".to_string(),
+            ));
+        }
+        let p = wm_base.create_positioner(&self.handle, ());
+        positioner.apply(&p);
+        popup.popup.reposition(&p, token);
+        p.destroy();
+        Ok(())
+    }
+
     /// Closes the popup, if one is open.
     pub fn close_popup(&mut self) {
         if let Some(popup) = self.state.popup.take() {
@@ -455,12 +619,25 @@ impl Dispatch<xdg_popup::XdgPopup, ()> for State {
                 y,
                 width,
                 height,
-            } => state.events.push(ClientEvent::PopupConfigure {
-                x,
-                y,
-                width,
-                height,
-            }),
+            } => {
+                // Drawn at the size it is given (smaller, when the
+                // compositor resized it to fit).
+                if let Some(popup) = &mut state.popup
+                    && width > 0
+                    && height > 0
+                {
+                    popup.size = (width, height);
+                }
+                state.events.push(ClientEvent::PopupConfigure {
+                    x,
+                    y,
+                    width,
+                    height,
+                })
+            }
+            xdg_popup::Event::Repositioned { token } => {
+                state.events.push(ClientEvent::PopupRepositioned { token })
+            }
             xdg_popup::Event::PopupDone => {
                 state.events.push(ClientEvent::PopupDone);
                 if let Some(popup) = state.popup.take() {
@@ -593,8 +770,8 @@ impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()> for State {
 #[derive(Default)]
 pub(crate) struct DataState {
     device: Option<wl_data_device::WlDataDevice>,
-    /// What this client offers, and the text it hands out.
-    source: Option<(wl_data_source::WlDataSource, String)>,
+    /// What this client offers, and what it hands out.
+    source: Option<(wl_data_source::WlDataSource, crate::transfer::Payload)>,
     /// Offers that were introduced and the types they announced.
     offers: Vec<(wl_data_offer::WlDataOffer, Vec<String>)>,
     selection: Option<wl_data_offer::WlDataOffer>,
@@ -605,6 +782,16 @@ pub(crate) struct DataState {
     /// Transfers being read: type, read end, bytes so far, and the offer
     /// to finish afterwards (for a drop).
     reads: Vec<Read_>,
+    /// Nothing is read while set.
+    pub(crate) reads_held: bool,
+    /// Transfers being written.
+    pub(crate) writes: crate::transfer::Writes,
+}
+
+impl DataState {
+    pub(crate) fn bytes_being_read(&self) -> usize {
+        self.reads.iter().map(|read| read.bytes.len()).sum()
+    }
 }
 
 struct Read_ {
@@ -616,6 +803,17 @@ struct Read_ {
 
 impl TestClient {
     fn new_source(&mut self, mime_types: &[&str], text: &str) -> Result<(), ClientError> {
+        self.new_source_with(
+            &mime_types.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+            crate::transfer::Payload::Same(text.to_string()),
+        )
+    }
+
+    fn new_source_with(
+        &mut self,
+        mime_types: &[String],
+        payload: crate::transfer::Payload,
+    ) -> Result<(), ClientError> {
         let state = &mut self.state;
         let manager = state.globals.data_device_manager.as_ref().ok_or_else(|| {
             ClientError::Protocol("the compositor has no wl_data_device_manager".to_string())
@@ -624,7 +822,21 @@ impl TestClient {
         for mime_type in mime_types {
             source.offer(mime_type.to_string());
         }
-        state.data.source = Some((source, text.to_string()));
+        state.data.source = Some((source, payload));
+        Ok(())
+    }
+
+    /// [`Self::set_selection`] with what the payload offers.
+    pub(crate) fn set_selection_payload(
+        &mut self,
+        payload: crate::transfer::Payload,
+    ) -> Result<(), ClientError> {
+        self.new_source_with(&payload.mime_types(), payload)?;
+        let state = &self.state;
+        let (Some(device), Some((source, _))) = (&state.data.device, &state.data.source) else {
+            return Err(ClientError::Protocol("no data device yet".to_string()));
+        };
+        device.set_selection(Some(source), state.last_serial);
         Ok(())
     }
 
@@ -770,8 +982,9 @@ impl State {
             self.data.device = Some(manager.get_data_device(seat, handle, ()));
         }
 
+        self.advance_writes();
         let mut index = 0;
-        while index < self.data.reads.len() {
+        while index < self.data.reads.len() && !self.data.reads_held {
             let read = &mut self.data.reads[index];
             let mut chunk = [0u8; 4096];
             let finished = loop {
@@ -813,10 +1026,9 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
         use wl_data_source::Event;
         match event {
             Event::Send { mime_type, fd } => {
-                if let Some((_, text)) = &state.data.source {
-                    // Small texts fit into the pipe; the reader may not be
-                    // reading yet.
-                    let _ = File::from(fd).write_all(text.as_bytes());
+                if let Some((_, payload)) = &state.data.source {
+                    let bytes = payload.for_type(&mime_type);
+                    state.start_write(fd, bytes);
                 }
                 state.events.push(ClientEvent::SourceSend { mime_type });
             }

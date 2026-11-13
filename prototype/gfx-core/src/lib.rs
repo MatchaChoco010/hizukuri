@@ -6,6 +6,8 @@
 //!
 //! The crate knows nothing about any script language. `proto-gfx-lua` binds it.
 
+mod background;
+mod checked;
 mod desc;
 mod device;
 mod dmabuf;
@@ -19,6 +21,8 @@ mod shader;
 mod spirv_check;
 mod spirv_input;
 
+pub use background::{PendingPipeline, PipelineJob};
+pub use checked::{CheckedShader, ShaderChecker};
 pub use desc::*;
 pub use device::{validation_error_count, validation_messages};
 pub use dmabuf::{DmabufDesc, DmabufFormat, DmabufPlaneDesc, ImportedImage};

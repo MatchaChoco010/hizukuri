@@ -16,8 +16,8 @@ use proto_compositor::control::Request;
 use proto_compositor::image::{CompositeImage, EncodedImage};
 use proto_test_client::{
     ClientEvent, ClientOptions, ConstraintRequest, DialogOptions, ExternalDmabuf, GestureKind,
-    InputMethodMode, Pattern, PixelLayout, PopupOptions, SurfaceKind, TestClient, Transform,
-    create_udmabuf,
+    InputMethodMode, Pattern, PixelLayout, PopupOptions, PopupPositioner, SurfaceKind, TestClient,
+    Transform, create_udmabuf,
 };
 use serde_json::{Value, json};
 
@@ -39,6 +39,7 @@ device_tests!(
     a_transformed_window_is_drawn_and_hit_where_the_script_put_it,
     a_press_holds_the_pointer_on_a_transformed_window,
     popups_follow_the_transform_of_their_window,
+    a_script_says_where_popups_are_kept,
     the_script_decides_what_a_point_hits,
     windows_are_tiled_by_the_script,
     a_window_manager_script_hears_what_happens,
@@ -50,6 +51,7 @@ device_tests!(
     the_script_decides_when_the_pointer_is_held,
     colors_set_through_the_protocol_are_drawn,
     the_script_takes_the_gestures_it_wants,
+    a_window_the_script_hides_stops_drawing,
 );
 
 // ---------------------------------------------------------------------------
@@ -258,7 +260,7 @@ fn draw_scene(name: &str, device: Device, args: &[&str]) -> (EncodedImage, Compo
 /// reference computes.
 fn a_mixed_scene_matches_the_cpu_reference(device: Device) {
     use proto_color::{EncodeTransform, blend_over, quantize_unorm};
-    const SPACE: CompositeSpace = CompositeSpace::BT2020_LINEAR;
+    const SPACE: CompositeSpace = CompositeSpace::ACESCG;
     let decode = |description: &ImageDescription, rgba: [u8; 4]| {
         DecodeTransform::new(description, AlphaMode::PremultipliedElectrical, &SPACE)
             .unwrap()
@@ -592,7 +594,7 @@ fn the_working_space_is_the_scripts_choice(device: Device) {
     let color = [200u8, 100, 50, 255];
     let (mut client, _) = session.mapped_client(options("fill", 100, 60, color));
     move_window(&mut session, &mut client, "fill", 40, 30);
-    assert_eq!(session.script("working_space", json!([])), "bt2020");
+    assert_eq!(session.script("working_space", json!([])), "acescg");
 
     let expected = |primaries: Primaries| {
         DecodeTransform::new(
@@ -1569,6 +1571,154 @@ fn popups_follow_the_transform_of_their_window(device: Device) {
     button(&mut session, false);
     session.assert_script_healthy();
     session.assert_drawing_clean();
+    session.quit();
+}
+
+/// Opens a popup, waits for where the compositor puts it (relative to the
+/// window geometry, and its size), and closes it again.
+fn popup_placement(client: &mut TestClient, positioner: PopupPositioner) -> (i32, i32, i32, i32) {
+    client.clear_events();
+    client
+        .open_positioned_popup(positioner, [230, 200, 40, 255], false)
+        .unwrap();
+    let event = client
+        .wait_for(common::TIMEOUT, |e| {
+            matches!(e, ClientEvent::PopupConfigure { .. })
+        })
+        .unwrap()
+        .expect("the popup is configured");
+    client.close_popup();
+    match event {
+        ClientEvent::PopupConfigure {
+            x,
+            y,
+            width,
+            height,
+        } => (x, y, width, height),
+        _ => unreachable!(),
+    }
+}
+
+/// A script says where the popups of a window are kept
+/// (`hz.set_popup_bounds`), for windows it draws somewhere else than their
+/// place on the output: popups are flipped and slid into that rectangle
+/// instead of the output. Nil, a reload and the fallback give the output
+/// back.
+fn a_script_says_where_popups_are_kept(device: Device) {
+    let project = script_project(
+        "popup-bounds",
+        device,
+        &[(
+            "main",
+            r#"
+            hz.include("session")
+            function bound(title, rect)
+                for _, w in hz.windows() do
+                    if w.title == title then
+                        hz.set_popup_bounds(w.id, rect)
+                    end
+                end
+            end
+            function try_bound(id, rect)
+                local ok, problem = pcall(hz.set_popup_bounds, id, rect)
+                return if ok then "ok" else tostring(problem)
+            end
+            "#,
+        )],
+    );
+    let mut session = Session::start(
+        "popup-bounds",
+        device,
+        &[
+            "--output-size",
+            "640x400",
+            "--script",
+            project.to_str().unwrap(),
+        ],
+    );
+    // The built-in tile: one window of 624x384 at (8, 8).
+    let mut a = session.client(options("a", 100, 60, RED));
+    let state = wait_tiles(&mut session, &mut [&mut a], &[("a", [8, 8], [624, 384])]);
+    let id = window(&state, "a").unwrap()["id"].as_u64().unwrap();
+    let bounds =
+        |session: &mut Session| window(&session.state(), "a").unwrap()["popup_bounds"].clone();
+    // By default: the output, seen from the window.
+    let output = json!([-8, -8, 640, 400]);
+    assert_eq!(bounds(&mut session), output);
+
+    // A menu below a point near the bottom of the window would end at 401,
+    // below the output (392 in the window's coordinates): it is flipped
+    // above the point.
+    let menu = PopupPositioner::menu_at(20, 300, 80, 100);
+    assert_eq!(popup_placement(&mut a, menu), (21, 200, 80, 100));
+
+    // The script says the window shows 1000 high: the same menu fits below.
+    session.script(
+        "bound",
+        json!(["a", { "x": 0, "y": 0, "width": 624, "height": 1000 }]),
+    );
+    assert_eq!(bounds(&mut session), json!([0, 0, 624, 1000]));
+    assert_eq!(popup_placement(&mut a, menu), (21, 301, 80, 100));
+    // Smaller than the window: slid in from the right and the bottom.
+    session.script(
+        "bound",
+        json!(["a", { "x": 0, "y": 0, "width": 90.4, "height": 350 }]),
+    );
+    assert_eq!(bounds(&mut session), json!([0, 0, 90, 350]));
+    assert_eq!(popup_placement(&mut a, menu), (10, 200, 80, 100));
+
+    // Nil: the output again.
+    session.script("bound", json!(["a", null]));
+    assert_eq!(bounds(&mut session), output);
+    assert_eq!(popup_placement(&mut a, menu), (21, 200, 80, 100));
+
+    // What is not a rectangle, and windows that do not exist, are refused.
+    for (rect, problem) in [
+        (
+            json!({ "x": 0, "y": 0, "width": 0, "height": 10 }),
+            "empty size",
+        ),
+        (json!({ "x": 0, "y": 0, "width": 10 }), "without height"),
+        (
+            json!({ "x": 1e12, "y": 0, "width": 10, "height": 10 }),
+            "out of range",
+        ),
+    ] {
+        let answer = session.script("try_bound", json!([id, rect]));
+        assert!(
+            answer.as_str().is_some_and(|a| a.contains(problem)),
+            "{rect}: {answer}"
+        );
+    }
+    let answer = session.script(
+        "try_bound",
+        json!([id + 1000, { "x": 0, "y": 0, "width": 10, "height": 10 }]),
+    );
+    assert!(
+        answer
+            .as_str()
+            .is_some_and(|a| a.contains("unknown window")),
+        "{answer}"
+    );
+    assert_eq!(bounds(&mut session), output);
+
+    // Without the script the window is drawn at its place: the output, and
+    // the script's rectangle once it is back.
+    let mine = json!(["a", { "x": 0, "y": 0, "width": 624, "height": 1000 }]);
+    session.script("bound", mine.clone());
+    session.send(Request::ScriptMode {
+        mode: "fallback".to_string(),
+    });
+    assert_eq!(bounds(&mut session), output);
+    assert_eq!(popup_placement(&mut a, menu), (21, 200, 80, 100));
+    session.send(Request::ScriptMode {
+        mode: "running".to_string(),
+    });
+    assert_eq!(bounds(&mut session), json!([0, 0, 624, 1000]));
+    // A reload forgets what the old script said.
+    session.send(Request::ScriptReload { path: None });
+    assert_eq!(bounds(&mut session), output);
+    session.assert_script_healthy();
     session.quit();
 }
 
@@ -3264,6 +3414,213 @@ fn the_script_takes_the_gestures_it_wants(device: Device) {
         s["focus"]["window"] == ida
     });
     assert_ne!(dialog, ida);
+    session.assert_script_healthy();
+    session.quit();
+}
+
+// ---------------------------------------------------------------------------
+// Windows that are not seen
+// ---------------------------------------------------------------------------
+
+/// The frame callbacks (and draws) a client got from the events it has
+/// not looked at yet; forgets them.
+fn frames_since(client: &mut TestClient) -> (usize, usize) {
+    let frames = client
+        .events()
+        .iter()
+        .filter(|e| matches!(e, ClientEvent::FrameDone { .. }))
+        .count();
+    let drawn = client
+        .events()
+        .iter()
+        .filter(|e| matches!(e, ClientEvent::Drawn { .. }))
+        .count();
+    client.clear_events();
+    (frames, drawn)
+}
+
+/// Pumps the clients for a while.
+fn pump_for(clients: &mut [&mut TestClient], time: std::time::Duration) {
+    let until = std::time::Instant::now() + time;
+    while std::time::Instant::now() < until {
+        for client in clients.iter_mut() {
+            client
+                .pump(Some(std::time::Duration::from_millis(5)))
+                .unwrap();
+        }
+    }
+}
+
+/// `hz.set_visible`: a hidden window gets no frame callbacks (but one a
+/// second of the frame clock), no presentation feedback, and no frame is
+/// drawn for what it commits; a client of xdg-shell 6 is told it is
+/// suspended, an older one nothing. Seen again, it draws at once.
+fn a_window_the_script_hides_stops_drawing(device: Device) {
+    let project = script_project(
+        "hidden-windows",
+        device,
+        &[
+            ("session", DRAW_ONLY_SESSION),
+            (
+                "main",
+                r#"
+                hz.include("session")
+                function set_visible(id, visible)
+                    hz.set_visible(id, visible)
+                end
+                "#,
+            ),
+        ],
+    );
+    let mut session = Session::start(
+        "hidden-windows",
+        device,
+        &[
+            "--output-size",
+            "640x400",
+            "--clock",
+            "manual",
+            "--script",
+            project.to_str().unwrap(),
+        ],
+    );
+    let animated = |title: &str, color: [u8; 4], version: u32| ClientOptions {
+        redraw_on_frame: true,
+        xdg_wm_base_version: version,
+        presentation_feedback: true,
+        ..options(title, 120, 80, color)
+    };
+    let (mut new, new_id) = session.mapped_client(animated("new", RED, 6));
+    let (mut old, old_id) = session.mapped_client(animated("old", GREEN, 5));
+    pump_for(
+        &mut [&mut new, &mut old],
+        std::time::Duration::from_millis(300),
+    );
+    let (frames_new, _) = frames_since(&mut new);
+    let (frames_old, _) = frames_since(&mut old);
+    assert!(
+        frames_new >= 3 && frames_old >= 3,
+        "both animate while seen: {frames_new} and {frames_old} frame callbacks"
+    );
+
+    session.script("set_visible", json!([new_id, false]));
+    session.script("set_visible", json!([old_id, false]));
+    let state = session.wait(&mut [&mut new, &mut old], "both hidden", |s| {
+        window(s, "new").unwrap()["visible"] == false
+            && window(s, "old").unwrap()["visible"] == false
+    });
+    assert_eq!(window(&state, "new").unwrap()["suspended"], true);
+    assert_eq!(
+        window(&state, "old").unwrap()["suspended"],
+        false,
+        "xdg-shell 5 has no suspended state"
+    );
+    new.wait_for(common::TIMEOUT, |e| {
+        matches!(e, ClientEvent::Suspended { suspended: true })
+    })
+    .unwrap()
+    .expect("the client of xdg-shell 6 is told it is suspended");
+    // A callback sent before the window was hidden may still arrive.
+    pump_for(
+        &mut [&mut new, &mut old],
+        std::time::Duration::from_millis(100),
+    );
+    new.clear_events();
+    old.clear_events();
+    let rendered = session.state()["frames_rendered"].as_u64().unwrap();
+
+    // The frame clock stands still: nothing comes.
+    pump_for(
+        &mut [&mut new, &mut old],
+        std::time::Duration::from_millis(500),
+    );
+    assert!(
+        !old.events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Configure { .. })),
+        "the client of xdg-shell 5 is not configured for nothing"
+    );
+    assert_eq!(frames_since(&mut new), (0, 0), "hidden: no frame callbacks");
+    assert_eq!(frames_since(&mut old), (0, 0), "hidden: no frame callbacks");
+
+    // A second of the frame clock: one callback each, one picture each,
+    // and no frame drawn for those pictures.
+    for round in 0..2 {
+        session.send(Request::AdvanceClock {
+            milliseconds: 1100.0,
+        });
+        pump_for(
+            &mut [&mut new, &mut old],
+            std::time::Duration::from_millis(300),
+        );
+        let presented = new
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::Presented { .. }));
+        let discarded = new
+            .events()
+            .iter()
+            .any(|e| matches!(e, ClientEvent::PresentationDiscarded));
+        assert!(!presented, "what a hidden window draws is not presented");
+        // Each picture replaces the one before, which was never seen (in
+        // the first round, the one in flight when it was hidden).
+        if round == 1 {
+            assert!(discarded, "the picture of the first round is discarded");
+        }
+        assert_eq!(
+            frames_since(&mut new),
+            (1, 1),
+            "round {round}: one a second"
+        );
+        assert_eq!(
+            frames_since(&mut old),
+            (1, 1),
+            "round {round}: one a second"
+        );
+    }
+    assert_eq!(
+        session.state()["frames_rendered"].as_u64().unwrap(),
+        rendered,
+        "no frame is drawn for what hidden windows commit"
+    );
+
+    // Seen again: told at once, and it animates again, presented.
+    session.script("set_visible", json!([new_id, true]));
+    new.wait_for(common::TIMEOUT, |e| {
+        matches!(e, ClientEvent::Suspended { suspended: false })
+    })
+    .unwrap()
+    .expect("the client is told it is no longer suspended");
+    pump_for(
+        &mut [&mut new, &mut old],
+        std::time::Duration::from_millis(300),
+    );
+    let presented = new
+        .events()
+        .iter()
+        .any(|e| matches!(e, ClientEvent::Presented { .. }));
+    assert!(presented, "seen again, its pictures are presented");
+    let (frames, drawn) = frames_since(&mut new);
+    assert!(
+        frames >= 3 && drawn >= 3,
+        "seen again, it animates: {frames}, {drawn}"
+    );
+    assert_eq!(frames_since(&mut old), (0, 0), "the other one stays hidden");
+    let state = session.state();
+    assert_eq!(window(&state, "new").unwrap()["suspended"], false);
+    assert_eq!(window(&state, "old").unwrap()["visible"], false);
+
+    // A reload starts from every window seen.
+    session.send(Request::ScriptReload { path: None });
+    session.wait(&mut [&mut new, &mut old], "seen after a reload", |s| {
+        window(s, "old").unwrap()["visible"] == true
+    });
+    pump_for(
+        &mut [&mut new, &mut old],
+        std::time::Duration::from_millis(300),
+    );
+    let (frames, _) = frames_since(&mut old);
+    assert!(frames >= 3, "after the reload it animates again: {frames}");
     session.assert_script_healthy();
     session.quit();
 }

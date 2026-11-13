@@ -19,7 +19,15 @@
 //! The script language is provisional (Luau through `proto-gfx-lua`).
 
 mod api;
+mod apps;
+mod color_api;
 mod dmabuf;
+mod images;
+#[cfg(feature = "ocio")]
+mod ocio;
+mod present;
+mod text;
+mod window_table;
 mod wm;
 
 use std::cell::RefCell;
@@ -64,8 +72,10 @@ const BUILTIN: &[(&str, &str)] = &[
     ("main", include_str!("../../scripts/main.luau")),
     ("session", include_str!("../../scripts/session.luau")),
     ("affine", include_str!("../../scripts/affine.luau")),
+    ("color", include_str!("../../scripts/color.luau")),
     ("render", include_str!("../../scripts/render.luau")),
     ("tile", include_str!("../../scripts/tile.luau")),
+    ("launcher", include_str!("../../scripts/launcher.luau")),
 ];
 
 /// Whether `name` can name a module (`hz.include(name)`).
@@ -196,7 +206,31 @@ pub struct ScriptOptions {
     /// The clock frames are timed with; `hz.time()` and the time `frame` is
     /// given are read from it. The same one as the core's and the backend's.
     pub clock: TimeSource,
+    /// The OCIO config, and the display and view of the outputs.
+    #[cfg(feature = "ocio")]
+    pub ocio: crate::ocio::Options,
+    /// What applications the script starts (`hz.spawn`) get on top of the
+    /// compositor's environment: the variables that lead to this
+    /// compositor. `None` removes a variable.
+    pub app_env: Vec<(String, Option<String>)>,
+    /// The primaries of the linear working space scripts composite in.
+    pub working: Primaries,
+    /// The format of buffers that hold colors of the working space
+    /// (`hz.color_format()`). `None`: the most exact one the device can
+    /// draw to, blend in and filter.
+    pub color_format: Option<Format>,
+    /// The font file `hz.load_font()` reads. `None`: the first well-known
+    /// font found where systems keep them, if any.
+    pub font: Option<PathBuf>,
 }
+
+/// The working space a session starts with, unless told otherwise.
+pub const DEFAULT_WORKING: Primaries = Primaries::ACES_AP1;
+
+/// The color format a session uses, unless told otherwise (`None`: what
+/// the device does best, which is RGBA32F where it can be drawn to, blended
+/// in and filtered).
+pub const DEFAULT_COLOR_FORMAT: Option<Format> = None;
 
 impl Default for ScriptOptions {
     fn default() -> Self {
@@ -211,6 +245,12 @@ impl Default for ScriptOptions {
             manage_windows: false,
             wait_for_gpu: false,
             clock: TimeSource::default(),
+            #[cfg(feature = "ocio")]
+            ocio: crate::ocio::Options::default(),
+            app_env: Vec::new(),
+            working: DEFAULT_WORKING,
+            color_format: DEFAULT_COLOR_FORMAT,
+            font: None,
         }
     }
 }
@@ -305,6 +345,23 @@ pub(crate) struct Shared {
     pub requests: Vec<SceneRequest>,
     /// The compositing buffer the script offers for verification captures.
     pub debug_composite: Option<(Handle, Primaries)>,
+    /// The primaries of the linear working space, and a number that changes
+    /// whenever they do (for what scripts cache by them).
+    pub working: Primaries,
+    pub working_generation: u64,
+    /// See [`ScriptOptions::color_format`].
+    pub color_format: Option<Format>,
+    /// The numbers to read every surface with, for `hz.window_table`.
+    pub window_table: window_table::WindowTable,
+    /// Whether the script's `frame` is running.
+    pub in_frame: bool,
+    /// The way out (`hz.present`), and whether frames go through it.
+    pub present: present::PresentState,
+    /// The font file of the session (`hz.load_font()`), when it was given
+    /// one.
+    pub font: Option<PathBuf>,
+    /// The fonts the script loaded; `hz.load_font` names them by position.
+    pub fonts: Vec<fontdue::Font>,
     pub project: Project,
     pub clock: TimeSource,
     /// The time of the clock when the runtime started: `hz.time()` counts
@@ -318,6 +375,12 @@ pub(crate) struct Shared {
     pub closed: Vec<ClosedWindow>,
     pub wm: wm::WmState,
     pub dmabuf: dmabuf::DmabufState,
+    /// See [`ScriptOptions::app_env`].
+    pub app_env: Vec<(String, Option<String>)>,
+    /// The applications the script started last (`hz.spawn`), oldest first.
+    pub spawned: Vec<(u32, Vec<String>)>,
+    /// The desktop entries read last (`hz.desktop_entries`).
+    pub apps: apps::AppsState,
 
     pub mode: Mode,
     pub failures: Vec<Failure>,
@@ -334,6 +397,9 @@ pub(crate) struct Shared {
     pub strikes: u32,
     /// How long calls into the script took, by callback.
     pub timing: Vec<(&'static str, CallTiming)>,
+    /// The OCIO conversions of the core.
+    #[cfg(feature = "ocio")]
+    pub ocio: ocio::OcioState,
 }
 
 /// Time spent in one callback of the script.
@@ -372,6 +438,7 @@ const CALLBACKS: &[&str] = &[
     "frame",
     "hit_test",
     "locate",
+    "project",
     "window_opened",
     "window_changed",
     "window_closed",
@@ -379,6 +446,7 @@ const CALLBACKS: &[&str] = &[
     "outputs_changed",
     "key",
     "pointer_button",
+    "pointer_motion",
     "touch_down",
     "gesture_begin",
     "gesture_update",
@@ -386,6 +454,7 @@ const CALLBACKS: &[&str] = &[
     "pointer_constraint",
     "pointer_constraint_changed",
     "window_request",
+    "logo_key_changed",
 ];
 
 /// The VM, the GPU and the shared state. Held by the scene and by the window
@@ -408,6 +477,8 @@ impl ScriptRuntime {
     /// `init`. A script that fails to load is not an error here: the
     /// runtime starts in the fallback mode and can be reloaded.
     pub fn new(options: ScriptOptions) -> Result<Rc<Self>, String> {
+        #[cfg(feature = "ocio")]
+        let ocio = ocio::OcioState::new(&options.ocio)?;
         let gpu = Gpu::new(options.gpu.clone()).map_err(|e| gfx("creating the GPU device", e))?;
         let shared = Rc::new(RefCell::new(Shared {
             world: WorldSnapshot::default(),
@@ -418,6 +489,14 @@ impl ScriptRuntime {
             targets: OutputImages::new(),
             requests: Vec::new(),
             debug_composite: None,
+            working: options.working,
+            working_generation: 0,
+            color_format: options.color_format,
+            window_table: Default::default(),
+            in_frame: false,
+            present: Default::default(),
+            font: options.font.clone(),
+            fonts: Vec::new(),
             project: options.project.clone(),
             clock: options.clock.clone(),
             origin: options.clock.now(),
@@ -426,6 +505,9 @@ impl ScriptRuntime {
             closed: Vec::new(),
             wm: wm::WmState::new(options.manage_windows),
             dmabuf: dmabuf::DmabufState::default(),
+            app_env: options.app_env.clone(),
+            spawned: Vec::new(),
+            apps: apps::AppsState::default(),
             mode: Mode::Running,
             failures: Vec::new(),
             failure_count: 0,
@@ -437,6 +519,8 @@ impl ScriptRuntime {
             defined: Vec::new(),
             strikes: 0,
             timing: Vec::new(),
+            #[cfg(feature = "ocio")]
+            ocio,
         }));
         let for_api = Rc::clone(&shared);
         let windows = Rc::new(RefCell::new(fallback::Windows::new()));
@@ -481,6 +565,15 @@ impl ScriptRuntime {
     /// The GPU device the script draws with.
     pub fn device(&self) -> proto_gfx_core::DeviceDescription {
         self.gpu().device_description()
+    }
+
+    /// Sets (or, with `None`, removes) a variable in the environment of the
+    /// applications the script starts. For what is only known after the
+    /// script was loaded (the X11 display).
+    pub fn set_app_env(&self, name: &str, value: Option<String>) {
+        let mut shared = self.shared.borrow_mut();
+        shared.app_env.retain(|(n, _)| n != name);
+        shared.app_env.push((name.to_string(), value));
     }
 
     pub fn mode(&self) -> Mode {
@@ -575,6 +668,10 @@ impl ScriptRuntime {
         // What the old script kept, and asked to keep, is its own business.
         self.forget_closed_windows();
         self.shared.borrow_mut().keep_closed.clear();
+        // So is what it hid: the new one says again what it does not show.
+        self.windows.borrow_mut().show_all();
+        // Where the old script drew the windows, so where their popups went.
+        self.windows.borrow_mut().clear_popup_bounds();
         self.host
             .reset()
             .map_err(|e| format!("resetting the script VM: {e}"))?;
@@ -584,6 +681,8 @@ impl ScriptRuntime {
                 shared.project = project;
             }
             shared.debug_composite = None;
+            shared.present.reloaded();
+            shared.fonts.clear();
             shared.defined.clear();
             shared.reloads += 1;
             shared.hold_since = None;
@@ -845,6 +944,7 @@ impl ScriptRuntime {
                     OnError::Fallback => "fallback",
                 },
                 "frames": shared.frames,
+                "frames_without_present": shared.present.frames_without,
                 "fallback_frames": shared.fallback_frames,
                 "kept_frames": shared.kept_frames,
                 "failures": shared.failure_count,
@@ -863,6 +963,10 @@ impl ScriptRuntime {
                     }))
                 }).collect::<serde_json::Map<String, Value>>(),
                 "dmabuf": shared.dmabuf.describe(),
+                "spawned": shared.spawned.iter().map(|(pid, argv)| json!({
+                    "pid": pid,
+                    "argv": argv,
+                })).collect::<Vec<_>>(),
                 "closed_windows": shared.closed.iter().map(|c| json!({
                     "id": c.window.window.0,
                     "closed_at": c.closed_at,
@@ -1074,13 +1178,25 @@ impl ScriptScene {
             let shared = self.runtime.shared.borrow();
             shared.seconds(shared.frame_time.unwrap_or_else(|| shared.clock.now()))
         };
+        {
+            let mut shared = self.runtime.shared.borrow_mut();
+            shared.window_table.expire();
+            shared.in_frame = true;
+            shared.present.begin_frame();
+        }
         let result = self.runtime.host.run(None, |lua| {
             let function: mlua::Function = lua.globals().get("frame")?;
             let output = api::output_table(lua, output)?;
             function.call::<()>((output, image.to_bits(), time))
         });
+        {
+            let mut shared = self.runtime.shared.borrow_mut();
+            shared.window_table.expire();
+            shared.in_frame = false;
+        }
         self.runtime.time_call("frame", started);
         result?;
+        self.runtime.shared.borrow_mut().present.end_frame();
         // A frame that returns in the middle of a render pass did not
         // finish what it was drawing.
         if self.runtime.gpu().is_in_pass() {
@@ -1380,6 +1496,14 @@ impl Scene for ScriptScene {
             runtime.shared.borrow_mut().kept_frames += 1;
             return Ok(DrawStatus::Kept);
         }
+        // The built-in arrow is uploaded when it is first needed. A script
+        // may ask for the cursor (`hz.cursor`) inside a render pass, where
+        // nothing can be uploaded: have it ready before the script runs.
+        if cursor.is_some()
+            && let Err(error) = arrow_texture(&runtime.shared, &mut runtime.gpu())
+        {
+            tracing::warn!("the cursor image could not be made: {error}");
+        }
 
         let mut drawn_by_script = false;
         if self.script_draws() {
@@ -1533,6 +1657,59 @@ impl Scene for ScriptScene {
         fallback::locate(|w| self.position(w), point, surface, windows)
     }
 
+    /// A project that draws windows other than flat at their position
+    /// says where a point of a surface is seen: `project(surface, x, y)`
+    /// returns the point of the screen (global logical coordinates), or
+    /// nothing when it is not seen. The four corners are asked.
+    fn project_rect(
+        &self,
+        surface: SurfaceId,
+        rect: (f64, f64, f64, f64),
+        windows: &[WindowView],
+    ) -> Option<(f64, f64, f64, f64)> {
+        let runtime = &self.runtime;
+        if runtime.mode() == Mode::Fallback || !runtime.defines("project") {
+            let (window, view) = windows.iter().find_map(|window| {
+                let view = window.surfaces.iter().find(|s| s.surface == surface)?;
+                Some((window.window, view))
+            })?;
+            let origin = self.position(window)?;
+            return Some((
+                origin.0 + f64::from(view.offset.0) + rect.0,
+                origin.1 + f64::from(view.offset.1) + rect.1,
+                rect.2,
+                rect.3,
+            ));
+        }
+        let (x, y, w, h) = rect;
+        let (mut left, mut top) = (f64::INFINITY, f64::INFINITY);
+        let (mut right, mut bottom) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for (cx, cy) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
+            match runtime.host.call_function::<_, (Option<f64>, Option<f64>)>(
+                "project",
+                (surface.0, cx, cy),
+                None,
+            ) {
+                Ok((Some(px), Some(py))) => {
+                    runtime.event_ok();
+                    left = left.min(px);
+                    top = top.min(py);
+                    right = right.max(px);
+                    bottom = bottom.max(py);
+                }
+                Ok(_) => {
+                    runtime.event_ok();
+                    return None;
+                }
+                Err(error) => {
+                    runtime.record_event_failure("project", &error);
+                    return None;
+                }
+            }
+        }
+        Some((left, top, right - left, bottom - top))
+    }
+
     fn capture(&mut self, target: TargetId) -> Result<Capture, SceneError> {
         let (desc, image, composite) = {
             let shared = self.runtime.shared.borrow();
@@ -1566,20 +1743,32 @@ impl Scene for ScriptScene {
         // when the script offers one of the right shape.
         let composite = composite.and_then(|(image, primaries)| {
             let info = gpu.image_info(image).ok()?;
-            if info.format != Format::Rgba16Float
-                || (info.width, info.height) != (desc.width, desc.height)
-            {
+            if (info.width, info.height) != (desc.width, desc.height) {
                 return None;
             }
-            let bytes = gpu.read_image(image).ok()?;
+            // The capture holds half floats, whatever the buffer does.
+            let data = match info.format {
+                Format::Rgba16Float => gpu
+                    .read_image(image)
+                    .ok()?
+                    .chunks_exact(2)
+                    .map(|b| u16::from_ne_bytes([b[0], b[1]]))
+                    .collect(),
+                Format::Rgba32Float => gpu
+                    .read_image(image)
+                    .ok()?
+                    .chunks_exact(4)
+                    .map(|b| {
+                        crate::image::f32_to_half(f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+                    })
+                    .collect(),
+                _ => return None,
+            };
             Some(CompositeImage {
                 width: desc.width,
                 height: desc.height,
                 space: CompositeSpace { primaries },
-                data: bytes
-                    .chunks_exact(2)
-                    .map(|b| u16::from_ne_bytes([b[0], b[1]]))
-                    .collect(),
+                data,
             })
         });
         Ok(Capture { encoded, composite })
@@ -1591,7 +1780,13 @@ impl Scene for ScriptScene {
 
     fn control(&mut self, command: &str, args: &Value) -> Option<Result<Value, String>> {
         let runtime = &self.runtime;
+        #[cfg(feature = "ocio")]
+        if let Some(result) = ocio::control(&runtime.shared, command, args) {
+            return Some(result);
+        }
         Some(match command {
+            #[cfg(not(feature = "ocio"))]
+            "ocio_set" | "ocio_state" => Err("this compositor was built without OCIO".into()),
             "script_call" => {
                 let function = args["function"].as_str().unwrap_or_default();
                 let list = args["args"].as_array().cloned().unwrap_or_default();

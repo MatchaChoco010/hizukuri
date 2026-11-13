@@ -2,7 +2,7 @@
 //! garbage collector and a reload.
 //!
 //! ```sh
-//! cargo run --release --bin gfx-bench -- calls|frame4k|gc|reload|all [--quick]
+//! cargo run --release --bin gfx-bench -- calls|frame4k|gc|reload|mesh|scene3d|all [--quick]
 //! ```
 //!
 //! Times are wall-clock on a machine that also runs other things; the tables
@@ -674,6 +674,561 @@ fn reload(quick: bool) {
     );
 }
 
+/// The script of the `mesh` benchmark: ways of drawing many objects that
+/// each have their own matrix.
+#[cfg(feature = "luau")]
+const MESH_SCRIPT: &str = r#"
+local SHADER = [[
+struct Push { model: mat4x4<f32>, tint: vec4<f32> }
+var<immediate> pc: Push;
+@group(0) @binding(0) var<storage, read> models: array<mat4x4<f32>>;
+
+@vertex
+fn vs(@location(0) position: vec3<f32>, @builtin(instance_index) instance: u32) -> @builtin(position) vec4<f32> {
+    return pc.model * models[instance] * vec4(position, 1.0);
+}
+
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return pc.tint;
+}
+]]
+
+local MAX = 10000
+local pipeline, vertices, indices, models, models_slot
+local push_data = buffer.create(80)
+local all_models = buffer.create(MAX * 64)
+local identity = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 }
+
+function init()
+    local vs = gfx.create_shader({ stage = "vertex", source = SHADER, entry = "vs" })
+    local fs = gfx.create_shader({ stage = "fragment", source = SHADER, entry = "fs" })
+    pipeline = gfx.create_render_pipeline({
+        vertex = vs,
+        fragment = fs,
+        vertex_buffers = { { stride = 12, attributes = { { location = 0, format = "f32x3", offset = 0 } } } },
+        targets = { { format = "rgba8unorm" } },
+    })
+    local data = buffer.create(36)
+    for i, v in { -0.01, -0.01, 0, 0.01, -0.01, 0, 0, 0.01, 0 } do
+        buffer.writef32(data, (i - 1) * 4, v)
+    end
+    vertices = gfx.create_buffer({ size = 36, usage = { "vertex" } })
+    gfx.write_buffer(vertices, 0, data)
+    local index_data = buffer.create(6)
+    buffer.writeu16(index_data, 2, 1)
+    buffer.writeu16(index_data, 4, 2)
+    indices = gfx.create_buffer({ size = 6, usage = { "index" } })
+    gfx.write_buffer(indices, 0, index_data)
+    models = gfx.create_buffer({ size = MAX * 64, usage = { "storage" } })
+    models_slot = gfx.create_storage_buffer_slot(models, 0, MAX * 64)
+    for i = 0, MAX - 1 do
+        for k = 1, 16 do
+            buffer.writef32(all_models, i * 64 + (k - 1) * 4, identity[k])
+        end
+    end
+    gfx.write_buffer(models, 0, all_models)
+    for k = 1, 16 do
+        buffer.writef32(push_data, (k - 1) * 4, identity[k])
+    end
+    buffer.writef32(push_data, 64, 1)
+    buffer.writef32(push_data, 76, 1)
+end
+
+local function begin(target)
+    gfx.begin_pass({ color = { { image = target, load = "clear", clear = { 0, 0, 0, 1 } } } })
+    gfx.set_pipeline(pipeline)
+    gfx.set_vertex_buffer(0, vertices)
+    gfx.set_index_buffer(indices, "u16")
+    gfx.bind(0, models_slot)
+    gfx.push(0, push_data)
+end
+
+-- One draw call for each object, nothing else.
+function draws_only(target, n)
+    begin(target)
+    for _ = 1, n do
+        gfx.draw_indexed(3)
+    end
+    gfx.end_pass()
+end
+
+-- For each object: its matrix into a buffer (16 writes), push, draw.
+function push_and_draw(target, n)
+    begin(target)
+    for i = 1, n do
+        local x = i * 0.0001
+        buffer.writef32(push_data, 0, 1)
+        buffer.writef32(push_data, 4, 0)
+        buffer.writef32(push_data, 8, 0)
+        buffer.writef32(push_data, 12, 0)
+        buffer.writef32(push_data, 16, 0)
+        buffer.writef32(push_data, 20, 1)
+        buffer.writef32(push_data, 24, 0)
+        buffer.writef32(push_data, 28, 0)
+        buffer.writef32(push_data, 32, 0)
+        buffer.writef32(push_data, 36, 0)
+        buffer.writef32(push_data, 40, 1)
+        buffer.writef32(push_data, 44, 0)
+        buffer.writef32(push_data, 48, x)
+        buffer.writef32(push_data, 52, 0)
+        buffer.writef32(push_data, 56, 0)
+        buffer.writef32(push_data, 60, 1)
+        gfx.push(0, push_data)
+        gfx.draw_indexed(3)
+    end
+    gfx.end_pass()
+end
+
+-- All matrices into one buffer, one upload, one instanced draw.
+function one_instanced_draw(target, n)
+    for i = 0, n - 1 do
+        local at = i * 64
+        buffer.writef32(all_models, at + 48, i * 0.0001)
+    end
+    gfx.write_buffer(models, 0, all_models, 0, n * 64)
+    begin(target)
+    gfx.draw_indexed(3, n)
+    gfx.end_pass()
+end
+
+-- The same, writing every element of every matrix.
+function one_instanced_draw_full(target, n)
+    for i = 0, n - 1 do
+        local at = i * 64
+        for k = 0, 15 do
+            buffer.writef32(all_models, at + k * 4, identity[k + 1])
+        end
+        buffer.writef32(all_models, at + 48, i * 0.0001)
+    end
+    gfx.write_buffer(models, 0, all_models, 0, n * 64)
+    begin(target)
+    gfx.draw_indexed(3, n)
+    gfx.end_pass()
+end
+
+-- The matrix product a scene computes for each object, on tables.
+local function mat4_mul(a, b)
+    local m = table.create(16, 0)
+    for r = 0, 3 do
+        for c = 0, 3 do
+            local sum = 0
+            for k = 0, 3 do
+                sum += a[r * 4 + k + 1] * b[k * 4 + c + 1]
+            end
+            m[r * 4 + c + 1] = sum
+        end
+    end
+    return m
+end
+
+function matrix_products(_, n)
+    local m = identity
+    for _ = 1, n do
+        m = mat4_mul(m, identity)
+    end
+    return m
+end
+
+-- The same product with the loops written out: no inner loop, one table.
+local function mat4_mul_unrolled(a, b)
+    local a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16 = table.unpack(a, 1, 16)
+    local b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16 = table.unpack(b, 1, 16)
+    return {
+        a1 * b1 + a2 * b5 + a3 * b9 + a4 * b13,
+        a1 * b2 + a2 * b6 + a3 * b10 + a4 * b14,
+        a1 * b3 + a2 * b7 + a3 * b11 + a4 * b15,
+        a1 * b4 + a2 * b8 + a3 * b12 + a4 * b16,
+        a5 * b1 + a6 * b5 + a7 * b9 + a8 * b13,
+        a5 * b2 + a6 * b6 + a7 * b10 + a8 * b14,
+        a5 * b3 + a6 * b7 + a7 * b11 + a8 * b15,
+        a5 * b4 + a6 * b8 + a7 * b12 + a8 * b16,
+        a9 * b1 + a10 * b5 + a11 * b9 + a12 * b13,
+        a9 * b2 + a10 * b6 + a11 * b10 + a12 * b14,
+        a9 * b3 + a10 * b7 + a11 * b11 + a12 * b15,
+        a9 * b4 + a10 * b8 + a11 * b12 + a12 * b16,
+        a13 * b1 + a14 * b5 + a15 * b9 + a16 * b13,
+        a13 * b2 + a14 * b6 + a15 * b10 + a16 * b14,
+        a13 * b3 + a14 * b7 + a15 * b11 + a16 * b15,
+        a13 * b4 + a14 * b8 + a15 * b12 + a16 * b16,
+    }
+end
+
+function matrix_products_unrolled(_, n)
+    local m = identity
+    for _ = 1, n do
+        m = mat4_mul_unrolled(m, identity)
+    end
+    return m
+end
+
+-- The product of two matrices held in a buffer (32-bit floats), written to
+-- the buffer: no table at all.
+local scratch = buffer.create(3 * 64)
+local function mat4_mul_buffer(data, out, a, b)
+    for r = 0, 3 do
+        local a0 = buffer.readf32(data, a + r * 16)
+        local a1 = buffer.readf32(data, a + r * 16 + 4)
+        local a2 = buffer.readf32(data, a + r * 16 + 8)
+        local a3 = buffer.readf32(data, a + r * 16 + 12)
+        for c = 0, 3 do
+            buffer.writef32(
+                data,
+                out + r * 16 + c * 4,
+                a0 * buffer.readf32(data, b + c * 4)
+                    + a1 * buffer.readf32(data, b + 16 + c * 4)
+                    + a2 * buffer.readf32(data, b + 32 + c * 4)
+                    + a3 * buffer.readf32(data, b + 48 + c * 4)
+            )
+        end
+    end
+end
+
+function matrix_products_buffer(_, n)
+    for k = 1, 16 do
+        buffer.writef32(scratch, (k - 1) * 4, identity[k])
+        buffer.writef32(scratch, 64 + (k - 1) * 4, identity[k])
+    end
+    for _ = 1, n do
+        mat4_mul_buffer(scratch, 128, 0, 64)
+    end
+end
+"#;
+
+/// Drawing many objects with a matrix each: what one object costs, by the
+/// way the script hands the matrices over.
+#[cfg(feature = "luau")]
+fn mesh(quick: bool) {
+    let frames = if quick { 10 } else { 100 };
+    let gpu = Gpu::new(GpuConfig::from_env()).expect("gpu");
+    let host = ScriptHost::new(
+        gpu,
+        HostOptions {
+            memory_limit: None,
+            ..HostOptions::default()
+        },
+    )
+    .expect("host");
+    let target = host
+        .gpu()
+        .create_image(&ImageDesc {
+            format: Format::Rgba8Unorm,
+            width: 256,
+            height: 256,
+            usage: ImageUsage::COLOR_TARGET | ImageUsage::COPY_SRC,
+        })
+        .unwrap();
+    host.load("mesh.luau", MESH_SCRIPT).expect("load");
+    host.call_in_frame("init", ()).expect("init");
+    println!("## mesh: {} on {}\n", VM_NAME, device_line(&host));
+    println!("CPU time to record one frame, median of {frames} frames.\n");
+    println!("| variant | 100 objects | 1000 objects | 10000 objects | per object at 1000 |");
+    println!("| --- | --- | --- | --- | --- |");
+    for (function, name) in [
+        ("draws_only", "`draw_indexed` only"),
+        (
+            "push_and_draw",
+            "16 `buffer.writef32` + `push` + `draw_indexed`",
+        ),
+        (
+            "one_instanced_draw",
+            "1 `writef32` each, 1 `write_buffer`, 1 instanced draw",
+        ),
+        (
+            "one_instanced_draw_full",
+            "17 `writef32` each, 1 `write_buffer`, 1 instanced draw",
+        ),
+        (
+            "matrix_products",
+            "a 4x4 matrix product on tables, three nested loops (no GPU call)",
+        ),
+        (
+            "matrix_products_unrolled",
+            "a 4x4 matrix product on tables, written out (no GPU call)",
+        ),
+        (
+            "matrix_products_buffer",
+            "a 4x4 matrix product inside a buffer (no GPU call)",
+        ),
+    ] {
+        let f: mlua::Function = host.lua().globals().get(function).unwrap();
+        let mut cells = Vec::new();
+        let mut per_object = 0.0;
+        for n in [100usize, 1000, 10_000] {
+            let mut times = Vec::new();
+            for frame in 0..frames + 5 {
+                host.gpu().begin_frame().unwrap();
+                let start = Instant::now();
+                f.call::<()>((target.to_bits(), n)).unwrap();
+                let elapsed = start.elapsed();
+                host.gpu().end_frame().unwrap();
+                host.gpu().wait_idle().unwrap();
+                if frame >= 5 {
+                    times.push(micros(elapsed));
+                }
+            }
+            let median = Dist::new(times).median();
+            cells.push(format!("{median:.1} µs"));
+            if n == 1000 {
+                per_object = median;
+            }
+        }
+        println!("| {name} | {} | {per_object:.0} ns |", cells.join(" | "));
+    }
+    println!();
+}
+
+#[cfg(not(feature = "luau"))]
+fn mesh(_quick: bool) {
+    println!("## mesh: needs the Luau VM (`buffer`)\n");
+}
+
+/// The script of the `scene3d` benchmark: many lit, textured cubes with a
+/// depth attachment, with and without multisampling.
+#[cfg(feature = "luau")]
+const SCENE_SCRIPT: &str = r#"
+local SHADER = [[
+struct Scene { view_proj: mat4x4<f32>, light: vec4<f32> }
+@group(0) @binding(0) var<uniform> scene: Scene;
+@group(0) @binding(1) var<storage, read> models: array<mat4x4<f32>>;
+@group(0) @binding(2) var albedo: texture_2d<f32>;
+@group(0) @binding(3) var albedo_sampler: sampler;
+
+struct VsOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+}
+
+@vertex
+fn vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>,
+      @builtin(instance_index) instance: u32) -> VsOut {
+    var out: VsOut;
+    let model = models[instance];
+    out.position = scene.view_proj * model * vec4(position, 1.0);
+    out.normal = (model * vec4(normal, 0.0)).xyz;
+    out.uv = uv;
+    return out;
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    let diffuse = max(dot(normalize(in.normal), -scene.light.xyz), 0.0) * 0.8 + 0.2;
+    return vec4(textureSample(albedo, albedo_sampler, in.uv).rgb * diffuse, 1.0);
+}
+]]
+
+local COUNT = 1000
+local STRIDE = 32
+local pipelines = {}
+local vertices, indices, scene_slot, models_slot, texture_slot, sampler
+local targets = {}
+
+local FACES = {
+    { n = vector.create(1, 0, 0), u = vector.create(0, 0, -1), v = vector.create(0, 1, 0) },
+    { n = vector.create(-1, 0, 0), u = vector.create(0, 0, 1), v = vector.create(0, 1, 0) },
+    { n = vector.create(0, 1, 0), u = vector.create(1, 0, 0), v = vector.create(0, 0, -1) },
+    { n = vector.create(0, -1, 0), u = vector.create(1, 0, 0), v = vector.create(0, 0, 1) },
+    { n = vector.create(0, 0, 1), u = vector.create(1, 0, 0), v = vector.create(0, 1, 0) },
+    { n = vector.create(0, 0, -1), u = vector.create(-1, 0, 0), v = vector.create(0, 1, 0) },
+}
+
+-- Column by column, as WGSL lays a matrix out.
+local function write_columns(data, offset, m)
+    for c = 0, 3 do
+        for r = 0, 3 do
+            buffer.writef32(data, offset + (c * 4 + r) * 4, m[r * 4 + c + 1])
+        end
+    end
+end
+
+function init(width, height)
+    local vs = gfx.create_shader({ stage = "vertex", source = SHADER, entry = "vs" })
+    local fs = gfx.create_shader({ stage = "fragment", source = SHADER, entry = "fs" })
+    for _, samples in { 1, 4 } do
+        pipelines[samples] = gfx.create_render_pipeline({
+            vertex = vs,
+            fragment = fs,
+            vertex_buffers = {
+                {
+                    stride = STRIDE,
+                    attributes = {
+                        { location = 0, format = "f32x3", offset = 0 },
+                        { location = 1, format = "f32x3", offset = 12 },
+                        { location = 2, format = "f32x2", offset = 24 },
+                    },
+                },
+            },
+            targets = { { format = "rgba16float" } },
+            depth = { format = "d32float" },
+            cull = "back",
+            samples = samples,
+        })
+        local t = { samples = samples }
+        t.depth = gfx.create_image({ format = "d32float", width = width, height = height, samples = samples, usage = { "depth_target" } })
+        t.resolved = gfx.create_image({ format = "rgba16float", width = width, height = height, usage = { "color_target", "sampled" } })
+        if samples > 1 then
+            t.color = gfx.create_image({ format = "rgba16float", width = width, height = height, samples = samples, usage = { "color_target" } })
+        end
+        targets[samples] = t
+    end
+
+    local vertex_data = buffer.create(24 * STRIDE)
+    local index_data = buffer.create(36 * 2)
+    for f, face in FACES do
+        for k, corner in { { -1, -1 }, { 1, -1 }, { 1, 1 }, { -1, 1 } } do
+            local p = (face.n + face.u * corner[1] + face.v * corner[2]) * 0.5
+            local at = ((f - 1) * 4 + k - 1) * STRIDE
+            buffer.writef32(vertex_data, at, p.x)
+            buffer.writef32(vertex_data, at + 4, p.y)
+            buffer.writef32(vertex_data, at + 8, p.z)
+            buffer.writef32(vertex_data, at + 12, face.n.x)
+            buffer.writef32(vertex_data, at + 16, face.n.y)
+            buffer.writef32(vertex_data, at + 20, face.n.z)
+            buffer.writef32(vertex_data, at + 24, corner[1] * 0.5 + 0.5)
+            buffer.writef32(vertex_data, at + 28, corner[2] * 0.5 + 0.5)
+        end
+        for k, i in { 0, 1, 2, 0, 2, 3 } do
+            buffer.writeu16(index_data, ((f - 1) * 6 + k - 1) * 2, (f - 1) * 4 + i)
+        end
+    end
+    vertices = gfx.create_buffer({ size = buffer.len(vertex_data), usage = { "vertex" } })
+    gfx.write_buffer(vertices, 0, vertex_data)
+    indices = gfx.create_buffer({ size = buffer.len(index_data), usage = { "index" } })
+    gfx.write_buffer(indices, 0, index_data)
+
+    -- A grid of cubes, 40 across, receding from the camera.
+    local model_data = buffer.create(COUNT * 64)
+    for i = 0, COUNT - 1 do
+        local x = (i % 40 - 19.5) * 1.6
+        local z = -math.floor(i / 40) * 1.6
+        write_columns(model_data, i * 64, { 1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, z, 0, 0, 0, 1 })
+    end
+    local models = gfx.create_buffer({ size = COUNT * 64, usage = { "storage" } })
+    gfx.write_buffer(models, 0, model_data)
+    models_slot = gfx.create_storage_buffer_slot(models, 0, COUNT * 64)
+
+    -- The camera sits above the grid and looks along it.
+    local f = 1 / math.tan(math.rad(50) / 2)
+    local near, far = 0.1, 200
+    local aspect = width / height
+    local c, s = math.cos(0.45), math.sin(0.45)
+    local eye_y, eye_z = 9, 12
+    -- projection * rotation about x * translation, multiplied out.
+    local ty = -(c * eye_y - s * eye_z)
+    local tz = -(s * eye_y + c * eye_z)
+    local a, b = far / (near - far), near * far / (near - far)
+    local view_proj = {
+        f / aspect, 0, 0, 0,
+        0, -f * c, f * s, -f * ty,
+        0, a * s, a * c, a * tz + b,
+        0, -s, -c, -tz,
+    }
+    local scene_data = buffer.create(80)
+    write_columns(scene_data, 0, view_proj)
+    buffer.writef32(scene_data, 64, -0.37)
+    buffer.writef32(scene_data, 68, -0.74)
+    buffer.writef32(scene_data, 72, -0.56)
+    local scene = gfx.create_buffer({ size = 256, usage = { "uniform" } })
+    gfx.write_buffer(scene, 0, scene_data)
+    scene_slot = gfx.create_uniform_slot(scene, 0, 80)
+
+    local size = 256
+    local texels = buffer.create(size * size * 4)
+    for y = 0, size - 1 do
+        for x = 0, size - 1 do
+            local light = (bit32.band(x, 16) == 0) == (bit32.band(y, 16) == 0)
+            local v = if light then 230 else 70
+            buffer.writeu32(texels, (y * size + x) * 4, 0xff000000 + v * 0x010101)
+        end
+    end
+    local texture = gfx.create_image({ format = "rgba8unorm", width = size, height = size, mip_levels = 9, usage = { "sampled", "copy_src", "copy_dst" } })
+    gfx.upload_image(texture, texels)
+    gfx.generate_mipmaps(texture)
+    texture_slot = gfx.create_texture_slot(texture)
+    sampler = gfx.create_sampler({ mip = "linear", anisotropy = 8, address_u = "repeat", address_v = "repeat" })
+end
+
+function frame(samples)
+    local t = targets[samples]
+    local color = { image = t.resolved, load = "clear", clear = { 0.02, 0.03, 0.05, 1 } }
+    if samples > 1 then
+        color = { image = t.color, load = "clear", clear = { 0.02, 0.03, 0.05, 1 }, store = false, resolve = t.resolved }
+    end
+    gfx.begin_pass({ color = { color }, depth = { image = t.depth, store = false } })
+    gfx.set_pipeline(pipelines[samples])
+    gfx.set_vertex_buffer(0, vertices)
+    gfx.set_index_buffer(indices, "u16")
+    gfx.bind(0, scene_slot)
+    gfx.bind(1, models_slot)
+    gfx.bind(2, texture_slot)
+    gfx.bind(3, sampler)
+    gfx.draw_indexed(36, COUNT)
+    gfx.end_pass()
+end
+
+function resolved(samples)
+    return targets[samples].resolved
+end
+"#;
+
+/// A 3D scene at full HD: what a frame with a depth attachment costs the
+/// GPU, with one sample per pixel and with four.
+#[cfg(feature = "luau")]
+fn scene3d(quick: bool) {
+    const WIDTH: u32 = 1920;
+    const HEIGHT: u32 = 1080;
+    let frames = if quick { 10 } else { 60 };
+    let gpu = Gpu::new(GpuConfig::from_env()).expect("gpu");
+    let host = ScriptHost::new(
+        gpu,
+        HostOptions {
+            memory_limit: None,
+            ..HostOptions::default()
+        },
+    )
+    .expect("host");
+    host.load("scene3d.luau", SCENE_SCRIPT).expect("load");
+    host.call_in_frame("init", (WIDTH, HEIGHT)).expect("init");
+    println!("## scene3d: {} on {}\n", VM_NAME, device_line(&host));
+    println!(
+        "1000 textured cubes in one instanced draw, {WIDTH}x{HEIGHT}, rgba16float and d32float, a mipmapped texture read with an anisotropic sampler. Median of {frames} frames.\n"
+    );
+    println!("| samples | record | submit | GPU (until idle) |");
+    println!("| --- | --- | --- | --- |");
+    let frame: mlua::Function = host.lua().globals().get("frame").unwrap();
+    for samples in [1u32, 4] {
+        let (mut record, mut submit, mut wait) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..frames + 3 {
+            host.gpu().begin_frame().unwrap();
+            let t0 = Instant::now();
+            frame.call::<()>(samples).unwrap();
+            let t1 = Instant::now();
+            host.gpu().end_frame().unwrap();
+            let t2 = Instant::now();
+            host.gpu().wait_idle().unwrap();
+            let t3 = Instant::now();
+            if i >= 3 {
+                record.push(micros(t1 - t0));
+                submit.push(micros(t2 - t1));
+                wait.push(micros(t3 - t2));
+            }
+        }
+        println!(
+            "| {samples} | {:.1} µs | {:.1} µs | {:.2} ms |",
+            Dist::new(record).median(),
+            Dist::new(submit).median(),
+            Dist::new(wait).median() / 1000.0
+        );
+    }
+    println!();
+}
+
+#[cfg(not(feature = "luau"))]
+fn scene3d(_quick: bool) {
+    println!("## scene3d: needs the Luau VM (`buffer`)\n");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let quick = args.iter().any(|a| a == "--quick");
@@ -687,11 +1242,15 @@ fn main() {
         "frame4k" => frame4k(quick),
         "gc" => gc(quick),
         "reload" => reload(quick),
+        "mesh" => mesh(quick),
+        "scene3d" => scene3d(quick),
         "all" => {
             calls(quick);
             frame4k(quick);
             gc(quick);
             reload(quick);
+            mesh(quick);
+            scene3d(quick);
         }
         other => {
             eprintln!("unknown benchmark `{other}`");

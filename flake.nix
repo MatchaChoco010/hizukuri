@@ -55,6 +55,9 @@
         # of the C library, not the 0.4 that nixpkgs ships as the default.
         libdisplay-info_0_3
         vulkan-loader
+        # OpenColorIO, linked as a shared library (prototype/ocio finds it
+        # through pkg-config).
+        opencolorio
       ];
 
       # Libraries that are opened with dlopen() at run time. They are put on

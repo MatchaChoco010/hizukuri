@@ -18,6 +18,10 @@
 --   L / H          focus the window to the right / left
 --   Shift+L / H    swap the focused window with its right / left neighbour
 --   Q              ask the focused window to close
+--   Return         start a terminal: the command in the environment variable
+--                  HIZUKURI_TERMINAL (words separated by spaces), or `foot`
+-- While the focused window asks for the compositor's shortcuts
+-- (keyboard-shortcuts-inhibit), none of these keys is taken.
 --   Escape         free the pointer from a lock or confinement (a game that
 --                  holds the pointer); it is not held again until the
 --                  focus moves or the pointer comes back onto the window
@@ -30,7 +34,16 @@
 
 local T = {}
 
-local KEY_ESC, KEY_Q, KEY_H, KEY_L = 1, 16, 35, 38
+local KEY_ESC, KEY_Q, KEY_H, KEY_L, KEY_ENTER = 1, 16, 35, 38, 28
+
+-- The command a terminal is started with.
+local function terminal()
+    local argv = {}
+    for word in string.gmatch(hz.env("HIZUKURI_TERMINAL") or "foot", "%S+") do
+        table.insert(argv, word)
+    end
+    return argv
+end
 
 -- Window ids, left to right.
 local order = {}
@@ -284,14 +297,27 @@ end
 -- Returns true for keys this window manager uses, so that they do not reach
 -- a client.
 function T.key(keycode, pressed, mods)
-    if not mods.logo then
+    -- A window that asked for the compositor's shortcuts (a nested
+    -- compositor, a remote desktop) gets them while it has the focus.
+    if not mods.logo or mods.inhibited then
         return false
     end
-    if keycode ~= KEY_H and keycode ~= KEY_L and keycode ~= KEY_Q and keycode ~= KEY_ESC then
+    if
+        keycode ~= KEY_H
+        and keycode ~= KEY_L
+        and keycode ~= KEY_Q
+        and keycode ~= KEY_ESC
+        and keycode ~= KEY_ENTER
+    then
         return false
     end
     if pressed then
-        if keycode == KEY_ESC then
+        if keycode == KEY_ENTER then
+            local _, problem = hz.spawn(terminal())
+            if problem then
+                hz.log("could not start a terminal: " .. problem)
+            end
+        elseif keycode == KEY_ESC then
             hz.release_pointer_constraint()
         elseif keycode == KEY_L then
             step(1, mods.shift)

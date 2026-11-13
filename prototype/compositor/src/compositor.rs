@@ -26,22 +26,24 @@
 //! that steps the compositor by hand.
 
 mod constraints;
+mod selection;
 mod touch;
 
 use std::collections::HashMap;
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::wm::{Point, Rect, Size};
+use crate::wm::{Placement, Point, Rect, Size};
 use proto_backend::{
-    AxisSource, Backend, BackendError, BackendEvent, InputEvent, OutputInfo, TimeSource,
+    AxisSource, Backend, BackendError, BackendEvent, InputEvent, LogoKey, OutputInfo,
+    TextInputState, TimeSource,
 };
 use proto_color::{
     AlphaMode, CompositeSpace, DecodeTransform, EncodeTransform, ImageDescription, Primaries,
 };
 
 use crate::fallback;
-use crate::wm::{Modifiers, WindowManager, WmRequest};
+use crate::wm::{ButtonUse, Modifiers, WindowManager, WmRequest};
 use proto_wl::{
     CursorState, OutputConfig, ServerConfig, SurfaceId, SurfaceRole, WlError, WlEvent, WlServer,
 };
@@ -131,6 +133,8 @@ pub struct Compositor<B: Backend> {
     pointer_active: bool,
     /// The modifier keys that are held.
     modifiers: Modifiers,
+    /// The key the person presses for the logo key (the backend says).
+    logo_key: LogoKey,
     /// Keys whose press the window manager (or the core) used. Their
     /// release is not passed to a client either.
     swallowed_keys: Vec<u32>,
@@ -139,6 +143,10 @@ pub struct Compositor<B: Backend> {
     /// The surface that receives pointer events while a button is held: the
     /// one the first button was pressed on.
     pointer_grab: Option<SurfaceId>,
+    /// Whether the window manager holds the pointer
+    /// ([`ButtonUse::Taken`]): until every button is released, no client
+    /// sees the pointer.
+    pointer_taken: bool,
     /// Where the pointer was last reported to clients: the surface and the
     /// position inside it.
     pointer_sent: Option<(SurfaceId, (f64, f64))>,
@@ -156,8 +164,21 @@ pub struct Compositor<B: Backend> {
     x11: Option<X11Status>,
     /// What the core remembers about touches and gestures.
     touch: touch::TouchState,
+    /// When the frame callbacks of hidden windows were last let through
+    /// (on the frame clock).
+    hidden_released: Duration,
+    /// What the backend was last told of the enabled text input, for an
+    /// input method outside.
+    text_input_sent: Option<TextInputState>,
     quit: bool,
 }
+
+/// How often the frame callbacks of a hidden window are let through
+/// anyway: a client that waits for one where it reads nothing else (a
+/// buffer swap with a swap interval of one) still answers a request to
+/// close within this time. Smithay's example compositor (anvil) throttles
+/// the frame callbacks of surfaces that are not shown the same way.
+const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
 
 fn to_wl(id: WmWindowId) -> WlWindowId {
     proto_wl::WindowId(id.0)
@@ -197,9 +218,11 @@ impl<B: Backend> Compositor<B> {
             pointer: (0.0, 0.0),
             pointer_active: false,
             modifiers: Modifiers::default(),
+            logo_key: LogoKey::Super,
             swallowed_keys: Vec::new(),
             buttons_down: 0,
             pointer_grab: None,
+            pointer_taken: false,
             pointer_sent: None,
             configured: HashMap::new(),
             start: Instant::now(),
@@ -208,6 +231,8 @@ impl<B: Backend> Compositor<B> {
             constraints: Default::default(),
             x11: None,
             touch: Default::default(),
+            hidden_released: Duration::ZERO,
+            text_input_sent: None,
             quit: false,
         };
         // Pick up the outputs the backend announced at startup.
@@ -285,14 +310,107 @@ impl<B: Backend> Compositor<B> {
             }
             self.sync_world();
             self.run_window_manager();
+            self.sync_visibility();
             for request in self.scene.take_requests() {
                 match request {
                     SceneRequest::Redraw => self.schedule_redraw(),
+                    SceneRequest::OutputImageDescription {
+                        output,
+                        description,
+                    } => {
+                        let id = self
+                            .outputs
+                            .iter()
+                            .find(|o| o.info.name == output)
+                            .map(|o| o.info.id);
+                        // The backend reports the change (`OutputChanged`),
+                        // which reaches clients and the scene.
+                        let result = id
+                            .ok_or_else(|| format!("unknown output {output:?}"))
+                            .and_then(|id| {
+                                self.backend
+                                    .set_output_image_description(id, description)
+                                    .map_err(|e| e.to_string())
+                            });
+                        if let Err(error) = result {
+                            tracing::warn!(
+                                "the image description of output {output} stays as it is: {error}"
+                            );
+                        }
+                        self.schedule_redraw();
+                    }
                 }
             }
         }
+        self.sync_text_input();
+        self.release_hidden_frame_callbacks();
         self.wl.flush_clients()?;
         Ok(())
+    }
+
+    /// Tells the backend about the enabled text input, for an input method
+    /// outside, when that changed: its state, and where its cursor is seen.
+    fn sync_text_input(&mut self) {
+        let state = self.wl.outside_text_input().map(|text_input| {
+            let content = text_input.content;
+            let cursor = content.cursor.and_then(|(x, y, w, h)| {
+                let windows = self.window_views();
+                let (x, y, w, h) = self.scene.project_rect(
+                    text_input.surface,
+                    (f64::from(x), f64::from(y), f64::from(w), f64::from(h)),
+                    &windows,
+                )?;
+                // Outward to whole logical pixels.
+                let (left, top) = (x.floor(), y.floor());
+                let (right, bottom) = ((x + w).ceil(), (y + h).ceil());
+                Some((
+                    left as i32,
+                    top as i32,
+                    ((right - left) as i32).max(1),
+                    ((bottom - top) as i32).max(1),
+                ))
+            });
+            TextInputState {
+                activation: text_input.activation,
+                surrounding: content.surrounding,
+                change_cause: content.change_cause,
+                content_hint: content.content_hint,
+                content_purpose: content.content_purpose,
+                cursor,
+            }
+        });
+        if state != self.text_input_sent {
+            self.backend.set_text_input(state.as_ref());
+            self.text_input_sent = state;
+        }
+    }
+
+    /// Makes the protocol side agree with the window manager about which
+    /// windows are seen. A window that is seen again has waited for its
+    /// frame callbacks: they go now, so that what it draws is there for
+    /// the next frame rather than the one after.
+    fn sync_visibility(&mut self) {
+        let time_ms = self.start.elapsed().as_millis() as u32;
+        for placement in self.wm.placements() {
+            let window = placement.window;
+            let visible = self.wm.is_visible(window);
+            if self.wl.set_window_visible(to_wl(window), visible) && visible {
+                self.wl.send_window_frame_callbacks(to_wl(window), time_ms);
+            }
+        }
+    }
+
+    /// Lets the frame callbacks of hidden windows through, at most once
+    /// per [`HIDDEN_FRAME_INTERVAL`] of the frame clock. The event loop
+    /// wakes the core at least that often.
+    fn release_hidden_frame_callbacks(&mut self) {
+        let now = self.options.clock.now();
+        if now.saturating_sub(self.hidden_released) < HIDDEN_FRAME_INTERVAL {
+            return;
+        }
+        self.hidden_released = now;
+        self.wl
+            .send_hidden_frame_callbacks(self.start.elapsed().as_millis() as u32);
     }
 
     /// Lets the window manager react to what happened, and makes the scene
@@ -352,6 +470,8 @@ impl<B: Backend> Compositor<B> {
                     min_size: info.as_ref().map_or((0, 0), |i| i.min_size),
                     max_size: info.as_ref().map_or((0, 0), |i| i.max_size),
                     x11: self.is_x11(info.as_ref()),
+                    visible: info.as_ref().is_none_or(|i| i.visible),
+                    suspended: info.as_ref().is_some_and(|i| i.suspended),
                 }
             })
             .collect();
@@ -363,6 +483,7 @@ impl<B: Backend> Compositor<B> {
             cursor: self.cursor_view(),
             drag_icon: self.drag_icon_views(),
             background: self.options.background,
+            logo_key: self.logo_key,
         }
     }
 
@@ -397,6 +518,30 @@ impl<B: Backend> Compositor<B> {
                 }
             }
             BackendEvent::Input(input) => self.handle_input(input),
+            BackendEvent::Keymap(keymap) => match self.wl.set_keymap(keymap) {
+                Ok(()) => tracing::info!("the seat uses the keymap of the backend"),
+                Err(error) => tracing::warn!("the keymap of the backend is unusable: {error}"),
+            },
+            BackendEvent::LogoKey(key) => {
+                if key != self.logo_key {
+                    self.logo_key = key;
+                    self.sync_world();
+                    self.wm.logo_key_changed(key);
+                    self.run_window_manager();
+                }
+            }
+            BackendEvent::TextInputAvailable(available) => {
+                self.wl.set_outside_input_method(available);
+            }
+            BackendEvent::TextCompose(compose) => {
+                self.wl
+                    .outside_input_method_compose(&proto_wl::OutsideCompose {
+                        preedit: compose.preedit,
+                        commit: compose.commit,
+                        delete: compose.delete,
+                        stale: compose.stale,
+                    });
+            }
             BackendEvent::SessionPaused => {
                 tracing::info!("session paused");
             }
@@ -412,6 +557,7 @@ impl<B: Backend> Compositor<B> {
                 tracing::info!("quit requested by the backend");
                 self.quit = true;
             }
+            BackendEvent::Selection(event) => self.backend_selection(event),
         }
         Ok(())
     }
@@ -527,7 +673,12 @@ impl<B: Backend> Compositor<B> {
                 {
                     self.wm.set_window_size(to_wm(id), Size::new(w, h));
                 }
-                self.schedule_redraw();
+                // What a hidden window draws is not seen: no frame for it.
+                // The scene takes it with the next frame drawn for another
+                // reason.
+                if self.wm.is_visible(to_wm(id)) {
+                    self.schedule_redraw();
+                }
                 self.refresh_pointer_focus();
             }
             WlEvent::WindowDestroyed(id) => {
@@ -567,6 +718,7 @@ impl<B: Backend> Compositor<B> {
                 }
                 self.update_pointer_constraints();
             }
+            WlEvent::Selection(event) => self.client_selection(event),
         }
     }
 
@@ -606,16 +758,22 @@ impl<B: Backend> Compositor<B> {
                 time_us,
             } => {
                 self.modifiers.update(keycode, pressed);
+                self.modifiers.inhibited = self.wl.shortcuts_inhibited();
+                // The keymap sees every key, also the ones kept from the
+                // clients: what a key types depends on all the keys held.
+                let symbol = self.wl.keyboard_key_input(keycode, pressed);
+                let absorbed = symbol.is_none();
+                let symbol = symbol.unwrap_or_default();
                 let used = if pressed {
-                    let used =
-                        self.emergency_key(keycode) || self.wm.key(keycode, true, self.modifiers);
+                    let used = self.emergency_key(keycode)
+                        || self.wm.key(keycode, true, self.modifiers, &symbol);
                     if used {
                         self.swallowed_keys.push(keycode);
                     }
                     used
                 } else if let Some(index) = self.swallowed_keys.iter().position(|k| *k == keycode) {
                     self.swallowed_keys.remove(index);
-                    self.wm.key(keycode, false, self.modifiers);
+                    self.wm.key(keycode, false, self.modifiers, &symbol);
                     true
                 } else {
                     false
@@ -623,8 +781,8 @@ impl<B: Backend> Compositor<B> {
                 if used {
                     self.sync_world();
                     self.run_window_manager();
-                } else {
-                    self.wl.keyboard_key(keycode, pressed, time_us);
+                } else if !absorbed {
+                    self.wl.keyboard_key_forward(keycode, pressed, time_us);
                 }
             }
             InputEvent::PointerMotion {
@@ -644,8 +802,43 @@ impl<B: Backend> Compositor<B> {
                 pressed,
                 time_us,
             } => {
+                if self.pointer_taken {
+                    // The window manager holds the pointer: its buttons
+                    // reach no client.
+                    self.wm
+                        .pointer_button(button, pressed, None, self.modifiers);
+                    if pressed {
+                        self.buttons_down += 1;
+                    } else {
+                        self.buttons_down = self.buttons_down.saturating_sub(1);
+                    }
+                    if self.buttons_down == 0 {
+                        self.pointer_taken = false;
+                    }
+                    self.sync_world();
+                    self.run_window_manager();
+                    self.schedule_redraw();
+                    if !self.pointer_taken {
+                        // Back to whatever is under the pointer now.
+                        self.refresh_pointer_focus();
+                    }
+                    return;
+                }
                 let hit = self.surface_under(self.pointer);
-                let decided = self.wm.pointer_button(button, pressed, hit.as_ref());
+                let answer = self
+                    .wm
+                    .pointer_button(button, pressed, hit.as_ref(), self.modifiers);
+                if pressed && self.buttons_down == 0 && answer == ButtonUse::Taken {
+                    self.pointer_taken = true;
+                    self.buttons_down = 1;
+                    self.sync_world();
+                    self.run_window_manager();
+                    self.schedule_redraw();
+                    // Clients see the pointer leave.
+                    self.refresh_pointer_focus();
+                    return;
+                }
+                let decided = answer != ButtonUse::Unused;
                 if pressed {
                     if !decided {
                         self.focus_window_under_pointer();
@@ -774,6 +967,10 @@ impl<B: Backend> Compositor<B> {
     /// The surface the pointer belongs to at a position of the screen, and
     /// the position inside that surface.
     fn pointer_target(&self, position: (f64, f64)) -> Option<(SurfaceId, (f64, f64))> {
+        // While the window manager holds the pointer, it is on no surface.
+        if self.pointer_taken {
+            return None;
+        }
         // A lock or confinement in effect holds the pointer on its surface,
         // whatever is drawn above it.
         if let Some(surface) = self.constrained_surface() {
@@ -804,6 +1001,12 @@ impl<B: Backend> Compositor<B> {
         self.pointer_active = true;
         // Whoever answers must know the windows as they are now.
         self.sync_world();
+        if self.pointer_taken {
+            self.wm.pointer_motion(position);
+            self.run_window_manager();
+            self.schedule_redraw();
+            return;
+        }
         let target = self.pointer_target(position);
         self.pointer_sent = target;
         self.wl.pointer_motion(target, time_us);
@@ -914,7 +1117,7 @@ impl<B: Backend> Compositor<B> {
 
     /// Tells the protocol side where the layout put each window: which
     /// output it is on (clients are told, and pick their scale from it),
-    /// and the area its popups should stay in (that output).
+    /// and the area its popups should stay in ([`Self::popup_bounds`]).
     fn sync_placements(&mut self) {
         for placement in self.wm.placements() {
             let window = to_wl(placement.window);
@@ -922,25 +1125,32 @@ impl<B: Backend> Compositor<B> {
                 .output
                 .and_then(|id| self.outputs.iter().find(|o| o.layout == id));
             match output {
-                Some(output) => {
-                    self.wl.set_window_outputs(window, &[output.wl]);
-                    let area = Self::output_rect(&output.info);
-                    self.wl.set_popup_bounds(
-                        window,
-                        Some((
-                            area.x - placement.position.x,
-                            area.y - placement.position.y,
-                            area.width,
-                            area.height,
-                        )),
-                    );
-                }
-                None => {
-                    self.wl.set_window_outputs(window, &[]);
-                    self.wl.set_popup_bounds(window, None);
-                }
+                Some(output) => self.wl.set_window_outputs(window, &[output.wl]),
+                None => self.wl.set_window_outputs(window, &[]),
             }
+            let bounds = self.popup_bounds(&placement);
+            self.wl.set_popup_bounds(window, bounds);
         }
+    }
+
+    /// The area the popups of a window should stay in, relative to its
+    /// window geometry: what the window manager says (it draws the window
+    /// somewhere else than its placement), else the output the window is on
+    /// as it is placed there. `None` without either.
+    fn popup_bounds(&self, placement: &Placement) -> Option<(i32, i32, i32, i32)> {
+        if let Some(rect) = self.wm.popup_bounds(placement.window) {
+            return Some((rect.x, rect.y, rect.width, rect.height));
+        }
+        let output = placement
+            .output
+            .and_then(|id| self.outputs.iter().find(|o| o.layout == id))?;
+        let area = Self::output_rect(&output.info);
+        Some((
+            area.x - placement.position.x,
+            area.y - placement.position.y,
+            area.width,
+            area.height,
+        ))
     }
 
     /// The backend says the output can take a frame.
@@ -1242,6 +1452,15 @@ impl<B: Backend> Compositor<B> {
                 self.refresh_pointer_focus();
                 Ok(json!({}))
             }
+            Request::SetShortcutsInhibit { active } => {
+                if !self.wl.set_shortcuts_inhibit(*active) {
+                    return Err(
+                        "the surface with the keyboard focus did not ask to inhibit shortcuts"
+                            .to_string(),
+                    );
+                }
+                Ok(json!({}))
+            }
             Request::CloseWindow { window } => {
                 let id = crate::wm::WindowId(*window);
                 if self.wm.placement(id).is_none() {
@@ -1309,6 +1528,25 @@ impl<B: Backend> Compositor<B> {
             Request::ScriptMode { mode } => {
                 self.scene_control("script_mode", json!({ "mode": mode }))
             }
+            Request::OcioSet {
+                output,
+                display,
+                view,
+                exposure,
+                gamma,
+                clear,
+            } => self.scene_control(
+                "ocio_set",
+                json!({
+                    "output": output,
+                    "display": display,
+                    "view": view,
+                    "exposure": exposure,
+                    "gamma": gamma,
+                    "clear": clear,
+                }),
+            ),
+            Request::OcioState => self.scene_control("ocio_state", json!({})),
             Request::AdvanceClock { milliseconds } => {
                 if !(milliseconds.is_finite() && *milliseconds >= 0.0) {
                     return Err(format!("cannot move the clock by {milliseconds} ms"));
@@ -1362,7 +1600,7 @@ impl<B: Backend> Compositor<B> {
 
         let target = self
             .backend
-            .render_target(id)
+            .shown_target(id)
             .ok_or("the output has no render target (started with --no-drawing?)")?;
         let capture = self.scene.capture(target).map_err(|e| e.to_string())?;
         let encoded = capture.encoded;
@@ -1466,11 +1704,18 @@ impl<B: Backend> Compositor<B> {
                     "min_size": info.as_ref().map(|i| [i.min_size.0, i.min_size.1]),
                     "max_size": info.as_ref().map(|i| [i.max_size.0, i.max_size.1]),
                     "client_pid": info.as_ref().and_then(|i| i.client_pid),
+                    "visible": info.as_ref().is_none_or(|i| i.visible),
+                    "suspended": info.as_ref().is_some_and(|i| i.suspended),
                     "x11": self.is_x11(info.as_ref()),
                     "surface": info.as_ref().map(|i| i.surface.0),
                     "output": placement.output.map(|o| o.0),
                     "position": [placement.position.x, placement.position.y],
                     "size": placement.size.map(|s| [s.width, s.height]),
+                    // Where its popups are kept (x, y, width, height,
+                    // relative to the window geometry).
+                    "popup_bounds": self
+                        .popup_bounds(placement)
+                        .map(|(x, y, w, h)| [x, y, w, h]),
                     "visual": visual.map(|v| json!({
                         "position": [v.position.0, v.position.1],
                         "opacity": v.opacity,
@@ -1524,9 +1769,11 @@ impl<B: Backend> Compositor<B> {
             },
             "selection": self.wl.selection_mime_types(),
             "primary_selection": self.wl.primary_selection_mime_types(),
+            "selection_owners": self.describe_selection_owners(),
             // Locks and confinements clients asked for; `active` is in effect.
             "pointer_constraints": self.describe_pointer_constraints(),
             "input_method": input_method_json(&self.wl.input_method_status()),
+            "outside_input_method": self.wl.outside_input_method_serving(),
             "x11": self.x11.as_ref().map(|x11| json!({
                 "display": x11.display,
                 "satellite_pid": x11.satellite_pid,

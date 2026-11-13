@@ -234,6 +234,9 @@ pub fn isolate(command: &mut Command, runtime_dir: &Path) {
     command.env("XDG_RUNTIME_DIR", runtime_dir);
 }
 
+/// The arguments that select the headless backend.
+const HEADLESS: &[&str] = &["--backend", "headless"];
+
 /// A running compositor process and the files that belong to it.
 pub struct Session {
     child: Option<Child>,
@@ -276,6 +279,39 @@ impl Session {
         extra_args: &[&str],
         project: DefaultProject,
     ) -> Session {
+        Self::launch(
+            name,
+            device,
+            extra_args,
+            Self::new_runtime_dir(),
+            project,
+            HEADLESS,
+            &[],
+        )
+    }
+
+    /// Like [`Self::start`], with variables set in the compositor's
+    /// environment on top of what the harness gives it (where it looks for
+    /// the applications of the machine, a locale).
+    pub fn start_with_env(
+        name: &str,
+        device: Device,
+        extra_args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Session {
+        Self::launch(
+            name,
+            device,
+            extra_args,
+            Self::new_runtime_dir(),
+            DefaultProject::DrawOnly,
+            HEADLESS,
+            env,
+        )
+    }
+
+    /// A runtime directory for one session.
+    fn new_runtime_dir() -> PathBuf {
         let unique = format!(
             "hzk-t-{}-{}",
             std::process::id(),
@@ -295,7 +331,49 @@ impl Session {
             std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))
                 .expect("restricting the runtime directory");
         }
-        Self::launch(name, device, extra_args, runtime_dir, project)
+        runtime_dir
+    }
+
+    /// Starts a compositor as a window of `parent` (the nested backend), in
+    /// a runtime directory of its own. The only compositor it can reach is
+    /// `parent`, by the path of its socket.
+    pub fn start_nested(
+        name: &str,
+        device: Device,
+        parent: &Session,
+        extra_args: &[&str],
+    ) -> Session {
+        Self::launch_nested(name, device, parent, extra_args, DefaultProject::DrawOnly)
+    }
+
+    /// Like [`Self::start_nested`], with the built-in project, which tiles
+    /// the windows.
+    pub fn start_nested_builtin(
+        name: &str,
+        device: Device,
+        parent: &Session,
+        extra_args: &[&str],
+    ) -> Session {
+        Self::launch_nested(name, device, parent, extra_args, DefaultProject::Builtin)
+    }
+
+    fn launch_nested(
+        name: &str,
+        device: Device,
+        parent: &Session,
+        extra_args: &[&str],
+        project: DefaultProject,
+    ) -> Session {
+        let socket = parent.wayland_socket.to_str().expect("a UTF-8 path");
+        Self::launch(
+            name,
+            device,
+            extra_args,
+            Self::new_runtime_dir(),
+            project,
+            &["--backend", "nested", "--nested-socket", socket],
+            &[],
+        )
     }
 
     /// Like [`Self::start`], in a runtime directory that already exists
@@ -312,6 +390,8 @@ impl Session {
             extra_args,
             runtime_dir,
             DefaultProject::DrawOnly,
+            HEADLESS,
+            &[],
         )
     }
 
@@ -321,6 +401,8 @@ impl Session {
         extra_args: &[&str],
         runtime_dir: PathBuf,
         project: DefaultProject,
+        backend: &[&str],
+        env: &[(&str, &str)],
     ) -> Session {
         // target/tmp is CARGO_TARGET_TMPDIR; results go next to it.
         let output_dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -337,15 +419,23 @@ impl Session {
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_proto-compositor"));
         command
-            .args(["--backend", "headless", "--socket", socket_name])
-            .args(["--exit-after", "120"])
+            .args(backend)
+            .args(["--socket", socket_name])
             .args(extra_args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(
                 std::fs::File::create(output_dir.join("proto-compositor.log")).expect("log file"),
             );
+        // A process that the test fails to stop does not linger. A test
+        // that runs longer says for how long.
+        if !extra_args.contains(&"--exit-after") {
+            command.args(["--exit-after", "120"]);
+        }
         isolate(&mut command, &runtime_dir);
+        for (variable, value) in env {
+            command.env(variable, value);
+        }
         if project == DefaultProject::DrawOnly && !extra_args.contains(&"--script") {
             command.arg("--script").arg(draw_only_project());
         }
@@ -364,6 +454,14 @@ impl Session {
         // budget itself passes its own.
         if !extra_args.contains(&"--script-budget-ms") {
             command.args(["--script-budget-ms", "120000"]);
+        }
+        // OCIO shaders a session compiles stay with the session, out of the
+        // cache directory of whoever runs the tests.
+        #[cfg(feature = "ocio")]
+        if !extra_args.contains(&"--ocio-cache") {
+            command
+                .arg("--ocio-cache")
+                .arg(runtime_dir.join("ocio-cache"));
         }
         match device.gpu {
             Gpu::Hardware => {
@@ -770,6 +868,52 @@ impl Drop for ClientProcess {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+/// Waits for a file to appear and returns its text. Whoever writes it
+/// should write it under another name and rename it, so that it is read
+/// whole.
+pub fn wait_for_file(path: &Path) -> String {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{} did not appear",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Makes compositors started after this start a stand-in when the built-in
+/// project is asked for a terminal (`HIZUKURI_TERMINAL`): a script that
+/// writes the `WAYLAND_DISPLAY` it was given to the file `terminal` in its
+/// `XDG_RUNTIME_DIR` (the session's [`Session::runtime_dir`]).
+pub fn use_terminal_stand_in() {
+    let script = Path::new(env!("CARGO_TARGET_TMPDIR")).join("terminal-stand-in.sh");
+    if !script.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        let temporary = script.with_extension(format!(
+            "{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(
+            &temporary,
+            "#!/bin/sh\necho \"$WAYLAND_DISPLAY\" > \"$XDG_RUNTIME_DIR/terminal.tmp\" \
+             && mv \"$XDG_RUNTIME_DIR/terminal.tmp\" \"$XDG_RUNTIME_DIR/terminal\"\n",
+        )
+        .expect("writing the stand-in");
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755))
+            .expect("making the stand-in executable");
+        std::fs::rename(&temporary, &script).expect("placing the stand-in");
+    }
+    // SAFETY: every test that sets the variable sets it to the same value,
+    // and only the compositors started as child processes read it.
+    unsafe { std::env::set_var("HIZUKURI_TERMINAL", &script) };
 }
 
 /// Finds a mapped window by title in a state dump.

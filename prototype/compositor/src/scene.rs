@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use proto_backend::{OutputInfo, TargetError, TargetId, Targets};
+use proto_backend::{LogoKey, OutputInfo, TargetError, TargetId, Targets};
 use proto_color::{AlphaMode, ImageDescription};
 use proto_wl::{BufferContents, BufferTransform, BufferUpdate, DamageRect, SurfaceId};
 use serde_json::{Value, json};
@@ -138,6 +138,12 @@ pub struct WindowSnapshot {
     pub max_size: (i32, i32),
     /// The window is an X11 window, shown through xwayland-satellite.
     pub x11: bool,
+    /// Whether the window manager says the window is seen
+    /// ([`crate::wm::WindowManager::is_visible`]), as the core last applied.
+    pub visible: bool,
+    /// Whether its client is told it is suspended (it is not seen, and its
+    /// xdg-shell version has the state).
+    pub suspended: bool,
 }
 
 /// Everything the core knows that drawing or placing windows may depend on.
@@ -158,6 +164,8 @@ pub struct WorldSnapshot {
     /// The color outputs are cleared to (straight RGB, like content without
     /// color information).
     pub background: [f32; 3],
+    /// The key the person presses for the logo key.
+    pub logo_key: LogoKey,
 }
 
 /// When the frame that is about to be drawn is for. See
@@ -180,6 +188,13 @@ pub struct FrameTiming {
 pub enum SceneRequest {
     /// Draw another frame even if nothing else changed (animations).
     Redraw,
+    /// Drive the output with this name as another image description says,
+    /// and tell applications so. A backend that cannot refuses; the output
+    /// then stays as it is.
+    OutputImageDescription {
+        output: String,
+        description: proto_color::ImageDescription,
+    },
 }
 
 /// Errors of a scene.
@@ -319,6 +334,30 @@ pub trait Scene {
         surface: SurfaceId,
         windows: &[WindowView],
     ) -> Option<(f64, f64)>;
+
+    /// Where a rectangle of a surface is seen, in the global logical space:
+    /// the axis aligned box around it, after whatever the scene does to the
+    /// window. `rect` is (x, y, width, height) in the surface's
+    /// coordinates. Used to tell an input method outside where the text
+    /// cursor is. By default the window is drawn flat at its position.
+    fn project_rect(
+        &self,
+        surface: SurfaceId,
+        rect: (f64, f64, f64, f64),
+        windows: &[WindowView],
+    ) -> Option<(f64, f64, f64, f64)> {
+        let (window, view) = windows.iter().find_map(|window| {
+            let view = window.surfaces.iter().find(|s| s.surface == surface)?;
+            Some((window.window, view))
+        })?;
+        let origin = self.visual(window)?.position;
+        Some((
+            origin.0 + f64::from(view.offset.0) + rect.0,
+            origin.1 + f64::from(view.offset.1) + rect.1,
+            rect.2,
+            rect.3,
+        ))
+    }
 
     // -- verification -------------------------------------------------------
 

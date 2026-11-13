@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use rspirv::dr::{Instruction, Module, Operand};
 use rspirv::spirv::{self, Capability, Decoration, Op, StorageClass};
 
+use crate::device::OptionalFeatures;
 use crate::format::{Format, NumClass};
 use crate::shader::{
     BindingInfo, BindingKind, IoVar, MAX_BINDINGS, MAX_TEXTURE_ARRAY, Reflection, ShaderStage,
@@ -51,6 +52,51 @@ const ALLOWED_CAPABILITIES: &[Capability] = &[
     // shaderDemoteToHelperInvocation.
     Capability::DemoteToHelperInvocation,
 ];
+
+/// Capabilities whose device feature the API enables only when the device
+/// has it (`OptionalFeatures`). A module may use them on such a device.
+///
+/// - `DrawParameters`: `SV_VertexID`, `SV_InstanceID` and the base vertex
+///   and instance.
+/// - `ClipDistance`: user clip planes. The array is at most 8 long, which
+///   every device with the feature supports.
+/// - `SampleRateShading`, `InterpolationFunction`: shading per sample.
+/// - `Float16`, `Int8`, `Int16`, `Int64`: arithmetic in those types. Storing
+///   them in buffers needs further capabilities, which are not allowed.
+/// - `ImageGatherExtended`: gathers with offsets.
+pub(crate) fn optional_capabilities(optional: &OptionalFeatures) -> Vec<Capability> {
+    let mut caps = Vec::new();
+    let mut add = |enabled: bool, list: &[Capability]| {
+        if enabled {
+            caps.extend_from_slice(list);
+        }
+    };
+    add(
+        optional.shader_draw_parameters,
+        &[Capability::DrawParameters],
+    );
+    add(optional.shader_clip_distance, &[Capability::ClipDistance]);
+    add(
+        optional.sample_rate_shading,
+        &[
+            Capability::SampleRateShading,
+            Capability::InterpolationFunction,
+        ],
+    );
+    add(optional.shader_float16, &[Capability::Float16]);
+    add(optional.shader_int8, &[Capability::Int8]);
+    add(optional.shader_int16, &[Capability::Int16]);
+    add(optional.shader_int64, &[Capability::Int64]);
+    add(
+        optional.shader_image_gather_extended,
+        &[Capability::ImageGatherExtended],
+    );
+    caps
+}
+
+/// Longest `ClipDistance` array accepted: the least `maxClipDistances` of a
+/// device that has the feature.
+const MAX_CLIP_DISTANCES: u64 = 8;
 
 /// SPIR-V extensions that are core in Vulkan 1.4. Reflection decorations
 /// (`SPV_GOOGLE_*`) are stripped before the checks.
@@ -122,17 +168,39 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
+        // `NoContraction` belongs on the result of an arithmetic instruction.
+        // The validator lets it pass on a type, a variable or a struct
+        // member, which a driver's SPIR-V reader then complains about.
+        let no_contraction = Some(&Operand::Decoration(Decoration::NoContraction));
+        // (Slang decorates every arithmetic result when it compiles for
+        // precise floating point, so this is looked up, not searched.)
+        let computed: HashSet<u32> = module
+            .functions
+            .iter()
+            .flat_map(|f| &f.blocks)
+            .flat_map(|b| &b.instructions)
+            .filter(|i| i.class.opcode != Op::Variable)
+            .filter_map(|i| i.result_id)
+            .collect();
+        let is_computed = |target: u32| computed.contains(&target);
         let mut decorations: HashMap<u32, Vec<&Instruction>> = HashMap::new();
         let mut member_decorations: HashMap<(u32, u32), Vec<&Instruction>> = HashMap::new();
         for inst in &module.annotations {
             match inst.class.opcode {
                 Op::Decorate | Op::DecorateId => {
-                    decorations
-                        .entry(id(&inst.operands[0])?)
-                        .or_default()
-                        .push(inst);
+                    let target = id(&inst.operands[0])?;
+                    if inst.operands.get(1) == no_contraction && !is_computed(target) {
+                        return Err(
+                            "NoContraction decorates something that is not the result of an instruction"
+                                .into(),
+                        );
+                    }
+                    decorations.entry(target).or_default().push(inst);
                 }
                 Op::MemberDecorate => {
+                    if inst.operands.get(2) == no_contraction {
+                        return Err("NoContraction decorates a struct member".into());
+                    }
                     let key = (id(&inst.operands[0])?, lit(&inst.operands[1])?);
                     member_decorations.entry(key).or_default().push(inst);
                 }
@@ -208,6 +276,7 @@ impl<'a> Ctx<'a> {
         Some(match (signed, width) {
             (true, 32) => i64::from(value as u32 as i32),
             (true, 16) => i64::from(value as u16 as i16),
+            (true, 8) => i64::from(value as u8 as i8),
             _ => value as i64,
         })
     }
@@ -314,6 +383,19 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Bits of a numeric scalar or vector type; nothing for other types.
+    fn value_bits(&self, ty: u32) -> Option<u64> {
+        let inst = self.def(ty).ok()?;
+        match inst.class.opcode {
+            Op::TypeInt | Op::TypeFloat => Some(u64::from(lit(inst.operands.first()?).ok()?)),
+            Op::TypeVector => Some(
+                self.value_bits(id(inst.operands.first()?).ok()?)?
+                    * u64::from(lit(inst.operands.get(1)?).ok()?),
+            ),
+            _ => None,
+        }
+    }
+
     /// Whether `index` is known to be below `len`.
     fn index_in_range(&self, index: u32, len: u64) -> bool {
         if let Some(v) = self.constant(index) {
@@ -372,12 +454,25 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// Checks `words` and describes its interface for the GPU API.
+/// [`reflect_spirv_with`] for a device without any optional feature.
+#[cfg(test)]
 pub(crate) fn reflect_spirv(
     words: &[u32],
     stage: ShaderStage,
     entry: &str,
 ) -> Result<Reflection, String> {
+    reflect_spirv_with(words, stage, entry, &[])
+}
+
+/// Checks `words` and describes its interface for the GPU API. `optional`
+/// lists the capabilities the device has beyond [`ALLOWED_CAPABILITIES`].
+pub(crate) fn reflect_spirv_with(
+    words: &[u32],
+    stage: ShaderStage,
+    entry: &str,
+    optional: &[Capability],
+) -> Result<Reflection, String> {
+    let allowed = |c: &Capability| ALLOWED_CAPABILITIES.contains(c) || optional.contains(c);
     // Capabilities first, on the raw words, so that the refusal does not
     // depend on what the parser below understands.
     let mut at = 5;
@@ -389,7 +484,7 @@ pub(crate) fn reflect_spirv(
         }
         if op == Op::Capability as u32 {
             let cap = Capability::from_u32(words[at + 1]);
-            if !cap.is_some_and(|c| ALLOWED_CAPABILITIES.contains(&c)) {
+            if !cap.is_some_and(|c| allowed(&c)) {
                 return Err(format!(
                     "the shader needs capability {}, which is not available",
                     cap.map_or_else(|| words[at + 1].to_string(), |c| format!("{c:?}"))
@@ -410,7 +505,7 @@ pub(crate) fn reflect_spirv(
         let Operand::Capability(cap) = inst.operands[0] else {
             return Err("malformed OpCapability".into());
         };
-        if !ALLOWED_CAPABILITIES.contains(&cap) {
+        if !allowed(&cap) {
             return Err(format!(
                 "the shader needs capability {cap:?}, which is not available"
             ));
@@ -431,7 +526,7 @@ pub(crate) fn reflect_spirv(
         return Err("only the Logical addressing model is accepted".into());
     }
     let ctx = Ctx::new(&module)?;
-    check_layout_decorations(&module)?;
+    check_layout_decorations(&ctx, &module)?;
 
     let model = match stage {
         ShaderStage::Vertex => spirv::ExecutionModel::Vertex,
@@ -482,6 +577,7 @@ pub(crate) fn reflect_spirv(
         let used = interface.contains(&var);
         match sc {
             StorageClass::Input | StorageClass::Output => {
+                check_clip_distances(&ctx, var, pointee)?;
                 if !used || ctx.decoration(var, Decoration::BuiltIn).is_some() {
                     continue;
                 }
@@ -497,6 +593,17 @@ pub(crate) fn reflect_spirv(
                         return Err(format!("location {location}: {other:?} is not supported"));
                     }
                 };
+                // Vertex attributes and attachments are at most 32 bits a
+                // component.
+                let scalar = match ty.class.opcode {
+                    Op::TypeVector => ctx.def(id(&ty.operands[0])?)?,
+                    _ => ty,
+                };
+                if lit(&scalar.operands[0])? > 32 {
+                    return Err(format!(
+                        "location {location}: 64-bit stage variables are not supported"
+                    ));
+                }
                 let io = IoVar {
                     location,
                     class,
@@ -556,22 +663,61 @@ pub(crate) fn reflect_spirv(
     outputs.sort_by_key(|v: &IoVar| v.location);
 
     let mut sampling_pairs = Vec::new();
+    // The pairs behind the results of OpSampledImage, and how each is used.
+    // (A result of OpSampledImage is only ever an operand of the lookups in
+    // its own block; the validator sees to that.)
+    let mut combined: HashMap<u32, (u32, u32)> = HashMap::new();
+    let mut comparison_pairs: Vec<(u32, u32)> = Vec::new();
+    let mut plain_pairs: Vec<(u32, u32)> = Vec::new();
     for f in &module.functions {
         for b in &f.blocks {
             for inst in &b.instructions {
+                check_instruction(&ctx, inst)?;
                 match inst.class.opcode {
                     Op::SampledImage => {
                         let image = ctx.source_variable(id(&inst.operands[0])?)?;
                         let sampler = ctx.source_variable(id(&inst.operands[1])?)?;
                         if let (Some(t), Some(s)) =
                             (var_binding.get(&image), var_binding.get(&sampler))
-                            && !sampling_pairs.contains(&(*t, *s))
                         {
-                            sampling_pairs.push((*t, *s));
+                            if !sampling_pairs.contains(&(*t, *s)) {
+                                sampling_pairs.push((*t, *s));
+                            }
+                            if let Some(result) = inst.result_id {
+                                combined.insert(result, (*t, *s));
+                            }
                         }
                     }
                     Op::AccessChain | Op::InBoundsAccessChain => {
                         check_access_chain(&ctx, inst)?;
+                    }
+                    // A comparison needs a sampler made for comparisons and a
+                    // depth texture; a plain read needs a plain sampler.
+                    // Which one a pair is used for is checked when it is
+                    // bound.
+                    Op::ImageSampleDrefImplicitLod
+                    | Op::ImageSampleDrefExplicitLod
+                    | Op::ImageSampleProjDrefImplicitLod
+                    | Op::ImageSampleProjDrefExplicitLod
+                    | Op::ImageDrefGather => {
+                        let pair = combined
+                            .get(&id(&inst.operands[0])?)
+                            .ok_or("a comparison reads a texture the checks cannot follow")?;
+                        if !comparison_pairs.contains(pair) {
+                            comparison_pairs.push(*pair);
+                        }
+                    }
+                    Op::ImageSampleImplicitLod
+                    | Op::ImageSampleExplicitLod
+                    | Op::ImageSampleProjImplicitLod
+                    | Op::ImageSampleProjExplicitLod
+                    | Op::ImageGather
+                    | Op::ImageQueryLod => {
+                        if let Some(pair) = combined.get(&id(&inst.operands[0])?)
+                            && !plain_pairs.contains(pair)
+                        {
+                            plain_pairs.push(*pair);
+                        }
                     }
                     Op::PtrAccessChain
                     | Op::InBoundsPtrAccessChain
@@ -589,6 +735,12 @@ pub(crate) fn reflect_spirv(
         }
     }
     sampling_pairs.sort_unstable();
+    comparison_pairs.sort_unstable();
+    if let Some((texture, sampler)) = comparison_pairs.iter().find(|p| plain_pairs.contains(p)) {
+        return Err(format!(
+            "the texture at binding {texture} and the sampler at binding {sampler} are used both for comparisons and for plain reads; use a sampler for each"
+        ));
+    }
 
     let mut workgroup_size = [0; 3];
     for inst in &module.execution_modes {
@@ -618,8 +770,86 @@ pub(crate) fn reflect_spirv(
         inputs,
         outputs,
         sampling_pairs,
+        comparison_pairs,
         workgroup_size,
     })
+}
+
+/// Image operands the API has a reason to accept. The others either need a
+/// capability that is not allowed (the Vulkan memory model) or are extension
+/// modes that the bundled validator accepts in forms a driver does not
+/// (`SignExtend` and `ZeroExtend` on a floating-point texel).
+const ALLOWED_IMAGE_OPERANDS: spirv::ImageOperands = spirv::ImageOperands::BIAS
+    .union(spirv::ImageOperands::LOD)
+    .union(spirv::ImageOperands::GRAD)
+    .union(spirv::ImageOperands::CONST_OFFSET)
+    .union(spirv::ImageOperands::OFFSET)
+    .union(spirv::ImageOperands::CONST_OFFSETS)
+    .union(spirv::ImageOperands::SAMPLE)
+    .union(spirv::ImageOperands::MIN_LOD);
+
+/// What the bundled validator lets through and a newer one, or a driver,
+/// does not.
+fn check_instruction(ctx: &Ctx<'_>, inst: &Instruction) -> Result<(), String> {
+    for operand in &inst.operands {
+        if let Operand::ImageOperands(mask) = operand
+            && !ALLOWED_IMAGE_OPERANDS.contains(*mask)
+        {
+            return Err(format!(
+                "image operands {:?} are not accepted",
+                mask.difference(ALLOWED_IMAGE_OPERANDS)
+            ));
+        }
+    }
+    if inst.class.opcode == Op::Bitcast {
+        // Between numeric values of the same total width only; never a
+        // pointer.
+        let from = ctx
+            .def(id(&inst.operands[0])?)?
+            .result_type
+            .and_then(|ty| ctx.value_bits(ty));
+        let to = inst.result_type.and_then(|ty| ctx.value_bits(ty));
+        if from.is_none() || from != to {
+            return Err("OpBitcast between types of different sizes is not accepted".into());
+        }
+    }
+    Ok(())
+}
+
+/// A `ClipDistance` built-in, as a variable or as a member of a block, is an
+/// array of at most [`MAX_CLIP_DISTANCES`] floats.
+fn check_clip_distances(ctx: &Ctx<'_>, var: u32, pointee: u32) -> Result<(), String> {
+    let is_clip = |operands: Option<&[Operand]>| {
+        matches!(
+            operands,
+            Some([Operand::BuiltIn(spirv::BuiltIn::ClipDistance), ..])
+        )
+    };
+    let mut arrays = Vec::new();
+    if is_clip(ctx.decoration(var, Decoration::BuiltIn)) {
+        arrays.push(pointee);
+    }
+    let ty = ctx.def(pointee)?;
+    if ty.class.opcode == Op::TypeStruct {
+        for (member, member_ty) in ty.operands.iter().enumerate() {
+            if is_clip(ctx.member_decoration(pointee, member as u32, Decoration::BuiltIn)) {
+                arrays.push(id(member_ty)?);
+            }
+        }
+    }
+    for array in arrays {
+        let ty = ctx.def(array)?;
+        let len = match ty.class.opcode {
+            Op::TypeArray => ctx.constant(id(&ty.operands[1])?),
+            _ => None,
+        };
+        if len.is_none_or(|len| len > MAX_CLIP_DISTANCES) {
+            return Err(format!(
+                "a ClipDistance array has at most {MAX_CLIP_DISTANCES} elements"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn resource_kind(
@@ -694,14 +924,31 @@ fn image_kind(ctx: &Ctx<'_>, var: u32, image: u32, name: &str) -> Result<Binding
     let arrayed = lit(&ty.operands[3])?;
     let ms = lit(&ty.operands[4])?;
     let sampled = lit(&ty.operands[5])?;
-    if dim != spirv::Dim::Dim2D || arrayed != 0 || ms != 0 || depth == 1 {
+    // 3D and cube textures are sampled only, never storage. The bind-time
+    // check keeps an image of another kind out of the binding: the view type
+    // of the descriptor has to be the one declared here.
+    let sampled_only = matches!(dim, spirv::Dim::Dim3D | spirv::Dim::DimCube) && sampled == 1;
+    if (dim != spirv::Dim::Dim2D && !sampled_only) || arrayed != 0 || ms != 0 || depth == 1 {
         return Err(format!(
-            "`{name}`: only non-arrayed, single-sampled 2D colour textures are supported"
+            "`{name}`: only non-arrayed, single-sampled 2D textures, and sampled 3D and cube textures, are supported"
         ));
     }
     let class = ctx
         .num_class(id(&ty.operands[0])?)
         .map_err(|e| format!("`{name}`: {e}"))?;
+    if sampled_only {
+        let declared = ty.operands[6].unwrap_image_format();
+        if declared != spirv::ImageFormat::Unknown {
+            return Err(format!(
+                "`{name}`: a sampled texture must not declare a format, found {declared:?}"
+            ));
+        }
+        return Ok(if dim == spirv::Dim::Dim3D {
+            BindingKind::SampledTexture3D { class }
+        } else {
+            BindingKind::SampledTextureCube { class }
+        });
+    }
     // The validator that the spirv-tools crate carries does not check that an
     // image's format agrees with its sampled type (newer ones do:
     // VUID-StandaloneSpirv-Image-04965). Sampled images declare no format;
@@ -754,24 +1001,82 @@ fn image_kind(ctx: &Ctx<'_>, var: u32, image: u32, name: &str) -> Result<Binding
 }
 
 /// The validator does not check every layout decoration: on a type that no
-/// interface block uses (a local array, say), `ArrayStride 0` passes it, and a
-/// driver may then fail to build the pipeline. Strides of zero are refused
-/// here.
-fn check_layout_decorations(module: &Module) -> Result<(), String> {
+/// interface block uses (a local array, say), `ArrayStride 0` passes it, and
+/// it accepts an array stride below the size of the elements, which a newer
+/// validator does not. A driver may then fail to build the pipeline. Here a
+/// stride is at least the size of what it steps over.
+fn check_layout_decorations(ctx: &Ctx<'_>, module: &Module) -> Result<(), String> {
     for inst in &module.annotations {
         let (decoration, value) = match inst.class.opcode {
             Op::Decorate => (inst.operands.get(1), inst.operands.get(2)),
             Op::MemberDecorate => (inst.operands.get(2), inst.operands.get(3)),
             _ => continue,
         };
-        let stride = matches!(
+        let Some(Operand::Decoration(decoration)) = decoration else {
+            continue;
+        };
+        if !matches!(
             decoration,
-            Some(Operand::Decoration(
-                Decoration::ArrayStride | Decoration::MatrixStride
-            ))
-        );
-        if stride && value == Some(&Operand::LiteralBit32(0)) {
+            Decoration::ArrayStride | Decoration::MatrixStride
+        ) {
+            continue;
+        }
+        let Some(Operand::LiteralBit32(stride)) = value else {
+            return Err("a stride without a size".into());
+        };
+        if *stride == 0 {
             return Err("a stride of 0 bytes is not accepted".into());
+        }
+        let needed = match (inst.class.opcode, decoration) {
+            (Op::Decorate, Decoration::ArrayStride) => {
+                let array = ctx.def(id(&inst.operands[0])?)?;
+                // Compilers also put the decoration on other types (Slang
+                // does, on the block of a structured buffer), where it
+                // means nothing.
+                if !matches!(array.class.opcode, Op::TypeArray | Op::TypeRuntimeArray) {
+                    continue;
+                }
+                ctx.size_of(id(&array.operands[0])?)?
+            }
+            (Op::MemberDecorate, Decoration::MatrixStride) => {
+                // The member is a matrix or arrays of one; the stride steps
+                // over its column vectors (its rows, when row-major).
+                let st = id(&inst.operands[0])?;
+                let member = lit(&inst.operands[1])?;
+                let st_def = ctx.def(st)?;
+                let mut ty = id(st_def
+                    .operands
+                    .get(member as usize)
+                    .ok_or("MatrixStride on a member the struct does not have")?)?;
+                let matrix = loop {
+                    let def = ctx.def(ty)?;
+                    match def.class.opcode {
+                        Op::TypeMatrix => break def,
+                        Op::TypeArray | Op::TypeRuntimeArray => ty = id(&def.operands[0])?,
+                        _ => {
+                            return Err(
+                                "MatrixStride decorates something that is not a matrix".into()
+                            );
+                        }
+                    }
+                };
+                let column = ctx.def(id(&matrix.operands[0])?)?;
+                let component = ctx.size_of(id(&column.operands[0])?)?;
+                let rows = u64::from(lit(&column.operands[1])?);
+                let columns = u64::from(lit(&matrix.operands[1])?);
+                let row_major = ctx
+                    .member_decoration(st, member, Decoration::RowMajor)
+                    .is_some();
+                component * if row_major { columns } else { rows }
+            }
+            // On anything else the decoration means nothing; whether it may
+            // be there is the validator's business.
+            _ => continue,
+        };
+        if u64::from(*stride) < needed {
+            return Err(format!(
+                "a stride of {stride} bytes is smaller than the {needed} bytes it steps over"
+            ));
         }
     }
     Ok(())

@@ -23,6 +23,7 @@ const SHADER: &str = r#"
 
 #[test]
 fn validation_layer_sees_misuse_when_checks_are_off() {
+    let before = validation_error_count();
     let config = GpuConfig::for_tests();
     if !config.validation {
         eprintln!("skipped: GFX_SPIKE_VALIDATION is not set");
@@ -127,7 +128,12 @@ fn validation_layer_sees_misuse_when_checks_are_off() {
     gpu.end_pass().unwrap();
     gpu.end_frame().unwrap();
     gpu.wait_idle().unwrap();
-    assert_eq!(validation_error_count(), 0, "{:#?}", validation_messages());
+    assert_eq!(
+        validation_error_count(),
+        before,
+        "{:#?}",
+        validation_messages()
+    );
 
     // SAFETY: deliberate misuse, on the software rasterizer only.
     unsafe { gpu.set_checks(false) };
@@ -147,7 +153,10 @@ fn validation_layer_sees_misuse_when_checks_are_off() {
     for message in validation_messages() {
         eprintln!("  {}", &message[..message.len().min(300)]);
     }
-    assert!(after_a > 0, "the validation layer did not notice misuse A");
+    assert!(
+        after_a > before,
+        "the validation layer did not notice misuse A"
+    );
 
     // Misuse B: sampling, through a heap descriptor, the image that is the
     // attachment of the open pass. Recorded, not asserted: it shows how much

@@ -29,6 +29,9 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::fractional_scale::FractionalScaleHandler;
 use smithay::wayland::input_method::InputMethodSeat;
+use smithay::wayland::keyboard_shortcuts_inhibit::{
+    KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
+};
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::selection::data_device::{
@@ -317,6 +320,7 @@ impl SeatHandler for State {
         set_primary_focus(&self.display_handle, seat, client);
         // Smithay deactivated the input method on the way.
         self.ime_focus_moved();
+        self.outside_ime_focus_moved();
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
@@ -329,12 +333,25 @@ impl SeatHandler for State {
     }
 }
 
+/// Every client that asks gets the compositor's shortcuts while it has the
+/// keyboard: whether they are in fact passed on is the window manager's
+/// decision, which sees the request with every key.
+impl KeyboardShortcutsInhibitHandler for State {
+    fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
+        &mut self.shortcuts_inhibit_state
+    }
+
+    fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
+        inhibitor.activate();
+    }
+}
+
 impl TabletSeatHandler for State {
     type ToolFocus = WlSurface;
 }
 
 impl SelectionHandler for State {
-    type SelectionUserData = ();
+    type SelectionUserData = crate::selection::ProvidedSelection;
 
     fn new_selection(
         &mut self,
@@ -348,9 +365,21 @@ impl SelectionHandler for State {
         // the selection in the first place.
         let mime_types = source.map(|source| source.mime_types());
         match target {
-            SelectionTarget::Clipboard => self.selection = mime_types,
-            SelectionTarget::Primary => self.primary_selection = mime_types,
+            SelectionTarget::Clipboard => self.selection = mime_types.clone(),
+            SelectionTarget::Primary => self.primary_selection = mime_types.clone(),
         }
+        self.client_selection_changed(target, mime_types);
+    }
+
+    fn send_selection(
+        &mut self,
+        target: SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        provided: &Self::SelectionUserData,
+    ) {
+        self.provided_selection_wanted(target, mime_type, fd, provided);
     }
 }
 
@@ -482,6 +511,7 @@ impl XdgShellHandler for State {
             requested_size: None,
             states: Default::default(),
             reply_owed: false,
+            hidden: false,
         });
         self.push_event(WlEvent::WindowCreated(id));
     }

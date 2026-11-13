@@ -68,9 +68,35 @@ formats! {
     Rgba16Float, "rgba16float", R16G16B16A16_SFLOAT, 8, Float;
     Rgba16Unorm, "rgba16unorm", R16G16B16A16_UNORM, 8, Float;
     R32Float, "r32float", R32_SFLOAT, 4, Float;
+    Rg32Float, "rg32float", R32G32_SFLOAT, 8, Float;
     Rgba32Float, "rgba32float", R32G32B32A32_SFLOAT, 16, Float;
+    Rg11b10Float, "rg11b10float", B10G11R11_UFLOAT_PACK32, 4, Float;
     R32Uint, "r32uint", R32_UINT, 4, Uint;
     Rgba8Uint, "rgba8uint", R8G8B8A8_UINT, 4, Uint;
+    D32Float, "d32float", D32_SFLOAT, 4, Float;
+}
+
+impl Format {
+    /// Whether the format holds depth instead of colour.
+    pub fn is_depth(self) -> bool {
+        matches!(self, Self::D32Float)
+    }
+
+    pub(crate) fn aspect(self) -> vk::ImageAspectFlags {
+        if self.is_depth() {
+            vk::ImageAspectFlags::DEPTH
+        } else {
+            vk::ImageAspectFlags::COLOR
+        }
+    }
+
+    /// Index into the per-device table of [`FormatCaps`].
+    pub(crate) fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|f| *f == self)
+            .expect("format is in ALL")
+    }
 }
 
 /// What the device can do with a format (optimal tiling).
@@ -80,9 +106,15 @@ pub struct FormatCaps {
     pub filter_linear: bool,
     pub color_attachment: bool,
     pub blend: bool,
+    pub depth_attachment: bool,
+    /// Can be read through a comparison sampler.
+    pub depth_compare: bool,
     pub storage: bool,
     pub transfer_src: bool,
     pub transfer_dst: bool,
+    /// Source and destination of a scaled copy (`generate_mipmaps`).
+    pub blit_src: bool,
+    pub blit_dst: bool,
 }
 
 impl FormatCaps {
@@ -93,9 +125,14 @@ impl FormatCaps {
             filter_linear: features.contains(F::SAMPLED_IMAGE_FILTER_LINEAR),
             color_attachment: features.contains(F::COLOR_ATTACHMENT),
             blend: features.contains(F::COLOR_ATTACHMENT_BLEND),
+            depth_attachment: features.contains(F::DEPTH_STENCIL_ATTACHMENT),
+            // Not among these flags; the device setup fills it in.
+            depth_compare: false,
             storage: features.contains(F::STORAGE_IMAGE),
             transfer_src: features.contains(F::TRANSFER_SRC),
             transfer_dst: features.contains(F::TRANSFER_DST),
+            blit_src: features.contains(F::BLIT_SRC),
+            blit_dst: features.contains(F::BLIT_DST),
         }
     }
 }

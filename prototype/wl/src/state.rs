@@ -8,7 +8,7 @@ use proto_color::{AlphaMode, ImageDescription};
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::backend::input::{Axis, AxisSource, ButtonState, InputTime, KeyState};
 use smithay::desktop::{PopupGrab, PopupManager};
-use smithay::input::keyboard::{FilterResult, XkbConfig};
+use smithay::input::keyboard::{KeyboardSource, XkbConfig, xkb};
 use smithay::input::pointer::{
     AxisFrame, ButtonEvent, CursorImageStatus, CursorImageSurfaceData, MotionEvent,
 };
@@ -30,6 +30,9 @@ use smithay::wayland::cursor_shape::CursorShapeManagerState;
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufState};
 use smithay::wayland::fractional_scale::{FractionalScaleManagerState, with_fractional_scale};
 use smithay::wayland::input_method::InputMethodManagerState;
+use smithay::wayland::keyboard_shortcuts_inhibit::{
+    KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitorSeat,
+};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::pointer_gestures::PointerGesturesState;
@@ -52,11 +55,20 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 
 use crate::color::{ColorState, Record};
 use crate::ime::ImeState;
+use crate::outside_ime::OutsideImeState;
 use crate::surface::{collect_tree, surface_id, surface_size, take_buffer, with_surface_state};
 use crate::{
-    BufferUpdate, CursorState, DmabufConfig, OutputConfig, OutputId, ServerConfig, SurfaceId,
-    SurfaceNode, SurfaceRole, WindowId, WindowInfo, WindowStates, WlError, WlEvent,
+    BufferUpdate, CursorState, DmabufConfig, KeySymbol, OutputConfig, OutputId, ServerConfig,
+    SurfaceId, SurfaceNode, SurfaceRole, WindowId, WindowInfo, WindowStates, WlError, WlEvent,
 };
+
+fn key_state(pressed: bool) -> KeyState {
+    if pressed {
+        KeyState::Pressed
+    } else {
+        KeyState::Released
+    }
+}
 
 /// `CLOCK_MONOTONIC`, the clock `wp_presentation` timestamps use.
 const CLOCK_MONOTONIC: u32 = 1;
@@ -82,6 +94,22 @@ pub(crate) struct Window {
     /// The client made a request the protocol wants answered with a
     /// configure, and none was sent since.
     pub reply_owed: bool,
+    /// The compositor said the window is not seen
+    /// ([`crate::WlServer::set_window_visible`]): its frame callbacks and
+    /// presentation feedback are held, and a client that knows the
+    /// `suspended` state is told it.
+    pub hidden: bool,
+}
+
+/// The first `xdg_wm_base` version with the `suspended` toplevel state.
+const SUSPENDED_SINCE: u32 = 6;
+
+impl Window {
+    /// Whether the client bound a version of xdg-shell that has the
+    /// `suspended` state.
+    pub fn knows_suspended(&self) -> bool {
+        self.toplevel.xdg_toplevel().version() >= SUSPENDED_SINCE
+    }
 }
 
 pub(crate) struct OutputEntry {
@@ -126,6 +154,14 @@ pub(crate) struct State {
     pub _virtual_keyboard_state: VirtualKeyboardManagerState,
     /// What is kept about input methods (`crate::ime`).
     pub ime: ImeState,
+    /// Text input for an input method outside (`crate::outside_ime`).
+    pub(crate) outside_ime: OutsideImeState,
+    /// Whether the modifiers changed with a key that reached no client
+    /// (`keyboard_key_input` without `keyboard_key_forward`).
+    pub modifiers_owed: bool,
+    /// Whether they changed with the last key taken in, which has not been
+    /// forwarded (yet).
+    pub modifiers_unsent: bool,
     /// A menu (a grabbing popup) that was opened while an input method
     /// held the keyboard grab. The input method keeps the grab; the
     /// keyboard focus stays on the menu until it closes.
@@ -134,6 +170,7 @@ pub(crate) struct State {
     pub color: ColorState,
     pub activation_state: XdgActivationState,
     pub _pointer_gestures_state: PointerGesturesState,
+    pub shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
 
     pub events: Vec<WlEvent>,
     pub windows: Vec<Window>,
@@ -175,6 +212,9 @@ pub(crate) struct State {
     /// Popups whose client asked for a new place, with the token to
     /// answer with. Answered at the next flush, like new popups.
     pub repositions: Vec<(PopupSurface, u32)>,
+    /// Reactive popups that were placed anew because the bounds of their
+    /// window changed. Told at the next flush.
+    pub popups_reconstrained: Vec<PopupSurface>,
     /// Whether a drag and drop holds the pointer.
     pub dragging: bool,
     pub surfaces: HashMap<SurfaceId, WlSurface>,
@@ -203,6 +243,7 @@ impl State {
         let relative_pointer_state = RelativePointerManagerState::new::<Self>(dh);
         let pointer_constraints_state = PointerConstraintsState::new::<Self>(dh);
         let pointer_gestures_state = PointerGesturesState::new::<Self>(dh);
+        let shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(dh);
         // Clipboard managers read and replace the selections through these
         // without having the keyboard focus. Every client may bind them:
@@ -262,10 +303,14 @@ impl State {
             _input_method_state: input_method_state,
             _virtual_keyboard_state: virtual_keyboard_state,
             ime: ImeState::new(),
+            outside_ime: OutsideImeState::new(),
+            modifiers_owed: false,
+            modifiers_unsent: false,
             menu_grab: None,
             color: ColorState::new(dh),
             activation_state,
             _pointer_gestures_state: pointer_gestures_state,
+            shortcuts_inhibit_state,
             events: Vec::new(),
             windows: Vec::new(),
             popups: Vec::new(),
@@ -283,6 +328,7 @@ impl State {
             popup_grab: None,
             popups_awaiting_configure: Vec::new(),
             repositions: Vec::new(),
+            popups_reconstrained: Vec::new(),
             dragging: false,
             surfaces: HashMap::new(),
             outputs: Vec::new(),
@@ -575,6 +621,8 @@ impl State {
             min_size,
             max_size,
             client_pid,
+            visible: !window.hidden,
+            suspended: window.hidden && window.knows_suspended(),
         })
     }
 
@@ -638,10 +686,46 @@ impl State {
     /// Says where the popups of a window should stay: a rectangle relative
     /// to the window geometry, usually the output the window is on.
     pub fn set_popup_bounds(&mut self, window: WindowId, bounds: Option<(i32, i32, i32, i32)>) {
-        match bounds {
+        let before = match bounds {
             Some(bounds) => self.popup_bounds.insert(window, bounds),
             None => self.popup_bounds.remove(&window),
         };
+        if before != bounds {
+            self.reconstrain_popups(window);
+        }
+    }
+
+    /// Places the popups of a window anew after its bounds changed: the
+    /// ones that were not told their place yet, and the reactive ones
+    /// (`xdg_positioner.set_reactive`: "reconstrained if the conditions
+    /// used for constraining changed"). Reactive popups whose place changed
+    /// are told at the next flush. Parents come before their children in
+    /// the list, so a child is placed against its parent's new place.
+    fn reconstrain_popups(&mut self, window: WindowId) {
+        for popup in self.popups.clone() {
+            if !popup.alive() {
+                continue;
+            }
+            let told = popup.is_initial_configure_sent();
+            let positioner = popup.with_pending_state(|state| state.positioner);
+            if (told && !positioner.reactive)
+                || popup
+                    .get_parent_surface()
+                    .and_then(|parent| self.owning_window(&parent))
+                    != Some(window)
+            {
+                continue;
+            }
+            let geometry = self.place_popup(&popup, &positioner);
+            let moved = popup.with_pending_state(|state| {
+                let moved = state.geometry != geometry;
+                state.geometry = geometry;
+                moved
+            });
+            if moved && told && !self.popups_reconstrained.contains(&popup) {
+                self.popups_reconstrained.push(popup);
+            }
+        }
     }
 
     /// Where a surface's window geometry starts, relative to the window
@@ -741,6 +825,15 @@ impl State {
         for (popup, token) in std::mem::take(&mut self.repositions) {
             if popup.alive() {
                 popup.send_repositioned(token);
+            }
+        }
+        for popup in std::mem::take(&mut self.popups_reconstrained) {
+            // Refused when the positioner the client last acknowledged is
+            // not reactive (it repositioned the popup since).
+            if popup.alive()
+                && let Err(error) = popup.send_configure()
+            {
+                tracing::debug!(?error, "a reactive popup was not told its new place");
             }
         }
         self.send_input_popup_rectangle();
@@ -868,36 +961,73 @@ impl State {
     }
 
     /// Sends frame callbacks to the surfaces whose main output is
-    /// `output`, or to every surface with `None`.
+    /// `output`, or to every surface with `None`. The surfaces of hidden
+    /// windows are left out: their callbacks wait.
     pub fn send_frame_callbacks(&mut self, output: Option<OutputId>, time_ms: u32) {
         self.popup_manager.cleanup();
         let wanted = |state: &State, surface: &WlSurface| {
             output.is_none_or(|output| state.main_output_is(surface, output))
+                && !state.is_hidden(surface)
         };
         let roots = self.frame_roots();
         for root in roots {
-            if !wanted(self, &root) {
-                continue;
+            if wanted(self, &root) {
+                send_frames_of_tree(&root, time_ms);
             }
-            with_surface_tree_downward(
-                &root,
-                (),
-                |_, _, _| TraversalAction::DoChildren(()),
-                |_, states, _| {
-                    let callbacks = std::mem::take(
-                        &mut states
-                            .cached_state
-                            .get::<SurfaceAttributes>()
-                            .current()
-                            .frame_callbacks,
-                    );
-                    for callback in callbacks {
-                        callback.done(time_ms);
-                    }
-                },
-                |_, _, _| true,
-            );
         }
+    }
+
+    /// Whether a surface belongs to a window that is hidden.
+    fn is_hidden(&self, surface: &WlSurface) -> bool {
+        self.owning_window(surface)
+            .and_then(|id| self.window(id))
+            .is_some_and(|window| window.hidden)
+    }
+
+    /// Says whether a window is seen. Returns whether that changed.
+    pub fn set_window_visible(&mut self, id: WindowId, visible: bool) -> bool {
+        let Some(window) = self.windows.iter_mut().find(|w| w.id == id) else {
+            return false;
+        };
+        if window.hidden != visible {
+            return false;
+        }
+        window.hidden = !visible;
+        if window.knows_suspended() {
+            apply_pending_state(window);
+            if window.toplevel.is_initial_configure_sent()
+                && window.toplevel.send_pending_configure().is_some()
+            {
+                window.reply_owed = false;
+            }
+        }
+        true
+    }
+
+    /// Sends the frame callbacks of one window's surfaces (its tree and
+    /// its popups), hidden or not.
+    pub fn send_window_frame_callbacks(&mut self, id: WindowId, time_ms: u32) {
+        self.popup_manager.cleanup();
+        for root in self.frame_roots() {
+            if self.owning_window(&root) == Some(id) {
+                send_frames_of_tree(&root, time_ms);
+            }
+        }
+    }
+
+    /// Sends the frame callbacks of every hidden window. Returns how many
+    /// windows are hidden.
+    pub fn send_hidden_frame_callbacks(&mut self, time_ms: u32) -> usize {
+        let hidden: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|w| w.hidden)
+            .map(|w| w.id)
+            .collect();
+        for id in &hidden {
+            self.send_window_frame_callbacks(*id, time_ms);
+        }
+        hidden.len()
     }
 
     /// The roots of every surface tree that is shown: windows, popups, the
@@ -931,7 +1061,11 @@ impl State {
         };
         let wl_output = entry.output.clone();
         for root in self.frame_roots() {
-            if !self.main_output_is(&root, output) {
+            // What a hidden window committed was not seen. Its feedback
+            // waits: a later commit replaces it (and Smithay reports it
+            // discarded), or it is reported with the first frame after the
+            // window is seen again.
+            if !self.main_output_is(&root, output) || self.is_hidden(&root) {
                 continue;
             }
             with_surface_tree_downward(
@@ -1007,25 +1141,114 @@ impl State {
         }
     }
 
+    /// Whether the surface with the keyboard focus asked that the
+    /// compositor's own shortcuts go to it (keyboard-shortcuts-inhibit).
+    pub fn shortcuts_inhibited(&self) -> bool {
+        self.seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus())
+            .and_then(|surface| self.seat.keyboard_shortcuts_inhibitor_for_surface(&surface))
+            .is_some_and(|inhibitor| inhibitor.is_active())
+    }
+
+    /// See [`crate::WlServer::set_shortcuts_inhibit`].
+    pub fn set_shortcuts_inhibit(&mut self, active: bool) -> bool {
+        let Some(inhibitor) = self
+            .seat
+            .get_keyboard()
+            .and_then(|keyboard| keyboard.current_focus())
+            .and_then(|surface| self.seat.keyboard_shortcuts_inhibitor_for_surface(&surface))
+        else {
+            return false;
+        };
+        if active {
+            inhibitor.activate();
+        } else {
+            inhibitor.inactivate();
+        }
+        true
+    }
+
+    /// Replaces the keymap of the seat with one in the xkb text format.
+    pub fn set_keymap(&mut self, keymap: String) -> Result<(), String> {
+        let keyboard = self.seat.get_keyboard().ok_or("the seat has no keyboard")?;
+        keyboard
+            .set_keymap_from_string(self, keymap)
+            .map_err(|error| format!("{error:?}"))?;
+        // What a virtual keyboard's keymap gives way to from now on.
+        self.keymap_replaced();
+        Ok(())
+    }
+
     pub fn keyboard_key(&mut self, keycode: u32, pressed: bool, time_us: u64) {
+        if self.keyboard_key_input(keycode, pressed).is_some() {
+            self.keyboard_key_forward(keycode, pressed, time_us);
+        }
+    }
+
+    /// The keymap takes in a key of the real keyboard (see
+    /// `WlServer::keyboard_key_input`).
+    pub fn keyboard_key_input(&mut self, keycode: u32, pressed: bool) -> Option<KeySymbol> {
         self.restore_keymap();
+        let keyboard = self.seat.get_keyboard()?;
+        // xkb key codes are evdev codes plus 8.
+        let (symbol, mods_changed) = keyboard.input_intercept(
+            KeyboardSource::MAIN,
+            self,
+            (keycode + 8).into(),
+            key_state(pressed),
+            |_, _, handle| {
+                let sym = handle.modified_sym();
+                let text = pressed
+                    .then(|| {
+                        let xkb = handle.xkb().lock().unwrap();
+                        // SAFETY: the state is only borrowed for this call,
+                        // under the lock; no reference to it is kept.
+                        unsafe { xkb.state() }.key_get_utf8((keycode + 8).into())
+                    })
+                    .filter(|text| !text.is_empty() && !text.chars().any(char::is_control));
+                KeySymbol {
+                    sym: if sym.raw() == 0 {
+                        String::new()
+                    } else {
+                        xkb::keysym_get_name(sym)
+                    },
+                    text,
+                }
+            },
+        )?;
+        // A change to the modifiers that came with the key before, which
+        // was kept from the client, is owed to the client until a key
+        // reaches it.
+        self.modifiers_owed |= std::mem::replace(&mut self.modifiers_unsent, mods_changed);
+        Some(symbol)
+    }
+
+    /// A key that went through [`Self::keyboard_key_input`] goes to the
+    /// client.
+    pub fn keyboard_key_forward(&mut self, keycode: u32, pressed: bool, time_us: u64) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
         self.note_key_for_input_method(keycode + 8, pressed);
-        let state = if pressed {
-            KeyState::Pressed
-        } else {
-            KeyState::Released
-        };
-        // xkb key codes are evdev codes plus 8.
-        keyboard.input::<(), _>(
+        let mut mods_changed = std::mem::take(&mut self.modifiers_unsent);
+        if std::mem::take(&mut self.modifiers_owed) {
+            // The client reads the key with the modifiers it last heard
+            // of: they go first. A grab (an input method) hears of them
+            // with the key.
+            if keyboard.is_grabbed() {
+                mods_changed = true;
+            } else {
+                keyboard.advertise_modifier_state(self);
+            }
+        }
+        keyboard.input_forward(
             self,
             (keycode + 8).into(),
-            state,
+            key_state(pressed),
             SERIAL_COUNTER.next_serial(),
             InputTime::from_micros(time_us),
-            |_, _, _| FilterResult::Forward,
+            mods_changed,
         );
     }
 
@@ -1216,6 +1439,28 @@ fn create_dmabuf_global(
     })
 }
 
+/// Calls the frame callbacks of a surface tree.
+fn send_frames_of_tree(root: &WlSurface, time_ms: u32) {
+    with_surface_tree_downward(
+        root,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |_, states, _| {
+            let callbacks = std::mem::take(
+                &mut states
+                    .cached_state
+                    .get::<SurfaceAttributes>()
+                    .current()
+                    .frame_callbacks,
+            );
+            for callback in callbacks {
+                callback.done(time_ms);
+            }
+        },
+        |_, _, _| true,
+    );
+}
+
 /// Copies what the compositor asked for into the toplevel's pending state.
 pub(crate) fn apply_pending_state(window: &Window) {
     window.toplevel.with_pending_state(|state| {
@@ -1231,6 +1476,14 @@ pub(crate) fn apply_pending_state(window: &Window) {
             } else {
                 state.states.unset(flag);
             }
+        }
+        // Only for a client that knows the state: Smithay would leave it
+        // out of the configure for an older one, but still send a
+        // configure that changes nothing.
+        if window.hidden && window.knows_suspended() {
+            state.states.set(xdg_toplevel::State::Suspended);
+        } else {
+            state.states.unset(xdg_toplevel::State::Suspended);
         }
     });
 }

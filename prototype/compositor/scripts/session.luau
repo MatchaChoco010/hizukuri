@@ -11,9 +11,6 @@ function init(saved)
     render.init()
     if saved then
         render.restore(saved.transforms)
-        if saved.working then
-            render.set_working(saved.working)
-        end
     end
     if tile then
         tile.init(saved and saved.tile)
@@ -24,7 +21,6 @@ end
 function unload()
     return {
         transforms = render.save(),
-        working = render.working,
         tile = tile and tile.save() or nil,
     }
 end
@@ -62,13 +58,19 @@ function set_transform(window, transform)
     render.set_transform(window, transform)
 end
 
+-- Draws a window brighter or darker: a factor on its light (1 or nothing:
+-- its reference white lands on the reference white of the output).
+function set_brightness(window, factor)
+    render.set_brightness(window, factor)
+end
+
 -- Chooses the primaries of the linear working space.
 function set_working_space(name)
-    render.set_working(name)
+    hz.set_working_space(name)
 end
 
 function working_space()
-    return render.working
+    return (hz.working_space())
 end
 
 function tile_order()

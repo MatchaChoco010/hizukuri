@@ -431,6 +431,46 @@ fn snap_primaries(v: [f64; 8]) -> Primaries {
         .unwrap_or(read)
 }
 
+/// Converts an `f32` to the nearest IEEE 754 half float bit pattern (ties to
+/// even). Values too large become infinity.
+pub fn f32_to_half(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x7f_ffff;
+    if exponent == 0xff {
+        return sign | 0x7c00 | if mantissa != 0 { 0x200 } else { 0 };
+    }
+    let e = exponent - 127 + 15;
+    if e >= 0x1f {
+        return sign | 0x7c00;
+    }
+    let round = |kept: u32, rest: u32, halfway: u32| {
+        if rest > halfway || (rest == halfway && kept & 1 == 1) {
+            kept + 1
+        } else {
+            kept
+        }
+    };
+    if e <= 0 {
+        if e < -10 {
+            return sign;
+        }
+        // Subnormal: the implicit one becomes part of the mantissa.
+        let m = mantissa | 0x80_0000;
+        let shift = (14 - e) as u32;
+        let rounded = round(m >> shift, m & ((1 << shift) - 1), 1 << (shift - 1));
+        return sign | rounded as u16;
+    }
+    // A carry out of the mantissa goes into the exponent, up to infinity.
+    let rounded = round(
+        ((e as u32) << 10) | (mantissa >> 13),
+        mantissa & 0x1fff,
+        0x1000,
+    );
+    sign | rounded as u16
+}
+
 /// Converts an IEEE 754 half float bit pattern to `f32`.
 pub fn half_to_f32(bits: u16) -> f32 {
     let sign = ((bits >> 15) & 1) as u32;
@@ -474,6 +514,20 @@ mod tests {
         assert_eq!(half_to_f32(0x7bff), 65504.0);
         assert_eq!(half_to_f32(0x0001), 2.0f32.powi(-24));
         assert_eq!(half_to_f32(0x0400), 2.0f32.powi(-14));
+        // Every half goes to f32 and back unchanged (NaNs keep being NaN).
+        for bits in 0..=u16::MAX {
+            let value = half_to_f32(bits);
+            if value.is_nan() {
+                assert!(half_to_f32(f32_to_half(value)).is_nan());
+            } else {
+                assert_eq!(f32_to_half(value), bits, "{bits:#06x}");
+            }
+        }
+        assert_eq!(f32_to_half(1.0e9), 0x7c00);
+        assert_eq!(f32_to_half(1.0e-9), 0);
+        // Halfway between 1.0 and the next half: ties to even.
+        assert_eq!(f32_to_half(1.0 + 2.0f32.powi(-11)), 0x3c00);
+        assert_eq!(f32_to_half(1.0 + 3.0 * 2.0f32.powi(-11)), 0x3c02);
         assert_eq!(half_to_f32(0x7c00), f32::INFINITY);
         assert!(half_to_f32(0x7e00).is_nan());
         // 1/3 rounded to half precision.

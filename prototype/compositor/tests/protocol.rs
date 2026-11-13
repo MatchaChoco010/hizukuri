@@ -12,7 +12,9 @@ use proto_backend::headless::{HeadlessBackend, HeadlessConfig, HeadlessOutputCon
 use proto_compositor::compositor::{Compositor, CompositorOptions};
 use proto_compositor::control::Request;
 use proto_compositor::scene::NullScene;
-use proto_test_client::{ClientEvent, ClientOptions, PopupOptions, SurfaceKind, TestClient};
+use proto_test_client::{
+    ClientEvent, ClientOptions, PopupOptions, PopupPositioner, SurfaceKind, TestClient,
+};
 use serde_json::Value;
 
 const KEY_A: u32 = 30;
@@ -202,7 +204,7 @@ fn window_is_configured_mapped_and_described() {
     assert_eq!(surface["alpha_mode"], "premultiplied-electrical");
     assert_eq!(
         surface["decode_pipeline"],
-        "unpremultiply | eotf:gamma22 | primaries:srgb->bt2020 | luminance:x(79.8/79.8) | premultiply"
+        "unpremultiply | eotf:gamma22 | primaries:srgb->acescg | luminance:x(79.8/79.8) | premultiply"
     );
 
     assert_eq!(state["focus"]["window"], window);
@@ -211,7 +213,7 @@ fn window_is_configured_mapped_and_described() {
     assert_eq!(state["gpu"], Value::Null);
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
-        "luminance:x(79.8/79.8) | primaries:bt2020->srgb | clip[0,1] | inverse-eotf:gamma22"
+        "luminance:x(79.8/79.8) | primaries:acescg->srgb | clip[0,1] | inverse-eotf:gamma22"
     );
 }
 
@@ -783,7 +785,7 @@ fn surface_color_override_changes_the_decode_pipeline() {
     assert_eq!(node["alpha_mode"], "straight");
     assert_eq!(
         node["decode_pipeline"],
-        "eotf:srgb-piecewise | primaries:display-p3->bt2020 | luminance:x(79.8/79.8) | premultiply"
+        "eotf:srgb-piecewise | primaries:display-p3->acescg | luminance:x(79.8/79.8) | premultiply"
     );
     let refused = f.compositor.control(&Request::SetSurfaceColor {
         surface,
@@ -932,6 +934,67 @@ fn popups_are_placed_by_their_positioner_and_kept_on_the_output() {
         popup_configure(f.events(client)).is_some()
     });
     assert_eq!(popup_configure(f.events(client)), Some((0, 20, 80, 50)));
+}
+
+/// A reactive popup (`xdg_positioner.set_reactive`) is placed again when
+/// what it was placed by changes: its window moves to the corner of the
+/// output, and the popup is flipped back onto the output. One that is not
+/// reactive keeps the place it was told.
+#[test]
+fn a_reactive_popup_is_placed_again_when_its_window_moves() {
+    let mut f = Fixture::new();
+    let (client, window) = f.add_mapped_client(options("parent", 200, 100));
+    let move_to = |f: &mut Fixture, x: i32, y: i32| {
+        f.control(Request::MoveWindow { window, x, y });
+        f.settle("moved", |f| {
+            window_by_title(&f.state(), "parent").unwrap()["position"] == serde_json::json!([x, y])
+        });
+    };
+    let menu = PopupPositioner::menu_at(20, 30, 80, 50);
+    let blue = [0, 0, 255, 255];
+
+    // Not reactive: told once.
+    move_to(&mut f, 100, 100);
+    f.clients[client]
+        .open_positioned_popup(menu, blue, false)
+        .unwrap();
+    f.settle("configured", |f| {
+        popup_configure(f.events(client)).is_some()
+    });
+    assert_eq!(popup_configure(f.events(client)), Some((21, 31, 80, 50)));
+    f.clients[client].clear_events();
+    move_to(&mut f, 1200, 650);
+    assert_eq!(popup_configure(f.events(client)), None);
+    f.clients[client].close_popup();
+
+    // Reactive: in the bottom right corner of the 1280x720 output it would
+    // end at (1301, 731), so it is flipped to the left and up.
+    move_to(&mut f, 100, 100);
+    f.clients[client].clear_events();
+    let reactive = PopupPositioner {
+        reactive: true,
+        ..menu
+    };
+    f.clients[client]
+        .open_positioned_popup(reactive, blue, false)
+        .unwrap();
+    f.settle("reactive configured", |f| {
+        popup_configure(f.events(client)).is_some()
+    });
+    assert_eq!(popup_configure(f.events(client)), Some((21, 31, 80, 50)));
+    f.clients[client].clear_events();
+    move_to(&mut f, 1200, 650);
+    f.settle("placed again", |f| {
+        popup_configure(f.events(client)).is_some()
+    });
+    assert_eq!(popup_configure(f.events(client)), Some((-60, -20, 80, 50)));
+    // Back in the open: where it asked to be.
+    f.clients[client].clear_events();
+    move_to(&mut f, 100, 100);
+    f.settle("placed back", |f| {
+        popup_configure(f.events(client)).is_some()
+    });
+    assert_eq!(popup_configure(f.events(client)), Some((21, 31, 80, 50)));
 }
 
 /// A popup that takes a grab (a menu) gets the keyboard; other clients get

@@ -2,70 +2,62 @@
 --
 -- Two passes per output:
 --
---   1. Every surface is drawn as a textured quad into a linear RGBA16F
---      buffer, converted from what its values mean (its image description)
---      to linear light in the working primaries. Alpha is premultiplied.
+--   1. Every surface is drawn as a textured quad into a linear buffer, read
+--      as linear light in the working space with alpha premultiplied.
 --   2. That buffer is converted to the encoded values of the output.
 --
--- The working primaries are this script's choice (`R.working`). The numbers
--- of the conversions come from the core (`hz.decode_transform`,
--- `hz.encode_transform`); applying them is done here, in the shaders
--- (`shaders/surface.slang` and `shaders/encode.slang`, which import the
--- core's `color` module).
+-- Both ends are the `color` module's: the numbers a shader needs to read a
+-- window (`color.write_window_params`, for the core's `WindowTexture` in
+-- `shaders/surface.slang`) and the conversion to the output
+-- (`color.present`). What lies between is this file's.
 --
 -- Each window is drawn with a 2D affine transform. Without one set, that is
 -- the translation to the window's logical position. The same transform,
 -- inverted, answers where a point of the screen lies inside a window.
 
 local affine = hz.include("affine")
+local color = hz.include("color")
 
 local R = {}
 
--- Primaries of the linear working space: a name the core knows ("bt2020",
--- "srgb", "display-p3", "adobe-rgb") or eight chromaticity coordinates
--- (red x, y, green x, y, blue x, y, white x, y).
-R.working = "bt2020"
-local working_key = "bt2020"
-
 local surface_pipeline, sampler
-local encode_shaders
-local encode_pipelines = {} -- output format -> pipeline
-local composites = {} -- output id -> { image, slot, width, height }
-local decode_cache = {} -- working .. color -> transform
-local surface_push = buffer.create(144)
-local encode_push = buffer.create(64)
+-- ax and ay (32 bytes), the window's params, the target size, the opacity.
+local WINDOW_AT = 32
+local TARGET_SIZE_AT = WINDOW_AT + color.WINDOW_PARAMS_SIZE
+local OPACITY_AT = TARGET_SIZE_AT + 8
+local surface_push = buffer.create(OPACITY_AT + 8)
 
 -- window id -> transform set by `R.set_transform`
 local transforms = {}
+-- window id -> factor set by `R.set_brightness`
+local brightness = {}
 
 function R.init()
     surface_pipeline = gfx.create_render_pipeline({
         vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/surface.slang", entry = "vs_main" }),
         fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/surface.slang", entry = "fs_main" }),
-        targets = { { format = "rgba16float", blend = "premultiplied" } },
+        targets = { { format = color.format(), blend = "premultiplied" } },
         topology = "triangle-strip",
     })
-    encode_shaders = {
-        vertex = gfx.create_shader({ stage = "vertex", shader = "shaders/encode.slang", entry = "vs_main" }),
-        fragment = gfx.create_shader({ stage = "fragment", shader = "shaders/encode.slang", entry = "fs_main" }),
-    }
     sampler = gfx.create_sampler({ mag = "linear", min = "linear" })
-end
-
--- Sets the working primaries. Cached conversions are dropped.
-function R.set_working(primaries)
-    -- Fails here, for the caller, when the core does not accept them.
-    hz.decode_color(0, 0, 0, 1, primaries)
-    R.working = primaries
-    working_key = type(primaries) == "table" and table.concat(primaries, ",") or primaries
-    decode_cache = {}
-    hz.request_frame()
 end
 
 -- Sets the transform a window is drawn with (window-local logical
 -- coordinates to global logical coordinates), or removes it with nil.
 function R.set_transform(window, transform)
     transforms[window] = transform
+    hz.request_frame()
+end
+
+-- Sets the working primaries of the session (`hz.set_working_space`).
+function R.set_working(primaries)
+    hz.set_working_space(primaries)
+end
+
+-- Sets the factor on the light of a window (1 or nil: its reference white
+-- lands on the reference white of the output).
+function R.set_brightness(window, factor)
+    brightness[window] = factor
     hz.request_frame()
 end
 
@@ -82,68 +74,9 @@ function R.restore(saved)
     transforms = saved or {}
 end
 
-local function encode_pipeline(format)
-    local pipeline = encode_pipelines[format]
-    if not pipeline then
-        pipeline = gfx.create_render_pipeline({
-            vertex = encode_shaders.vertex,
-            fragment = encode_shaders.fragment,
-            targets = { { format = format } },
-        })
-        encode_pipelines[format] = pipeline
-    end
-    return pipeline
-end
-
-local function composite_for(output)
-    local composite = composites[output.id]
-    if composite and (composite.width ~= output.width or composite.height ~= output.height) then
-        gfx.destroy(composite.slot)
-        gfx.destroy(composite.image)
-        composite = nil
-    end
-    if not composite then
-        local image = gfx.create_image({
-            format = "rgba16float",
-            width = output.width,
-            height = output.height,
-            usage = { "color_target", "sampled", "copy_src" },
-        })
-        composite = {
-            image = image,
-            slot = gfx.create_texture_slot(image),
-            width = output.width,
-            height = output.height,
-        }
-        composites[output.id] = composite
-    end
-    return composite
-end
-
-local function decode_for(color)
-    local key = working_key .. ":" .. color
-    local transform = decode_cache[key]
-    if not transform then
-        transform = hz.decode_transform(color, R.working)
-        decode_cache[key] = transform
-    end
-    return transform
-end
-
-local function write_matrix(push, at, m)
-    for row = 0, 2 do
-        buffer.writef32(push, at + row * 16, m[row * 3 + 1])
-        buffer.writef32(push, at + row * 16 + 4, m[row * 3 + 2])
-        buffer.writef32(push, at + row * 16 + 8, m[row * 3 + 3])
-    end
-end
-
-local WHOLE_TEXTURE = { 1, 0, 0, 1, 0, 0 }
-
 -- Draws one textured quad. `to_pixels` maps the quad's own coordinates
 -- (0..width, 0..height in logical units) to pixels of the target.
-local function draw_quad(to_pixels, width, height, surface, opacity)
-    local decode = decode_for(surface.color)
+local function draw_quad(to_pixels, width, height, surface, opacity, options)
     local push = surface_push
     buffer.writef32(push, 0, to_pixels[1])
     buffer.writef32(push, 4, to_pixels[2])
@@ -153,58 +86,49 @@ local function draw_quad(to_pixels, width, height, surface, opacity)
     buffer.writef32(push, 20, to_pixels[4])
     buffer.writef32(push, 24, to_pixels[6])
     buffer.writef32(push, 28, height)
-    -- Where the quad lies in the texture. The core has already folded in
-    -- the shown part and how the client turned the buffer.
-    local uv = surface.uv or WHOLE_TEXTURE
-    buffer.writef32(push, 32, uv[1])
-    buffer.writef32(push, 36, uv[2])
-    buffer.writef32(push, 40, uv[5])
-    buffer.writef32(push, 48, uv[3])
-    buffer.writef32(push, 52, uv[4])
-    buffer.writef32(push, 56, uv[6])
-    write_matrix(push, 64, decode.matrix)
-    -- The w of the three matrix rows.
-    local ootf = decode.ootf_coefficients or { 0, 0, 0 }
-    buffer.writef32(push, 76, ootf[1])
-    buffer.writef32(push, 92, ootf[2])
-    buffer.writef32(push, 108, ootf[3])
-    buffer.writef32(push, 120, decode.transfer_param)
-    buffer.writef32(push, 124, opacity)
-    buffer.writeu32(push, 128, decode.transfer_id)
-    buffer.writeu32(push, 132, decode.alpha_mode)
+    color.write_window_params(push, WINDOW_AT, surface, options)
+    buffer.writef32(push, OPACITY_AT, opacity)
     gfx.push(0, push)
     gfx.bind(0, surface.texture)
     gfx.draw(4)
 end
 
 -- `items`, when given, is what to draw instead of the windows, bottom to
--- top: { id = window id, transform = { a, b, c, d, tx, ty }, opacity = 0..1 }.
+-- top: { id = window id, transform = { a, b, c, d, tx, ty }, opacity = 0..1,
+-- brightness = factor on the window's light (1 when left out) }.
 -- `id` may name a closed window that is kept (`hz.keep_closed`). Without
--- it, every window is drawn with `R.transform_of` and its opacity.
+-- it, every window is drawn with `R.transform_of`, its opacity and the
+-- brightness set by `R.set_brightness`.
 function R.frame(output, target, items)
-    local composite = composite_for(output)
-    hz.debug_composite(composite.image, R.working)
+    local composite = color.composite_for(output)
 
     -- Global logical coordinates to pixels of this output.
     local to_output = affine.multiply(affine.scale(output.scale), affine.translate(-output.x, -output.y))
     local r, g, b = hz.background()
-    local br, bg, bb, ba = hz.decode_color(r, g, b, 1, R.working)
+    local br, bg, bb, ba = hz.color(r, g, b)
     local cursor = hz.cursor()
 
     gfx.begin_pass({ color = { { image = composite.image, load = "clear", clear = { br, bg, bb, ba } } } })
     gfx.set_pipeline(surface_pipeline)
     gfx.bind(1, sampler)
-    buffer.writef32(surface_push, 112, output.width)
-    buffer.writef32(surface_push, 116, output.height)
+    buffer.writef32(surface_push, TARGET_SIZE_AT, output.width)
+    buffer.writef32(surface_push, TARGET_SIZE_AT + 4, output.height)
 
     if not items then
         items = {}
         for _, window in hz.windows() do
-            table.insert(items, { id = window.id, transform = R.transform_of(window), opacity = window.opacity })
+            table.insert(items, {
+                id = window.id,
+                transform = R.transform_of(window),
+                opacity = window.opacity,
+                brightness = brightness[window.id],
+            })
         end
     end
+    local options = {}
     for _, item in items do
         local to_pixels = affine.multiply(to_output, item.transform)
+        options.brightness = item.brightness
         for _, surface in hz.surfaces(item.id) do
             if surface.texture and surface.uv then
                 draw_quad(
@@ -212,7 +136,8 @@ function R.frame(output, target, items)
                     surface.width,
                     surface.height,
                     surface,
-                    item.opacity
+                    item.opacity,
+                    options
                 )
             end
         end
@@ -245,17 +170,7 @@ function R.frame(output, target, items)
     end
     gfx.end_pass()
 
-    local encode = hz.encode_transform(R.working, output.id)
-    write_matrix(encode_push, 0, encode.matrix)
-    buffer.writeu32(encode_push, 48, encode.transfer_id)
-    buffer.writef32(encode_push, 52, encode.transfer_param)
-    buffer.writeu32(encode_push, 56, encode.clip and 1 or 0)
-    gfx.begin_pass({ color = { { image = target, load = "dont-care" } } })
-    gfx.set_pipeline(encode_pipeline(output.format))
-    gfx.bind(0, composite.slot)
-    gfx.push(0, encode_push)
-    gfx.draw(3)
-    gfx.end_pass()
+    color.present(composite, output, target)
 end
 
 -- The topmost surface at a point of the screen (global logical

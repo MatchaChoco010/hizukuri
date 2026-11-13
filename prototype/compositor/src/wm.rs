@@ -56,6 +56,18 @@ pub struct ConfigureHint {
 
 use crate::scene::Hit;
 
+/// What the window manager made of a pointer button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonUse {
+    /// Nothing: the core focuses the window under the pointer on a press.
+    Unused,
+    /// It decided the focus itself. The button still reaches the client.
+    FocusDecided,
+    /// On a press with no other button held: it takes the pointer (see
+    /// [`WindowManager::pointer_button`]).
+    Taken,
+}
+
 /// Which modifier keys are held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers {
@@ -63,6 +75,10 @@ pub struct Modifiers {
     pub alt: bool,
     pub shift: bool,
     pub logo: bool,
+    /// Not a key: the window with the keyboard focus asked that the
+    /// compositor's own shortcuts go to it (keyboard-shortcuts-inhibit).
+    /// Whether to honor that is the window manager's decision.
+    pub inhibited: bool,
 }
 
 impl Modifiers {
@@ -150,17 +166,44 @@ pub trait WindowManager {
     fn remove_window(&mut self, id: WindowId);
     /// The client committed a window geometry of this size.
     fn set_window_size(&mut self, id: WindowId, size: Size) -> bool;
-    /// A key was pressed or released. Returns `true` when the window
-    /// manager used it; the key then does not reach a client.
-    fn key(&mut self, _keycode: u32, _pressed: bool, _modifiers: Modifiers) -> bool {
+    /// The person now presses another key for the logo key (see
+    /// [`proto_backend::BackendEvent::LogoKey`]). Key events still say logo.
+    fn logo_key_changed(&mut self, _key: proto_backend::LogoKey) {}
+    /// A key was pressed or released. `symbol` is what the key is in the
+    /// keymap of the seat with the keys held (its keysym, and on a press
+    /// the text it types). Returns `true` when the window manager used it;
+    /// the key then does not reach a client.
+    fn key(
+        &mut self,
+        _keycode: u32,
+        _pressed: bool,
+        _modifiers: Modifiers,
+        _symbol: &proto_wl::KeySymbol,
+    ) -> bool {
         false
     }
-    /// A pointer button was pressed or released over `hit`. Returns `true`
-    /// when the window manager decided the focus itself; otherwise the core
-    /// focuses the window under the pointer on a press.
-    fn pointer_button(&mut self, _button: u32, _pressed: bool, _hit: Option<&Hit>) -> bool {
-        false
+    /// A pointer button was pressed or released over `hit`, with
+    /// `modifiers` held.
+    ///
+    /// A window manager that answers a press with [`ButtonUse::Taken`]
+    /// holds the pointer until every button is released (moving a window
+    /// about, choosing something on a screen of its own): that press, the
+    /// buttons after it and their releases reach no client, clients see
+    /// the pointer leave, and every motion comes to
+    /// [`Self::pointer_motion`]. While it holds the pointer, `hit` is
+    /// `None`.
+    fn pointer_button(
+        &mut self,
+        _button: u32,
+        _pressed: bool,
+        _hit: Option<&Hit>,
+        _modifiers: Modifiers,
+    ) -> ButtonUse {
+        ButtonUse::Unused
     }
+    /// The pointer moved to `position` (global logical) while the window
+    /// manager holds it.
+    fn pointer_motion(&mut self, _position: (f64, f64)) {}
     /// A finger touched the screen at `position` (global logical), over
     /// `hit`. Returns `true` when the window manager decided the focus
     /// itself; otherwise the core focuses the window that was touched. The
@@ -219,7 +262,23 @@ pub trait WindowManager {
     fn placements(&self) -> Vec<Placement>;
     /// What a window should be told when it is configured.
     fn configure_hint(&self, id: WindowId) -> ConfigureHint;
+    /// Where the popups of a window should be kept: a rectangle relative to
+    /// its window geometry, which they are flipped, slid or resized into as
+    /// far as their positioners allow. For a window manager that shows the
+    /// window somewhere else than its placement on an output says (scaled,
+    /// on a screen inside a 3D scene). `None`: the output the window is on.
+    fn popup_bounds(&self, _id: WindowId) -> Option<Rect> {
+        None
+    }
     fn take_requests(&mut self) -> Vec<WmRequest> {
         Vec::new()
+    }
+    /// Whether a window is seen: its client should keep drawing. Every
+    /// window is, unless the window manager says otherwise (a window on
+    /// a workspace out of view, one that waits for a place). The core
+    /// holds the frame callbacks of a window that is not, and tells its
+    /// client it is suspended.
+    fn is_visible(&self, _id: WindowId) -> bool {
+        true
     }
 }

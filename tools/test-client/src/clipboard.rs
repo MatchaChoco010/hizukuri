@@ -76,7 +76,7 @@ pub(crate) struct ClipboardState {
     /// of each. An offer the compositor ignored stays until cancelled.
     primary_sources: Vec<(
         zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
-        String,
+        crate::transfer::Payload,
     )>,
     /// Offers introduced and the types they announced.
     primary_offers: Vec<(
@@ -113,6 +113,26 @@ impl TestClient {
         mime_types: &[&str],
         text: &str,
     ) -> Result<(), ClientError> {
+        let mime_types: Vec<String> = mime_types.iter().map(|t| t.to_string()).collect();
+        self.offer_primary(
+            &mime_types,
+            crate::transfer::Payload::Same(text.to_string()),
+        )
+    }
+
+    /// [`Self::set_primary_selection`] with what the payload offers.
+    pub(crate) fn set_primary_selection_payload(
+        &mut self,
+        payload: crate::transfer::Payload,
+    ) -> Result<(), ClientError> {
+        self.offer_primary(&payload.mime_types(), payload)
+    }
+
+    fn offer_primary(
+        &mut self,
+        mime_types: &[String],
+        payload: crate::transfer::Payload,
+    ) -> Result<(), ClientError> {
         let state = &mut self.state;
         let (Some(manager), Some(device)) = (
             &state.globals.primary_selection_manager,
@@ -127,10 +147,7 @@ impl TestClient {
             source.offer(mime_type.to_string());
         }
         device.set_selection(Some(&source), state.last_serial);
-        state
-            .clipboard
-            .primary_sources
-            .push((source, text.to_string()));
+        state.clipboard.primary_sources.push((source, payload));
         Ok(())
     }
 
@@ -383,13 +400,14 @@ impl Dispatch<zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1, ()> 
         use zwp_primary_selection_source_v1::Event;
         match event {
             Event::Send { mime_type, fd } => {
-                if let Some((_, text)) = state
+                if let Some((_, payload)) = state
                     .clipboard
                     .primary_sources
                     .iter()
                     .find(|(known, _)| known == source)
                 {
-                    crate::features::write_text(fd, text);
+                    let bytes = payload.for_type(&mime_type);
+                    state.start_write(fd, bytes);
                 }
                 state
                     .events

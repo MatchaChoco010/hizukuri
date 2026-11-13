@@ -11,14 +11,14 @@ use crate::device::vk_error;
 use crate::error::{ErrorCode, GfxError, Result, bail};
 use crate::format::Format;
 use crate::gpu::{
-    COLOR_LAYERS, Garbage, Gpu, Image, MAX_VERTEX_BUFFERS, PipelineCommon, SamplerSlot,
-    SlotContent, image_barrier,
+    Garbage, Gpu, Image, MAX_VERTEX_BUFFERS, PipelineCommon, SamplerSlot, SlotContent,
+    image_barrier,
 };
 use crate::handle::{Handle, Kind, Pool};
 use crate::shader::{BindingKind, MAX_BINDINGS};
 
 /// Upper bound of push data the API handles (the device limit may be lower).
-const PUSH_CAPACITY: usize = 256;
+pub(crate) const PUSH_CAPACITY: usize = 256;
 
 /// The heap slots and push-constant bytes a script has set for one bind point.
 pub(crate) struct BindTable {
@@ -51,11 +51,25 @@ struct BoundBuffer {
     available: u64,
 }
 
+/// One attached subresource of the open pass, with the raw image. The raw
+/// handle stays valid until the frame has executed even if the script
+/// destroys the image.
+struct PassAttachment {
+    handle: Handle,
+    vk: vk::Image,
+    range: vk::ImageSubresourceRange,
+    /// Layout of the subresource during the pass.
+    layout: vk::ImageLayout,
+    /// Layout it returns to when the pass ends.
+    rest: vk::ImageLayout,
+}
+
 pub(crate) struct PassState {
-    /// Attachments with the raw image and its rest layout. The raw handles stay
-    /// valid until the frame has executed even if the script destroys the image.
-    attachments: Vec<(Handle, vk::Image, vk::ImageLayout)>,
+    /// Color attachments, resolve targets and the depth attachment.
+    attachments: Vec<PassAttachment>,
     formats: Vec<Format>,
+    depth_format: Option<Format>,
+    samples: u32,
     width: u32,
     height: u32,
     pipeline: Option<Handle>,
@@ -63,6 +77,37 @@ pub(crate) struct PassState {
     index_buffer: Option<(BoundBuffer, IndexType)>,
 }
 
+/// Checks that an attachment has the extent and the sample count of the
+/// attachments before it.
+fn fit_attachment(
+    what: &str,
+    image: &Image,
+    sub: Subresource,
+    extent: &mut Option<(u32, u32)>,
+    samples: &mut Option<u32>,
+) -> Result<()> {
+    let (width, height, _) = image.level_extent(sub.mip);
+    match *extent {
+        None => *extent = Some((width, height)),
+        Some(e) if e != (width, height) => bail!(
+            Mismatch,
+            "{what} is {width}x{height} but the attachments before it are {}x{}",
+            e.0,
+            e.1
+        ),
+        Some(_) => {}
+    }
+    match *samples {
+        None => *samples = Some(image.samples),
+        Some(s) if s != image.samples => bail!(
+            Mismatch,
+            "{what} has {} sample(s) but the attachments before it have {s}",
+            image.samples
+        ),
+        Some(_) => {}
+    }
+    Ok(())
+}
 impl Gpu {
     pub(crate) fn cb(&self) -> vk::CommandBuffer {
         self.frames[self.frame_index].cb
@@ -230,6 +275,7 @@ impl Gpu {
                     &self.ctx.as_ref().expect("device").device,
                     cb,
                     image.vk,
+                    image.full_range(),
                     image.layout,
                     image.rest,
                 );
@@ -241,10 +287,21 @@ impl Gpu {
 
     // ----- copies -----------------------------------------------------------
 
-    /// Replaces the contents of an image with tightly packed pixel data.
+    /// Replaces the contents of an image (its mip level 0) with tightly
+    /// packed pixel data. A 3D image takes its slices one after another.
     pub fn upload_image(&mut self, image: Handle, data: &[u8]) -> Result<()> {
+        self.upload_image_level(image, Subresource::default(), data)
+    }
+
+    /// Replaces the contents of one mip level of one layer of an image.
+    pub fn upload_image_level(
+        &mut self,
+        image: Handle,
+        sub: Subresource,
+        data: &[u8],
+    ) -> Result<()> {
         self.outside_pass("upload_image")?;
-        let (vk_image, rest, layout, width, height, bytes) = {
+        let (vk_image, rest, layout, extent, bytes, full, layers) = {
             let i = self.images.get(image)?;
             if !i.usage.contains(ImageUsage::COPY_DST) {
                 bail!(
@@ -252,19 +309,32 @@ impl Gpu {
                     "{image:?} was not created with usage `copy_dst`"
                 );
             }
-            (i.vk, i.rest, i.layout, i.width, i.height, i.bytes)
+            i.check_sub(sub, image)?;
+            (
+                i.vk,
+                i.rest,
+                i.layout,
+                i.level_extent(sub.mip),
+                i.level_bytes(sub.mip),
+                i.full_range(),
+                i.sub_layers(sub),
+            )
         };
         if data.len() as u64 != bytes {
             bail!(
                 Mismatch,
-                "{image:?} is {width}x{height} and needs exactly {bytes} bytes, got {}",
+                "mip level {} of {image:?} is {}x{}x{} and needs exactly {bytes} bytes, got {}",
+                sub.mip,
+                extent.0,
+                extent.1,
+                extent.2,
                 data.len()
             );
         }
         let cb = self.cb();
         // SAFETY: the staging buffer is exactly `bytes` long and is retired
         // with this frame's serial, so it outlives the copy. The image is
-        // alive and its tracked layout is accurate.
+        // alive, its tracked layout is accurate, and the subresource exists.
         let staging = unsafe {
             let ctx = self.ctx.as_mut().expect("device lives until drop");
             let device = ctx.device.clone();
@@ -313,19 +383,22 @@ impl Gpu {
             std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len());
             let _ = ctx.allocator().flush_allocation(&allocation);
 
+            // The whole image changes layout, so that every subresource
+            // stays in the one layout the image is tracked with.
             image_barrier(
                 &device,
                 cb,
                 vk_image,
+                full,
                 layout,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             );
             let regions = [vk::BufferImageCopy2::default()
-                .image_subresource(COLOR_LAYERS)
+                .image_subresource(layers)
                 .image_extent(vk::Extent3D {
-                    width,
-                    height,
-                    depth: 1,
+                    width: extent.0,
+                    height: extent.1,
+                    depth: extent.2,
                 })];
             device.cmd_copy_buffer_to_image2(
                 cb,
@@ -339,6 +412,7 @@ impl Gpu {
                 &device,
                 cb,
                 vk_image,
+                full,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 rest,
             );
@@ -354,8 +428,121 @@ impl Gpu {
         Ok(())
     }
 
-    /// Copies all of `src` into `dst`. Both must have the same size and the
-    /// same bytes per pixel.
+    /// Fills every mip level below the first from the level above it, with a
+    /// linear filter. The image needs the usages `copy_src` and `copy_dst`.
+    pub fn generate_mipmaps(&mut self, image: Handle) -> Result<()> {
+        self.outside_pass("generate_mipmaps")?;
+        let i = self.images.get(image)?;
+        if !i.usage.contains(ImageUsage::COPY_SRC) || !i.usage.contains(ImageUsage::COPY_DST) {
+            bail!(
+                InvalidArgument,
+                "{image:?} needs the usages `copy_src` and `copy_dst` to generate mip levels"
+            );
+        }
+        let caps = self.format_caps(i.format);
+        if i.format.is_depth() || !caps.blit_src || !caps.blit_dst || !caps.filter_linear {
+            bail!(
+                Unsupported,
+                "mip levels of {} cannot be generated on this device",
+                i.format.name()
+            );
+        }
+        if i.kind == ImageKind::D3 {
+            bail!(
+                InvalidArgument,
+                "{image:?} is a 3D image; it has one mip level"
+            );
+        }
+        let cb = self.cb();
+        let levels = i.mip_levels;
+        let level_range = |mip: u32, count: u32| vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: mip,
+            level_count: count,
+            base_array_layer: 0,
+            layer_count: i.layers,
+        };
+        let level_layers = |mip: u32| vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: mip,
+            base_array_layer: 0,
+            layer_count: i.layers,
+        };
+        let corner = |mip: u32| {
+            let (w, h, _) = i.level_extent(mip);
+            vk::Offset3D {
+                x: w as i32,
+                y: h as i32,
+                z: 1,
+            }
+        };
+        use vk::ImageLayout as L;
+        // SAFETY: recording outside a pass. The image is alive, single
+        // sampled, of a format that can be the source and the destination of
+        // a linear blit, and its tracked layout is accurate. Every level is
+        // written before it is read.
+        unsafe {
+            let device = &self.ctx().device;
+            image_barrier(
+                device,
+                cb,
+                i.vk,
+                i.full_range(),
+                i.layout,
+                L::TRANSFER_DST_OPTIMAL,
+            );
+            for mip in 1..levels {
+                image_barrier(
+                    device,
+                    cb,
+                    i.vk,
+                    level_range(mip - 1, 1),
+                    L::TRANSFER_DST_OPTIMAL,
+                    L::TRANSFER_SRC_OPTIMAL,
+                );
+                let regions = [vk::ImageBlit2::default()
+                    .src_subresource(level_layers(mip - 1))
+                    .src_offsets([vk::Offset3D::default(), corner(mip - 1)])
+                    .dst_subresource(level_layers(mip))
+                    .dst_offsets([vk::Offset3D::default(), corner(mip)])];
+                device.cmd_blit_image2(
+                    cb,
+                    &vk::BlitImageInfo2::default()
+                        .src_image(i.vk)
+                        .src_image_layout(L::TRANSFER_SRC_OPTIMAL)
+                        .dst_image(i.vk)
+                        .dst_image_layout(L::TRANSFER_DST_OPTIMAL)
+                        .regions(&regions)
+                        .filter(vk::Filter::LINEAR),
+                );
+            }
+            if levels > 1 {
+                image_barrier(
+                    device,
+                    cb,
+                    i.vk,
+                    level_range(0, levels - 1),
+                    L::TRANSFER_SRC_OPTIMAL,
+                    i.rest,
+                );
+            }
+            image_barrier(
+                device,
+                cb,
+                i.vk,
+                level_range(levels - 1, 1),
+                L::TRANSFER_DST_OPTIMAL,
+                i.rest,
+            );
+        }
+        let rest = i.rest;
+        self.images.get_mut(image)?.layout = rest;
+        self.stats.barriers += u64::from(levels) + 2;
+        Ok(())
+    }
+
+    /// Copies mip level 0 of `src` into mip level 0 of `dst`. Both must be
+    /// 2D, have the same size and the same bytes per pixel.
     pub fn copy_image(&mut self, src: Handle, dst: Handle) -> Result<()> {
         self.outside_pass("copy_image")?;
         if src == dst {
@@ -375,6 +562,12 @@ impl Gpu {
                 "{dst:?} was not created with usage `copy_dst`"
             );
         }
+        if s.kind != ImageKind::D2 || d.kind != ImageKind::D2 {
+            bail!(
+                InvalidArgument,
+                "copies between images are 2D only; fill other images with upload_image"
+            );
+        }
         if (s.width, s.height) != (d.width, d.height) {
             bail!(
                 Mismatch,
@@ -385,23 +578,28 @@ impl Gpu {
                 d.height
             );
         }
-        if s.format.bytes_per_pixel() != d.format.bytes_per_pixel() {
+        if s.format.bytes_per_pixel() != d.format.bytes_per_pixel()
+            || s.format.is_depth() != d.format.is_depth()
+        {
             bail!(
                 Mismatch,
-                "{} and {} have different texel sizes",
+                "{} and {} have different texel sizes or kinds",
                 s.format.name(),
                 d.format.name()
             );
         }
         let cb = self.cb();
-        // SAFETY: both images are alive, distinct, of equal extent and of
-        // size-compatible formats; their tracked layouts are accurate.
+        let sub = Subresource::default();
+        // SAFETY: both images are alive, distinct, single-sampled (they have
+        // copy usages), of equal extent and of size-compatible formats; their
+        // tracked layouts are accurate.
         unsafe {
             let device = &self.ctx().device;
             image_barrier(
                 device,
                 cb,
                 s.vk,
+                s.full_range(),
                 s.layout,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             );
@@ -409,12 +607,13 @@ impl Gpu {
                 device,
                 cb,
                 d.vk,
+                d.full_range(),
                 d.layout,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             );
             let regions = [vk::ImageCopy2::default()
-                .src_subresource(COLOR_LAYERS)
-                .dst_subresource(COLOR_LAYERS)
+                .src_subresource(s.sub_layers(sub))
+                .dst_subresource(d.sub_layers(sub))
                 .extent(vk::Extent3D {
                     width: s.width,
                     height: s.height,
@@ -433,6 +632,7 @@ impl Gpu {
                 device,
                 cb,
                 s.vk,
+                s.full_range(),
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 s.rest,
             );
@@ -440,6 +640,7 @@ impl Gpu {
                 device,
                 cb,
                 d.vk,
+                d.full_range(),
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 d.rest,
             );
@@ -453,48 +654,66 @@ impl Gpu {
 
     // ----- render passes ----------------------------------------------------
 
-    /// Opens a render pass on one or more color attachments.
+    /// Opens a render pass on one or more color attachments (mip level 0 of
+    /// each image).
     pub fn begin_pass(&mut self, color: &[ColorAttachment]) -> Result<()> {
+        if color.is_empty() {
+            self.outside_pass("begin_pass")?;
+            bail!(InvalidArgument, "a pass needs at least one attachment");
+        }
+        self.begin_pass_desc(&PassDesc {
+            color: color.iter().map(|a| PassColor::from(*a)).collect(),
+            depth: None,
+        })
+    }
+
+    /// Opens a render pass: color attachments, each one mip level of one
+    /// layer of an image and optionally resolved into another image, and an
+    /// optional depth attachment.
+    pub fn begin_pass_desc(&mut self, desc: &PassDesc) -> Result<()> {
         self.outside_pass("begin_pass")?;
         let max = 8.min(self.ctx().limits.max_color_attachments as usize);
-        if color.is_empty() || color.len() > max {
+        if desc.color.len() > max {
             bail!(
                 InvalidArgument,
-                "a pass needs 1..={max} color attachments, got {}",
-                color.len()
+                "a pass has at most {max} color attachments, got {}",
+                desc.color.len()
             );
         }
-        let mut attachments = Vec::with_capacity(color.len());
-        let mut formats = Vec::with_capacity(color.len());
+        if desc.color.is_empty() && desc.depth.is_none() {
+            bail!(InvalidArgument, "a pass needs at least one attachment");
+        }
+
+        // Everything is checked before anything is recorded.
+        let mut seen: Vec<Handle> = Vec::new();
+        let mut formats = Vec::with_capacity(desc.color.len());
         let mut extent = None;
-        for (i, attachment) in color.iter().enumerate() {
-            let image = self.images.get(attachment.image)?;
+        let mut samples = None;
+        for (i, a) in desc.color.iter().enumerate() {
+            let image = self.images.get(a.image)?;
             if !image.usage.contains(ImageUsage::COLOR_TARGET) {
                 bail!(
                     InvalidArgument,
                     "attachment {i}: {:?} was not created with usage `color_target`",
-                    attachment.image
+                    a.image
                 );
             }
-            if color[..i].iter().any(|c| c.image == attachment.image) {
+            image.check_sub(a.sub, a.image)?;
+            if seen.contains(&a.image) {
                 bail!(
                     InvalidArgument,
                     "attachment {i}: the image is attached twice"
                 );
             }
-            match extent {
-                None => extent = Some((image.width, image.height)),
-                Some(e) if e != (image.width, image.height) => bail!(
-                    Mismatch,
-                    "attachment {i} is {}x{} but attachment 0 is {}x{}",
-                    image.width,
-                    image.height,
-                    e.0,
-                    e.1
-                ),
-                Some(_) => {}
-            }
-            if let LoadOp::Clear(c) = attachment.load
+            seen.push(a.image);
+            fit_attachment(
+                &format!("attachment {i}"),
+                image,
+                a.sub,
+                &mut extent,
+                &mut samples,
+            )?;
+            if let LoadOp::Clear(c) = a.load
                 && c.iter().any(|v| !v.is_finite())
             {
                 bail!(
@@ -502,60 +721,193 @@ impl Gpu {
                     "attachment {i}: the clear color is not finite"
                 );
             }
-            attachments.push((attachment.image, image.vk, image.rest));
+            if let Some((resolve, resolve_sub)) = a.resolve {
+                let target = self.images.get(resolve)?;
+                if image.samples == 1 {
+                    bail!(
+                        InvalidArgument,
+                        "attachment {i}: only a multisampled attachment can be resolved"
+                    );
+                }
+                if !target.usage.contains(ImageUsage::COLOR_TARGET) {
+                    bail!(
+                        InvalidArgument,
+                        "attachment {i}: the resolve target {resolve:?} was not created with usage `color_target`"
+                    );
+                }
+                target.check_sub(resolve_sub, resolve)?;
+                if target.samples != 1
+                    || target.format != image.format
+                    || target.level_extent(resolve_sub.mip) != image.level_extent(a.sub.mip)
+                {
+                    bail!(
+                        Mismatch,
+                        "attachment {i}: the resolve target must be single-sampled, of the same format and of the same size as the attachment"
+                    );
+                }
+                if seen.contains(&resolve) {
+                    bail!(
+                        InvalidArgument,
+                        "attachment {i}: the resolve target is attached twice"
+                    );
+                }
+                seen.push(resolve);
+            }
             formats.push(image.format);
         }
-        let (width, height) = extent.expect("at least one attachment");
-        let cb = self.cb();
-
-        let mut infos = Vec::with_capacity(color.len());
-        for attachment in color {
-            let image = self.images.get_mut(attachment.image)?;
-            // SAFETY: recording outside a pass; the tracked layout is accurate.
-            unsafe {
-                image_barrier(
-                    &self.ctx.as_ref().expect("device").device,
-                    cb,
-                    image.vk,
-                    image.layout,
-                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        let mut depth_format = None;
+        if let Some(d) = &desc.depth {
+            let image = self.images.get(d.image)?;
+            if !image.usage.contains(ImageUsage::DEPTH_TARGET) {
+                bail!(
+                    InvalidArgument,
+                    "depth attachment: {:?} was not created with usage `depth_target`",
+                    d.image
                 );
             }
-            image.layout = vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL;
+            image.check_sub(d.sub, d.image)?;
+            if seen.contains(&d.image) {
+                bail!(
+                    InvalidArgument,
+                    "depth attachment: the image is attached twice"
+                );
+            }
+            seen.push(d.image);
+            fit_attachment(
+                "the depth attachment",
+                image,
+                d.sub,
+                &mut extent,
+                &mut samples,
+            )?;
+            if let DepthLoadOp::Clear(c) = d.load
+                && !(0.0..=1.0).contains(&c)
+            {
+                bail!(
+                    InvalidArgument,
+                    "depth attachment: the clear depth {c} is outside 0..=1"
+                );
+            }
+            depth_format = Some(image.format);
+        }
+        let (width, height) = extent.expect("at least one attachment");
+        let samples = samples.expect("at least one attachment");
+        let cb = self.cb();
+
+        // Moves one subresource into its attachment layout and returns its
+        // view.
+        let mut attachments = Vec::with_capacity(seen.len());
+        let mut barriers = 0;
+        let mut attach = |gpu: &mut Gpu, handle: Handle, sub: Subresource, layout| {
+            let image = gpu.images.get_mut(handle).expect("checked above");
+            let device = &gpu.ctx.as_ref().expect("device").device;
+            let range = image.sub_range(sub);
+            // SAFETY: recording outside a pass; the tracked layout is
+            // accurate and the subresource exists.
+            unsafe {
+                if image.layout == vk::ImageLayout::UNDEFINED {
+                    image_barrier(
+                        device,
+                        cb,
+                        image.vk,
+                        image.full_range(),
+                        image.layout,
+                        image.rest,
+                    );
+                    image.layout = image.rest;
+                    barriers += 1;
+                }
+                image_barrier(device, cb, image.vk, range, image.layout, layout);
+            }
+            barriers += 1;
             image.in_pass = true;
-            let (load_op, clear) = match attachment.load {
+            image.attached = sub;
+            attachments.push(PassAttachment {
+                handle,
+                vk: image.vk,
+                range,
+                layout,
+                rest: image.rest,
+            });
+            image.attachment_view(sub)
+        };
+
+        use vk::ImageLayout as L;
+        let mut infos = Vec::with_capacity(desc.color.len());
+        for a in &desc.color {
+            let view = attach(self, a.image, a.sub, L::COLOR_ATTACHMENT_OPTIMAL);
+            let (load_op, clear) = match a.load {
                 LoadOp::Clear(c) => (vk::AttachmentLoadOp::CLEAR, c),
                 LoadOp::Load => (vk::AttachmentLoadOp::LOAD, [0.0; 4]),
                 LoadOp::DontCare => (vk::AttachmentLoadOp::DONT_CARE, [0.0; 4]),
             };
-            infos.push(
-                vk::RenderingAttachmentInfo::default()
-                    .image_view(image.view)
-                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                    .load_op(load_op)
-                    .store_op(if attachment.store {
-                        vk::AttachmentStoreOp::STORE
+            let mut info = vk::RenderingAttachmentInfo::default()
+                .image_view(view)
+                .image_layout(L::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(load_op)
+                .store_op(if a.store {
+                    vk::AttachmentStoreOp::STORE
+                } else {
+                    vk::AttachmentStoreOp::DONT_CARE
+                })
+                .clear_value(vk::ClearValue::color(vk::ClearColorValue::float32(clear)));
+            if let Some((resolve, resolve_sub)) = a.resolve {
+                let class = self
+                    .images
+                    .get(a.image)
+                    .expect("checked above")
+                    .format
+                    .class();
+                let resolve_view = attach(self, resolve, resolve_sub, L::COLOR_ATTACHMENT_OPTIMAL);
+                info = info
+                    .resolve_mode(if class == crate::format::NumClass::Float {
+                        vk::ResolveModeFlagBits::AVERAGE
                     } else {
-                        vk::AttachmentStoreOp::DONT_CARE
+                        vk::ResolveModeFlagBits::SAMPLE_ZERO
                     })
-                    .clear_value(vk::ClearValue::color(vk::ClearColorValue::float32(clear))),
-            );
+                    .resolve_image_view(resolve_view)
+                    .resolve_image_layout(L::COLOR_ATTACHMENT_OPTIMAL);
+            }
+            infos.push(info);
         }
-        self.stats.barriers += color.len() as u64;
-        // SAFETY: the attachments are alive, in the attachment layout, of equal
-        // extent, and the render area equals that extent.
+        let depth_info = desc.depth.as_ref().map(|d| {
+            let view = attach(self, d.image, d.sub, L::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            let (load_op, clear) = match d.load {
+                DepthLoadOp::Clear(c) => (vk::AttachmentLoadOp::CLEAR, c),
+                DepthLoadOp::Load => (vk::AttachmentLoadOp::LOAD, 1.0),
+                DepthLoadOp::DontCare => (vk::AttachmentLoadOp::DONT_CARE, 1.0),
+            };
+            vk::RenderingAttachmentInfo::default()
+                .image_view(view)
+                .image_layout(L::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                .load_op(load_op)
+                .store_op(if d.store {
+                    vk::AttachmentStoreOp::STORE
+                } else {
+                    vk::AttachmentStoreOp::DONT_CARE
+                })
+                .clear_value(vk::ClearValue::depth_stencil(vk::ClearDepthStencilValue {
+                    depth: clear,
+                    stencil: 0,
+                }))
+        });
+        self.stats.barriers += barriers;
+        // SAFETY: the attachments are alive, in their attachment layouts, of
+        // equal extent and sample count, and the render area equals that
+        // extent.
         unsafe {
             let device = &self.ctx().device;
-            device.cmd_begin_rendering(
-                cb,
-                &vk::RenderingInfo::default()
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                        extent: vk::Extent2D { width, height },
-                    })
-                    .layer_count(1)
-                    .color_attachments(&infos),
-            );
+            let mut info = vk::RenderingInfo::default()
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: vk::Extent2D { width, height },
+                })
+                .layer_count(1)
+                .color_attachments(&infos);
+            if let Some(depth_info) = &depth_info {
+                info = info.depth_attachment(depth_info);
+            }
+            device.cmd_begin_rendering(cb, &info);
             device.cmd_set_viewport(
                 cb,
                 0,
@@ -580,6 +932,8 @@ impl Gpu {
         self.pass = Some(PassState {
             attachments,
             formats,
+            depth_format,
+            samples,
             width,
             height,
             pipeline: None,
@@ -600,20 +954,13 @@ impl Gpu {
         unsafe {
             let device = &self.ctx().device;
             device.cmd_end_rendering(cb);
-            for (_, image, rest) in &pass.attachments {
-                image_barrier(
-                    device,
-                    cb,
-                    *image,
-                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    *rest,
-                );
+            for a in &pass.attachments {
+                image_barrier(device, cb, a.vk, a.range, a.layout, a.rest);
             }
         }
         self.stats.barriers += pass.attachments.len() as u64;
-        for (handle, _, rest) in &pass.attachments {
-            if let Ok(image) = self.images.get_mut(*handle) {
-                image.layout = *rest;
+        for a in &pass.attachments {
+            if let Ok(image) = self.images.get_mut(a.handle) {
                 image.in_pass = false;
             }
         }
@@ -621,6 +968,19 @@ impl Gpu {
     }
 
     pub fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) -> Result<()> {
+        self.set_viewport_depth(x, y, width, height, 0.0, 1.0)
+    }
+
+    /// Sets the viewport and the range of depth values it maps to.
+    pub fn set_viewport_depth(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        min_depth: f32,
+        max_depth: f32,
+    ) -> Result<()> {
         self.in_pass("set_viewport")?;
         let max = self.ctx().limits.max_image_dimension as f32;
         let ok = [x, y, width, height].iter().all(|v| v.is_finite())
@@ -629,11 +989,13 @@ impl Gpu {
             && height > 0.0
             && height <= max
             && x.abs() <= 2.0 * max
-            && y.abs() <= 2.0 * max;
+            && y.abs() <= 2.0 * max
+            && (0.0..=1.0).contains(&min_depth)
+            && (0.0..=1.0).contains(&max_depth);
         if !ok {
             bail!(
                 InvalidArgument,
-                "viewport ({x}, {y}, {width}, {height}) is not valid"
+                "viewport ({x}, {y}, {width}, {height}) with depth {min_depth}..{max_depth} is not valid"
             );
         }
         // SAFETY: recording inside a pass; the viewport is within device limits.
@@ -646,14 +1008,13 @@ impl Gpu {
                     y,
                     width,
                     height,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
+                    min_depth,
+                    max_depth,
                 }],
             );
         }
         Ok(())
     }
-
     pub fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32) -> Result<()> {
         self.in_pass("set_scissor")?;
         let pass = self.pass.as_ref().expect("checked");
@@ -704,6 +1065,23 @@ impl Gpu {
                         "the pipeline renders to [{}] but the pass has [{}]",
                         format_list(&p.color_formats),
                         format_list(&pass.formats)
+                    );
+                }
+                if self.checks && p.depth_format != pass.depth_format {
+                    let name = |f: Option<Format>| f.map_or("no depth attachment", Format::name);
+                    bail!(
+                        Mismatch,
+                        "the pipeline was created for {} but the pass has {}",
+                        name(p.depth_format),
+                        name(pass.depth_format)
+                    );
+                }
+                if self.checks && p.samples != pass.samples {
+                    bail!(
+                        Mismatch,
+                        "the pipeline draws with {} sample(s) but the attachments of the pass have {}",
+                        p.samples,
+                        pass.samples
                     );
                 }
                 pass.pipeline = Some(pipeline);
@@ -1126,7 +1504,14 @@ impl Gpu {
         unsafe {
             for handle in &storage_images {
                 let image = self.images.get(*handle).expect("validated");
-                image_barrier(device, cb, image.vk, image.layout, vk::ImageLayout::GENERAL);
+                image_barrier(
+                    device,
+                    cb,
+                    image.vk,
+                    image.full_range(),
+                    image.layout,
+                    vk::ImageLayout::GENERAL,
+                );
             }
             if table.dirty {
                 send_push_data(device, cb, &p.common, table);
@@ -1136,7 +1521,14 @@ impl Gpu {
             device.cmd_dispatch(cb, x, y, z);
             for handle in &storage_images {
                 let image = self.images.get(*handle).expect("validated");
-                image_barrier(device, cb, image.vk, vk::ImageLayout::GENERAL, image.rest);
+                image_barrier(
+                    device,
+                    cb,
+                    image.vk,
+                    image.full_range(),
+                    vk::ImageLayout::GENERAL,
+                    image.rest,
+                );
             }
             if writes_buffers {
                 let barriers = [vk::MemoryBarrier2::default()
@@ -1226,6 +1618,8 @@ fn validate_bindings(
     let mut sampled: [Option<(Handle, Format)>; MAX_BINDINGS as usize] =
         [None; MAX_BINDINGS as usize];
     let mut filtering = [false; MAX_BINDINGS as usize];
+    let mut border = [false; MAX_BINDINGS as usize];
+    let mut compare = [false; MAX_BINDINGS as usize];
     for b in &common.bindings {
         if !b.used {
             continue;
@@ -1243,6 +1637,8 @@ fn validate_bindings(
         if let BindingKind::Sampler = b.kind {
             let sampler = samplers.get(handle).map_err(|e| context(b, e))?;
             filtering[b.binding as usize] = sampler.filtering;
+            border[b.binding as usize] = sampler.border;
+            compare[b.binding as usize] = sampler.compare;
             continue;
         }
         let content = slots.get(handle).map_err(|e| context(b, e))?;
@@ -1263,7 +1659,8 @@ fn validate_bindings(
             // bound one, so each of them must be a usable texture.
             for element in 0..count {
                 let index = handle.index() + element;
-                let Some(SlotContent::SampledImage { image }) = slots.get_by_index(index) else {
+                let Some(SlotContent::SampledImage { image, view }) = slots.get_by_index(index)
+                else {
                     bail!(
                         MissingBinding,
                         "binding {} (`{}`): element {element} of the texture array (heap slot {index}) is not a live texture slot",
@@ -1272,6 +1669,15 @@ fn validate_bindings(
                     );
                 };
                 let i = images.get(*image).map_err(|e| context(b, e))?;
+                if view.kind != ImageKind::D2 {
+                    bail!(
+                        Mismatch,
+                        "binding {} (`{}`): element {element} shows a {} texture; the array holds 2D textures",
+                        b.binding,
+                        b.name,
+                        view.kind.name()
+                    );
+                }
                 if i.format.class() != class {
                     bail!(
                         Mismatch,
@@ -1281,7 +1687,9 @@ fn validate_bindings(
                         i.format.name()
                     );
                 }
-                if i.in_pass || i.layout != vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL {
+                if (i.in_pass && view.contains(i.attached))
+                    || i.layout != vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                {
                     bail!(
                         InvalidState,
                         "binding {} (`{}`): element {element} is an attachment of the open pass or has no contents yet",
@@ -1293,8 +1701,30 @@ fn validate_bindings(
             continue;
         }
         match (b.kind, *content) {
-            (BindingKind::SampledTexture { class }, SlotContent::SampledImage { image }) => {
+            (
+                BindingKind::SampledTexture { class }
+                | BindingKind::SampledTexture3D { class }
+                | BindingKind::SampledTextureCube { class },
+                SlotContent::SampledImage { image, view },
+            ) => {
                 let i = images.get(image).map_err(|e| context(b, e))?;
+                // The view type of the descriptor must be the one the shader
+                // declares.
+                let wanted = match b.kind {
+                    BindingKind::SampledTexture3D { .. } => ImageKind::D3,
+                    BindingKind::SampledTextureCube { .. } => ImageKind::Cube,
+                    _ => ImageKind::D2,
+                };
+                if view.kind != wanted {
+                    bail!(
+                        Mismatch,
+                        "binding {} (`{}`) samples a {} texture but the slot shows a {} texture",
+                        b.binding,
+                        b.name,
+                        wanted.name(),
+                        view.kind.name()
+                    );
+                }
                 if i.format.class() != class {
                     bail!(
                         Mismatch,
@@ -1304,12 +1734,14 @@ fn validate_bindings(
                         i.format.name()
                     );
                 }
-                if i.in_pass {
+                if i.in_pass && view.contains(i.attached) {
                     bail!(
                         InvalidState,
-                        "binding {} (`{}`): the image is an attachment of the open pass",
+                        "binding {} (`{}`): the slot shows mip level {} of layer {}, which is an attachment of the open pass",
                         b.binding,
-                        b.name
+                        b.name,
+                        i.attached.mip,
+                        i.attached.layer
                     );
                 }
                 if i.layout != vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL {
@@ -1368,17 +1800,41 @@ fn validate_bindings(
         }
     }
     for (texture, sampler) in &common.sampling_pairs {
-        if let Some((_, format)) = sampled[*texture as usize]
-            && filtering[*sampler as usize]
-        {
-            let index = Format::ALL
-                .iter()
-                .position(|f| *f == format)
-                .expect("format is in ALL");
-            if !format_caps[index].filter_linear {
+        // A comparison is undefined without a comparison sampler, and a
+        // plain read is undefined with one.
+        let compared = common.comparison_pairs.contains(&(*texture, *sampler));
+        if compared != compare[*sampler as usize] {
+            bail!(
+                Mismatch,
+                "binding {sampler}: the shader uses this sampler for {}, but the sampler bound {} created with `compare`",
+                if compared {
+                    "depth comparisons"
+                } else {
+                    "plain reads"
+                },
+                if compared { "was not" } else { "was" }
+            );
+        }
+        if let Some((_, format)) = sampled[*texture as usize] {
+            if compared && !(format.is_depth() && format_caps[format.index()].depth_compare) {
+                bail!(
+                    Mismatch,
+                    "binding {texture}: {} cannot be read with a depth comparison",
+                    format.name()
+                );
+            }
+            if filtering[*sampler as usize] && !format_caps[format.index()].filter_linear {
                 bail!(
                     Mismatch,
                     "binding {texture}: {} cannot be sampled with a linear filter on this device",
+                    format.name()
+                );
+            }
+            // The border colours are floating-point ones.
+            if border[*sampler as usize] && format.class() != crate::format::NumClass::Float {
+                bail!(
+                    Mismatch,
+                    "binding {texture}: {} cannot be sampled with a border colour",
                     format.name()
                 );
             }

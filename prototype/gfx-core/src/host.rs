@@ -10,7 +10,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use vulkan::vk;
 use vulkan_alloc::{AllocationCreateDesc, AllocationScheme, MemoryLocation};
 
-use crate::desc::ImageUsage;
+use crate::desc::{ImageKind, ImageUsage, Subresource};
 use crate::device::vk_error;
 use crate::error::{ErrorCode, GfxError, Result, bail};
 use crate::format::Format;
@@ -302,15 +302,21 @@ impl Gpu {
         self.memory_bytes += bytes;
         let image = Image {
             vk: vk_image,
-            view,
+            views: vec![view],
             memory: ImageMemory::Allocated(allocation),
             format,
             width,
             height,
+            depth: 1,
+            layers: 1,
+            mip_levels: 1,
+            samples: 1,
+            kind: ImageKind::D2,
             usage: ImageUsage::COLOR_TARGET | ImageUsage::COPY_SRC,
             layout: vk::ImageLayout::UNDEFINED,
             rest: vk::ImageLayout::GENERAL,
             in_pass: false,
+            attached: Subresource::default(),
             bytes,
         };
         match self.images.insert(image) {
@@ -321,7 +327,7 @@ impl Gpu {
             Err((image, e)) => {
                 self.retire(Garbage::Image {
                     vk: image.vk,
-                    view: image.view,
+                    views: image.views,
                     memory: image.memory,
                     bytes: image.bytes,
                 });

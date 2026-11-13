@@ -28,6 +28,8 @@ mod color;
 mod constraints;
 mod handlers;
 mod ime;
+mod outside_ime;
+mod selection;
 mod state;
 mod surface;
 mod touch;
@@ -43,6 +45,10 @@ use std::time::Duration;
 use proto_color::{AlphaMode, ImageDescription};
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 
+pub use crate::outside_ime::{OutsideCompose, OutsideTextInput, TextInputContent};
+pub use crate::selection::{
+    SelectionEvent, SelectionKind, SelectionOwner, SelectionWriteError, TransferFd,
+};
 use crate::state::{ClientState, State};
 
 /// What a surface without any color information is taken to be: BT.709
@@ -195,6 +201,9 @@ pub enum WlEvent {
         surface: SurfaceId,
         hint: Option<(f64, f64)>,
     },
+    /// A client set or cleared a selection, or reads one the caller
+    /// provides. See [`SelectionEvent`].
+    Selection(SelectionEvent),
 }
 
 /// What a client asked for with a request of `xdg_toplevel`.
@@ -525,6 +534,19 @@ pub enum DamageRect {
     },
 }
 
+/// What a key means in the keymap of the seat, with the keys that are
+/// held (every key of the keyboard, whether it reached a client or not).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeySymbol {
+    /// The xkb name of the keysym the key gives (`a`, `A`, `Return`,
+    /// `BackSpace`, `Super_L`). Empty when it gives none, or several.
+    pub sym: String,
+    /// The text the key types, on a press: what xkb gives for it, unless
+    /// that is empty or holds a control character (Return, Tab, Escape,
+    /// Backspace, a letter with Ctrl). `None` on a release.
+    pub text: Option<String>,
+}
+
 /// What produced a scroll event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AxisSource {
@@ -660,6 +682,11 @@ pub struct WindowInfo {
     /// The process id of the client, as the kernel reports it for the
     /// connection.
     pub client_pid: Option<i32>,
+    /// Whether the window is seen ([`WlServer::set_window_visible`]).
+    pub visible: bool,
+    /// Whether the client is told it is suspended: it is hidden, and its
+    /// xdg-shell version has the state.
+    pub suspended: bool,
 }
 
 /// Description of an output announced to clients.
@@ -853,8 +880,16 @@ impl WlServer {
         self.event_loop
             .dispatch(Duration::ZERO, &mut self.state)
             .map_err(io::Error::other)?;
+        // A client that got the keyboard focus since the last round has
+        // its text inputs watched before its requests are read.
+        self.state.watch_text_inputs();
         self.display.dispatch_clients(&mut self.state)?;
         self.state.send_image_information();
+        // An input method may have come or gone inside; a text input may
+        // have been created.
+        self.state.reconcile_outside_ime();
+        self.state.watch_text_inputs();
+        self.state.notice_lost_selections();
         Ok(())
     }
 
@@ -1013,14 +1048,52 @@ impl WlServer {
     /// Calls the frame callbacks of the surfaces whose main output is
     /// `output` (see [`Self::set_window_outputs`]), or of every surface
     /// with `None`. `time_ms` is the frame time in milliseconds on an
-    /// arbitrary monotonic base.
+    /// arbitrary monotonic base. Hidden windows are left out
+    /// ([`Self::set_window_visible`]).
     pub fn send_frame_callbacks(&mut self, output: Option<OutputId>, time_ms: u32) {
         self.state.send_frame_callbacks(output, time_ms);
     }
 
+    /// Says whether a window is seen; every window is, until it is said
+    /// otherwise. While a window is hidden:
+    ///
+    /// - its surfaces (subsurfaces, popups and the input method's popup
+    ///   included) get no frame callbacks from [`Self::send_frame_callbacks`];
+    ///   they wait, for [`Self::send_window_frame_callbacks`] and
+    ///   [`Self::send_hidden_frame_callbacks`];
+    /// - their presentation feedback is not reported (see
+    ///   [`Self::send_presented`]);
+    /// - a client whose `xdg_wm_base` is version 6 or later is told the
+    ///   `suspended` state, with a configure; an older one is told
+    ///   nothing.
+    ///
+    /// Returns whether that changed anything.
+    pub fn set_window_visible(&mut self, id: WindowId, visible: bool) -> bool {
+        self.state.set_window_visible(id, visible)
+    }
+
+    /// Calls the frame callbacks that wait on the surfaces of one window,
+    /// hidden or not: for a window that is seen again, which should draw
+    /// at once rather than a frame later.
+    pub fn send_window_frame_callbacks(&mut self, id: WindowId, time_ms: u32) {
+        self.state.send_window_frame_callbacks(id, time_ms);
+    }
+
+    /// Calls the frame callbacks that wait on the surfaces of every hidden
+    /// window. A compositor calls it now and then (once a second, say):
+    /// a client may wait for a frame callback inside a call that also
+    /// keeps it from reading anything else (a swap with a swap interval of
+    /// one), and would not see that it is asked to close. Returns how many
+    /// windows are hidden.
+    pub fn send_hidden_frame_callbacks(&mut self, time_ms: u32) -> usize {
+        self.state.send_hidden_frame_callbacks(time_ms)
+    }
+
     /// Reports to the `wp_presentation` feedback objects of the surfaces
     /// whose main output is `output` that their contents were shown at
-    /// `time` (CLOCK_MONOTONIC).
+    /// `time` (CLOCK_MONOTONIC). The feedback of hidden windows waits: a
+    /// later commit replaces it (it is then reported discarded), or it is
+    /// reported with the first frame after the window is seen again.
     pub fn send_presented(
         &mut self,
         output: OutputId,
@@ -1041,10 +1114,49 @@ impl WlServer {
         self.state.set_keyboard_focus(window);
     }
 
+    /// Whether the surface with the keyboard focus asked for the
+    /// compositor's own shortcuts (keyboard-shortcuts-inhibit).
+    pub fn shortcuts_inhibited(&self) -> bool {
+        self.state.shortcuts_inhibited()
+    }
+
+    /// Grants or withdraws the keyboard-shortcuts-inhibit of the surface
+    /// with the keyboard focus, which is told. `false` when it asked for
+    /// none.
+    pub fn set_shortcuts_inhibit(&mut self, active: bool) -> bool {
+        self.state.set_shortcuts_inhibit(active)
+    }
+
+    /// Replaces the keymap of the seat with one in the xkb text format (a
+    /// nested compositor takes over its parent's).
+    pub fn set_keymap(&mut self, keymap: String) -> Result<(), String> {
+        self.state.set_keymap(keymap)
+    }
+
     /// Feeds a key. `keycode` is a Linux evdev key code (`KEY_A` is 30).
     /// Input times are in microseconds on an arbitrary monotonic base.
     pub fn keyboard_key(&mut self, keycode: u32, pressed: bool, time_us: u64) {
         self.state.keyboard_key(keycode, pressed, time_us);
+    }
+
+    /// The first half of [`Self::keyboard_key`]: the keymap of the seat
+    /// takes the key in (what the keys held mean changes with it), and
+    /// says what the key is. The key reaches no client until
+    /// [`Self::keyboard_key_forward`]: a compositor that keeps a key for
+    /// itself still lets the keymap see it, so that what the next key
+    /// types follows the keys that are really held.
+    ///
+    /// `None` when the event changes nothing (the key was already held, or
+    /// already up); it must not be forwarded then.
+    pub fn keyboard_key_input(&mut self, keycode: u32, pressed: bool) -> Option<KeySymbol> {
+        self.state.keyboard_key_input(keycode, pressed)
+    }
+
+    /// The second half of [`Self::keyboard_key`]: the key, which went
+    /// through [`Self::keyboard_key_input`], goes on to the client with the
+    /// keyboard focus (or the input method's grab).
+    pub fn keyboard_key_forward(&mut self, keycode: u32, pressed: bool, time_us: u64) {
+        self.state.keyboard_key_forward(keycode, pressed, time_us);
     }
 
     /// Moves the pointer onto a surface at surface-local logical
@@ -1165,6 +1277,34 @@ impl WlServer {
     /// it is active and holds the keyboard, and where its popup is.
     pub fn input_method_status(&self) -> InputMethodStatus {
         self.state.input_method_status()
+    }
+
+    /// Says whether an input method outside the compositor (a parent
+    /// compositor's) can take text input for the session. While it can and
+    /// no input method is bound inside, the compositor acts as the seat's
+    /// input method: applications can enable their text inputs, the
+    /// enabled one is [`Self::outside_text_input`], and what the input
+    /// method outside sends goes in with [`Self::outside_input_method_compose`].
+    /// An input method bound inside takes precedence.
+    pub fn set_outside_input_method(&mut self, available: bool) {
+        self.state.set_outside_input_method(available);
+    }
+
+    /// Whether the compositor acts as the input method for one outside now.
+    pub fn outside_input_method_serving(&self) -> bool {
+        self.state.outside_input_method_serving()
+    }
+
+    /// The enabled text input and what its application last committed on
+    /// it, while the input method outside serves the seat.
+    pub fn outside_text_input(&self) -> Option<OutsideTextInput> {
+        self.state.outside_text_input()
+    }
+
+    /// Sends what the input method outside composed into the enabled text
+    /// input, with its `done`.
+    pub fn outside_input_method_compose(&mut self, compose: &OutsideCompose) {
+        self.state.outside_input_method_compose(compose);
     }
 
     // -- touch and touchpad gestures -------------------------------------------

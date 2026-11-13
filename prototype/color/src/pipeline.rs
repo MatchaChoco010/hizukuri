@@ -42,15 +42,21 @@ pub struct CompositeSpace {
 }
 
 impl CompositeSpace {
-    /// Linear BT.2020, the compositing space the prototype uses.
+    /// Linear BT.2020.
     pub const BT2020_LINEAR: CompositeSpace = CompositeSpace {
         primaries: Primaries::BT2020,
+    };
+
+    /// ACEScg (linear, AP1 primaries): the compositing space unless another
+    /// is chosen.
+    pub const ACESCG: CompositeSpace = CompositeSpace {
+        primaries: Primaries::ACES_AP1,
     };
 }
 
 impl Default for CompositeSpace {
     fn default() -> Self {
-        Self::BT2020_LINEAR
+        Self::ACESCG
     }
 }
 

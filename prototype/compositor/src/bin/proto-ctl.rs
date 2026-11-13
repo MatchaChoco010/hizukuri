@@ -140,6 +140,12 @@ enum Command {
     CloseWindow { window: u64 },
     /// Set the opacity a window is drawn with.
     SetWindowOpacity { window: u64, opacity: f32 },
+    /// Grant (`true`) or withdraw (`false`) the keyboard-shortcuts-inhibit
+    /// the surface with the keyboard focus asked for.
+    SetShortcutsInhibit {
+        #[arg(action = clap::ArgAction::Set)]
+        active: bool,
+    },
     /// Override what the values of a surface mean (preset name).
     SetSurfaceColor {
         surface: u64,
@@ -165,6 +171,27 @@ enum Command {
     /// Put the script in charge (`running`) or the built-in fallback
     /// (`fallback`).
     ScriptMode { mode: String },
+    /// Choose the OCIO display and view an output is shown through, and its
+    /// exposure (stops) and gamma. Without `--output`: every output that has
+    /// no setting of its own.
+    OcioSet {
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long)]
+        view: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        exposure: Option<f64>,
+        #[arg(long)]
+        gamma: Option<f64>,
+        /// Go back to the conversion without OCIO.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Show the OCIO config, the working colour space and what each output
+    /// is shown through.
+    OcioState,
     /// Move the manual clock forward (`--clock manual`), in milliseconds.
     AdvanceClock { milliseconds: f64 },
     /// Stop the compositor.
@@ -246,6 +273,7 @@ fn main() -> ExitCode {
         Command::SetWindowOpacity { window, opacity } => {
             Request::SetWindowOpacity { window, opacity }
         }
+        Command::SetShortcutsInhibit { active } => Request::SetShortcutsInhibit { active },
         Command::SetSurfaceColor {
             surface,
             image_description,
@@ -277,6 +305,22 @@ fn main() -> ExitCode {
             path: path.map(|p| std::path::absolute(&p).unwrap_or(p)),
         },
         Command::ScriptMode { mode } => Request::ScriptMode { mode },
+        Command::OcioSet {
+            output,
+            display,
+            view,
+            exposure,
+            gamma,
+            clear,
+        } => Request::OcioSet {
+            output,
+            display,
+            view,
+            exposure,
+            gamma,
+            clear,
+        },
+        Command::OcioState => Request::OcioState,
         Command::AdvanceClock { milliseconds } => Request::AdvanceClock { milliseconds },
         Command::Quit => Request::Quit,
         Command::Raw { json } => match serde_json::from_str(&json) {

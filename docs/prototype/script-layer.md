@@ -13,8 +13,10 @@
                         ┌──────────────── スクリプトの層（Luau。仮） ────────────────┐
                         │ main.luau → session.luau                                   │
                         │   render.luau  描画（2 pass）、当たり判定、変形             │
+                        │   color.luau   色の入口と出口（ウィンドウを読む数値、出力へ） │
                         │   shaders/     surface.slang、encode.slang  affine.luau  2D の変換 │
                         │   tile.luau    タイルの配置とキー操作                        │
+                        │   launcher.luau  アプリの一覧の絞り込み、並び順、起動（描かない） │
                         └───────▲───────────────────────────────▲────────────────────┘
                          gfx.*（GPU）                      hz.*（compositor のコア）
                         ┌───────┴───────────────────────────────┴────────────────────┐
@@ -68,6 +70,8 @@ target/debug/proto-compositor --backend headless --socket hz --dmabuf gpu
 proto-ctl --socket "$RT/hz.control" script-call set_transform 3 '[0.94, -0.34, 0.34, 0.94, 80, 40]'
 # 作業用の色空間
 proto-ctl --socket "$RT/hz.control" script-call set_working_space '"display-p3"'
+# ウィンドウを、2 倍の明るさで描く（window の id と、倍率）
+proto-ctl --socket "$RT/hz.control" script-call set_brightness 3 2.0
 # 読み直し、fallback
 proto-ctl --socket "$RT/hz.control" script-reload
 proto-ctl --socket "$RT/hz.control" script-mode fallback
@@ -76,8 +80,8 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 組み込みのプロジェクト:
 
 - 描画（`render.luau`、`shaders/surface.slang`、`shaders/encode.slang`）: 作業用の色空間のバッファに合成してから、
-  出力の符号の値に変換する、2 つの pass。
-  作業用の色空間は、名前（`bt2020`、`srgb`、`display-p3`、`adobe-rgb`）か、色度の表で選ぶ。
+  出力の符号の値に変換する、2 つの pass。色の変換は、module `color` の口（[下](#色)）だけを通す。
+  ウィンドウごとに、明るさの倍率を持てる（`render.set_brightness`）。
 - ウィンドウごとに、2D の変換（回転、拡大縮小、斜めの変形、移動）を持つ。当たり判定は、その逆をかける。
   popup と subsurface は、ウィンドウの表面の一覧に入っていて、同じ変換がかかる。入力メソッドの候補ウィンドウも、同じである。
 - タイル（`tile.luau`）: `hz.manages_windows()` が真のとき、最初の出力に、横に並べる。logo+L と logo+H で focus を左右に移し、shift を足すと隣と入れ替え、
@@ -105,13 +109,15 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `frame(output, target, time)` | コアが、その出力のフレームを描くと決めたとき。`time` は、このフレームが画面に出る予定の時刻（`hz.time()` と同じ時計の秒。下の「時刻」） | なし | fallback が描く、または直前のフレームを保つ |
 | `hit_test(x, y, accepts)` | ポインターの位置が変わるたび。フレームを描いた後にも | 表面の id と、その中の座標 | fallback が、変形なしの位置で判定する |
 | `locate(surface, x, y)` | ボタンを押している間の、ポインターの位置が変わるたび。触れている指が動くたび | その表面の中の座標 | 同上 |
+| `project(surface, x, y)` | 外の入力メソッド（nested の親の IME）に、文字のカーソルの位置を伝えるとき。カーソルの矩形の 4 隅を 1 つずつ尋ねる | 表面の中の点が画面に見える位置（全体の論理座標）。見えないときは `nil` | ウィンドウを、変形なしの位置に置いたものとして計算する |
 | `window_opened(id)` | ウィンドウができた | なし | fallback の配置で、ずらして置き、focus を与える |
 | `window_changed(id)` | ウィンドウの大きさが変わった | なし | 何もしない |
 | `window_closed(id)` | ウィンドウが無くなった | なし | コアが、いちばん上のウィンドウに focus を移す |
 | `focus_changed(id)` | スクリプト以外の理由で、focus が動いた | なし | 何もしない |
 | `outputs_changed()` | 出力が増えた、減った、変わった | なし | 何もしない |
-| `key(keycode, pressed, mods)` | キーが押された、離された | `true` なら、クライアントに渡さない | クライアントに渡す |
-| `pointer_button(button, pressed, window, surface)` | ポインターのボタン | `true` なら、コアの「クリックで focus」をしない | クリックで focus |
+| `key(keycode, pressed, mods, k)` | キーが押された、離された。`mods` は `{ ctrl, alt, shift, logo, inhibited }`。`inhibited` は、focus のあるウィンドウが、compositor のショートカットを自分に通すよう求めているか（keyboard-shortcuts-inhibit。nested の compositor、リモートデスクトップなど）。従うかは、スクリプトが決める（組み込みのタイルは、従って、キーを取らない）。`k` は、そのキーが何か（下の「キーの文字」） | `true` なら、クライアントに渡さない | クライアントに渡す |
+| `pointer_button(button, pressed, window, surface, mods)` | ポインターのボタン。`mods` は、押されている修飾キー（`key` と同じ表） | `true` なら、コアの「クリックで focus」をしない。`"take"` なら、スクリプトがポインターを取る（下の「ポインターを取る」） | クリックで focus |
+| `pointer_motion(x, y)` | スクリプトがポインターを取っている間の、ポインターの動き（全体の論理座標） | なし | 何もしない |
 | `touch_down(slot, x, y, window, surface)` | 指が画面に触れた（`x`、`y` は全体の論理座標） | `true` なら、コアの「触れたウィンドウに focus」をしない。タッチは、どちらでもアプリに届く | 触れたウィンドウに focus |
 | `gesture_begin(g)` | タッチパッドのジェスチャーが始まった。`g` は `{ kind, fingers, window, surface }`（`kind` は `"swipe"`、`"pinch"`、`"hold"`。`window` と `surface` はポインターの下のもの） | `true` なら、スクリプトが取る（下の「タッチとジェスチャー」） | ポインターの下のアプリに届く |
 | `gesture_update(g)` | スクリプトが取ったジェスチャーが動いた。`g` は `{ kind, dx, dy, scale, rotation }` | なし | 何もしない |
@@ -119,6 +125,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `pointer_constraint(c)` | ポインターの制約が、有効になりうるとき（下の「ポインターの制約」） | `true` なら有効にする、`false` なら有効にしない（有効なら解く） | 制約のウィンドウが focus を持つ間、有効 |
 | `pointer_constraint_changed(c)` | 有効な制約が変わった。`c` は、有効になった制約か、`nil`（解けた） | なし | 何もしない |
 | `window_request(id, request)` | クライアントが、ウィンドウ管理の決めることを求めた（下） | なし | 何もしない（プロトコルの層が、内容の変わらない configure で答える） |
+| `logo_key_changed(key)` | 使う人が logo のキーとして押すキーが変わった（下の「logo のキー」）。`key` は、新しい `hz.logo_key()` の値 | なし | 何もしない |
 
 - 毎フレーム必ず呼ばれる関数は、無い。アニメーションをするスクリプトは、`hz.request_frame()` で次のフレームを求める。
   `frame` の中で求めると、その出力の次のフレームが描かれる。求めなければ、何かが変わるまで、描かれない。
@@ -126,6 +133,16 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 - ボタンを押している間は、押した表面にイベントを送り続ける。そのときの座標を、`locate` が答える。
   指が触れている間も同じで、指が触れた表面に、その指のイベントを送り続ける。
 - `window_request` の `request` は、`kind` と、それに付く値の表である。
+- **キーの文字**: `key` の 4 つめの引数 `k` は `{ sym, text }` である。`sym` は、いま押されているキーのもとで、そのキーが出す keysym の
+  xkb の名前（`a`、`A`、`Return`、`BackSpace`、`Super_L`。出さないとき、複数を出すときは `nil`）、`text` は、押したときに、そのキーが入力する
+  UTF-8 の文字列（xkb の `xkb_state_key_get_utf8`。空のときと、制御文字を含むとき（Return、Tab、Escape、Backspace、Ctrl を押しながらの文字）は `nil`）。
+  離したときは、`text` は `nil` である。文字の入力（絞り込みの欄など）は `text` で、それ以外のキーは `sym` か `keycode` で読む。
+  - 値は、seat の keymap の状態から取る。keymap は、スクリプトが取ったキーも含めて、すべてのキーを見る（Smithay の
+    `KeyboardHandle::input_intercept` で状態を進め、スクリプトが取らなかったキーだけを `input_forward` でクライアントに渡す）。
+    だから、スクリプトが Shift を取っていても、次のキーの `text` は大文字になる。
+  - スクリプトが取ったキーで修飾キーの状態が変わったとき、クライアントは、次にキーを受け取る前に、そのときの修飾キーの状態を受け取る
+    （入力メソッドの grab があるときは、キーと一緒に grab に渡る）。
+  - キーの repeat は、無い（押したときと、離したときに、1 回ずつ呼ぶ）。繰り返しが要るスクリプトは、自分で時刻を見て繰り返す。
 
 | `kind` | 元の要求 | 付く値 |
 | --- | --- | --- |
@@ -153,9 +170,14 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.time()` | いまの時刻。スクリプトの層が起動してからの秒数（下の「時刻」） |
 | `hz.closed_windows()` | 持ち続けている閉じたウィンドウの一覧（閉じた順）。id、title、app_id、最後の位置と大きさ、閉じた時刻（`closed_at`。`hz.time()` の秒） |
 | `hz.manages_windows()` | この session が、ウィンドウ管理をスクリプトに任せているか（`proto-compositor` では、いつも真）。読み込みの途中でも使える |
-| `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号と定数、HLG の OOTF の輝度の係数、alpha の扱い） |
-| `hz.encode_transform(working, output)` | 作業用の値を、出力の符号の値にする変換 |
-| `hz.decode_color(r, g, b, a, working)` | 1 色を CPU で変換する（背景色に使う） |
+| `hz.logo_key()` | 使う人が、logo のキーとして押すキー。`"super"`、`"alt"`、`"ctrl"`（下の「logo のキー」） |
+| `hz.working_space()` | 作業用の色空間の原色（名前か、色度 8 つ）と、変わるたびに増える番号 |
+| `hz.color_format()` | 色を描くバッファの既定の形式の名前（`rgba32float` か `rgba16float`） |
+| `hz.color(...)` | スクリプトに書いた色を、作業用の色空間の値にする（[下](#色)） |
+| `hz.window_table()` | すべての表面の `WindowParams` を入れた storage buffer の slot（[下](#色)）。`frame` の中だけで呼べる |
+| `hz.decode_transform(color, working)` | 表面の値を、作業用の原色の線形の値にする変換（行列、伝達関数の番号と定数、HLG の OOTF の輝度の係数、alpha の扱い）。`working` を省くと、session の作業用の色空間 |
+| `hz.encode_transform(working, output)` | 作業用の値を、出力の符号の値にする変換。`working` が `nil` なら、session の作業用の色空間 |
+| `hz.decode_color(r, g, b, a, working)` | 1 色を CPU で変換する。`working` を省ける |
 
 表面（`hz.surfaces` の 1 要素）:
 
@@ -167,20 +189,32 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `buffer_width`、`buffer_height`、`scale` | バッファの大きさと、buffer scale |
 | `uv` | 表面の矩形が、テクスチャのどこに当たるか（2D の変換）。viewport の切り出し、buffer transform、上下の反転は、ここに入っている |
 | `color`、`alpha_mode`、`opaque` | 値の意味（番号。`hz.color_info` で中身を引ける）、alpha の持ち方、alpha が無いか |
+| `params` | `hz.window_table()` の表の中の添字。そのフレームで、先に `hz.window_table()` を呼んだときだけ付く |
 | `generation`、`serial` | 画像を作り直した回数、内容が更新された回数 |
 | `kind` | `shm`（画素を複写したもの）か `dmabuf`（取り込んだもの） |
 
-色の変換の数値（原色の行列、伝達関数の番号と定数）は、コア（`proto-color`）が出す。当てはめる shader は、スクリプトの側にある。
+色の変換の数値（原色の行列、伝達関数の番号と定数）は、コア（`proto-color`）が出す。当てはめるのは、コアの Slang の module `color` の
+`WindowTexture`（入口）と、組み込みの project の `shaders/encode.slang`（出口）である（[下](#色)）。
 
 - 輝度の対応（reference white と黒をそろえる倍率）は、行列に入っている。伝達関数の定数（`transfer_param`）は、
   べき乗の指数、BT.1886 の黒の水準（`(最小 / 最大)^(1/2.4)`）、HLG の OOTF の system gamma である。
 - 伝達関数の番号は、0 が linear、1 が IEC 61966-2-1 の区分的な関数、2 がべき乗、3 が PQ、4 が BT.1886、5 が HLG である
   （コアの Slang の module `color`。`prototype/compositor/shaders/color.slang`）。HLG は、伝達関数で場面の光に戻した後、`ootf_coefficients`（表面の原色での輝度の係数）で求めた輝度で、
-  OOTF をかける（組み込みの project の `shaders/surface.slang`）。HLG と BT.1886 を、出力へ符号化する shader は無い。
+  OOTF をかける（module `color` の `window_to_working`）。HLG と BT.1886 を、出力へ符号化する shader は無い。
 - 表面の記述が、クライアントが `wp_color_management_v1` で伝えたものか、制御口が上書きしたものかは、スクリプトには見せない。
   変換の数値は、どちらでも同じである。
 
-### スクリプトがコアに求めるもの
+#### logo のキー
+
+`key` と `pointer_button` の `mods.logo` と、keycode の 125 と 126（`KEY_LEFTMETA`、`KEY_RIGHTMETA`）は、いつも logo のキーである。
+ただし、使う人がそのために押すキーは、Super とは限らない。nested のバックエンドでは、親の compositor が Super の組み合わせを自分で取るとき、
+親の Alt（または Ctrl）を、logo のキーとして渡す（[nested での起動](README.md#nested-での起動)の `--nested-logo-key`）。
+そのとき、スクリプトと中のクライアントには、Alt ではなく logo のキーとして届く。project のキーの割り当ては、そのままでよい。
+
+`hz.logo_key()` は、いま、使う人がどのキーを押せば logo になるかを答える。キーの組み合わせを、使う人に見せるところ
+（ランチャーやヘルプの「Alt+D」の表示）に使う。動いている間に変わることがあり（親がショートカットを通すのをやめた、また通した）、
+変わると `logo_key_changed(key)` が呼ばれる。nested でないときと、変わったことが無いときは、`"super"` である。
+
 
 | 関数 | 内容 |
 | --- | --- |
@@ -194,15 +228,151 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 | `hz.release_pointer_constraint()` | 有効な制約を、クライアントの意向に関わらず解く（下） |
 | `hz.review_pointer_constraints()` | 有効になりうる制約について、`pointer_constraint` に、もう一度尋ねさせる |
 | `hz.set_states(id, { maximized = bool, fullscreen = bool })` | ウィンドウに、最大化されているか、fullscreen かを伝える（無い項目は偽）。位置と大きさは、`hz.place` と `hz.configure` で別に決める |
+| `hz.set_visible(id, visible)` | ウィンドウが、見えているかを伝える（下の「見えていないウィンドウ」）。既定は、見えている |
+| `hz.set_popup_bounds(id, { x, y, width, height })` | ウィンドウの popup を収める範囲（ウィンドウの geometry からの矩形）。`nil` で既定（ウィンドウのある出力）に戻す（下の「popup を収める範囲」） |
 | `hz.keep_closed(id, keep)` | このウィンドウが閉じたとき、最後に見せていた内容を持ち続ける（`keep` を省くと真）。ウィンドウがあるうちに求める |
 | `hz.forget_closed(id)` | 持ち続けている閉じたウィンドウを手放す。あったかどうかを返す |
+| `hz.spawn(argv, options)` | プログラムを起動する（下の「アプリの起動」）。`hz.spawn({ "foot" })` |
+| `hz.env(name)` | compositor の環境変数の値。無ければ `nil` |
+| `hz.desktop_entries(options)` | 機械に入っているアプリ（XDG の desktop entry）の一覧（下の「アプリの一覧」） |
 | `hz.include(name)` | プロジェクトのモジュールを読む |
-| `hz.debug_composite(image, working)` | 検証用に、合成用のバッファを差し出す（画面の取り込みで EXR に書かれる） |
+| `hz.set_working_space(primaries)` | 作業用の色空間を変える（名前か、色度 8 つ）。変える前に作った色の値と、色の画像は、古い色空間の値のままである |
+| `hz.load_image(path, options)` | project の中のファイルを、テクスチャにする（[下](#色)） |
+| `hz.load_font(path)`、`hz.render_text(font, text, options)` | フォントを読み、文字列を、テクスチャにする（[下](#文字)） |
+| `hz.missing_glyphs(font, text)` | フォントに glyph の無い文字の数（[下](#文字)） |
+| `hz.debug_composite(image, working)` | 検証用に、合成用のバッファを差し出す（画面の取り込みで EXR に書かれる。`rgba16float` か `rgba32float`）。`working` を省ける |
 | `hz.log(text)` | ログ |
 
-ウィンドウ管理の関数（`hz.place`、`hz.configure`、`hz.focus`、`hz.raise`、`hz.restack`、`hz.close`）は、
+ウィンドウ管理の関数（`hz.place`、`hz.configure`、`hz.focus`、`hz.raise`、`hz.restack`、`hz.close`、`hz.set_visible`、`hz.set_popup_bounds`）は、
 `hz.manages_windows()` が真のときだけ使える（それ以外では、エラーが返る）。位置、大きさ、focus、重なりの順は、fallback のウィンドウの表に書く。
 存在しないウィンドウや、負の大きさも、エラーで返る。
+
+### 見えていないウィンドウ
+
+コアは、ワークスペースも、3D の場面も知らない。どのウィンドウが、いま見えていないかを知っているのは、スクリプトである。
+`hz.set_visible(id, false)` で、それをコアに伝える。見えているかの既定は、見えている、である。見えていないウィンドウについて、コアは次のようにする。
+
+- そのウィンドウの表面（subsurface、popup、入力メソッドの候補ウィンドウを含む）に、frame callback を送らない。callback は、溜めておく
+  （`wl_callback` には、`done` のほかに答え方が無い。捨てると、クライアントは、いつまでも待つ）。
+  ただし、frame の時計で 1 秒に 1 度は、溜めた callback を送る。frame callback を待つ間、ほかの出来事を読まないクライアント
+  （swap interval が 1 の buffer の swap の中で待つもの）が、閉じるように求められたことに、気づけるようにするためである。
+- 見えるようになったら、溜めていた callback を、すぐに送る（次のフレームを待たない。見えるようになったときの内容が、古いままの時間を縮める）。
+- presentation feedback（`wp_presentation`）を、presented として報告しない。そのウィンドウが次に commit すると、前の feedback は、
+  discarded として報告される（Smithay の決まり）。見えるようになった後の、最初のフレームで、残っていた feedback を presented として報告する。
+- そのウィンドウの commit では、フレームを描かない（ほかの理由で描くフレームで、内容を取り込む）。
+- クライアントの `xdg_wm_base` が版 6 以上なら、`xdg_toplevel` の `suspended` の状態を、configure で伝える。見えるようになったら、外す。
+  版 5 以下のクライアントには、何も送らない（状態の変わらない configure も、送らない）。
+
+スクリプトは、見えていないウィンドウも描ける（見渡す表示の縮小など）。ただし、内容は、クライアントが最後に描いたもので、古い。
+だから、ウィンドウが画面に入る前に（ワークスペースの切り替えのトランジションの始め、見渡す表示を開くとき、運んでいる間）、
+見える側にしておくのは、project の責任である。コアは、描かれたかどうかから、見えているかを推し量らない。
+
+- スクリプトの読み直しで、すべてのウィンドウが、見える側に戻る（新しいスクリプトが、改めて伝える）。fallback が描いている間も、すべて見える側として扱う。
+- `hz.windows()` の各ウィンドウの `visible` は、コアが最後に当てはめた値、`suspended` は、クライアントに suspended を伝えているかである。
+  制御口の `state` の `windows` にも、同じ 2 つがある。
+- 組み込みのタイルは、使わない（すべてのウィンドウが、画面にある）。`fancy` は、画面の外のワークスペースのウィンドウを、`room` は、
+  モニターに映っていないウィンドウと、寄っている間の、ほかのモニターのウィンドウを、見えていない側にする。
+
+### popup を収める範囲
+
+popup（メニュー、tooltip）の位置は、クライアントが `xdg_positioner` で求め、compositor が「収める範囲」に収める
+（`proto-wl` が、positioner の許す flip、slide、resize で計算する。[プロトコルの層](protocol-layer.md#popup)）。
+収める範囲は、ウィンドウごとの、ウィンドウの geometry の座標の矩形である。
+
+- 既定は、ウィンドウのある出力である（`hz.place` の位置から見た、出力の矩形）。ウィンドウを、置いた位置に、そのまま描くときの範囲である。
+- `hz.set_popup_bounds(id, { x, y, width, height })` で、スクリプトが決める。ウィンドウを、置いた位置とは別の場所に描くスクリプト
+  （縮める、3D の場面の中の画面に映す）が、ウィンドウの座標のうち、画面に見えている部分を伝えるための口である。
+  値は、論理の画素に丸める。幅と高さは正。`nil` で既定に戻る。
+- 範囲が変わると、まだ位置を伝えていない popup と、reactive の popup（`xdg_positioner.set_reactive`）は、新しい範囲で置き直す。
+  reactive の popup で、位置が変わったものには、`xdg_popup.configure` を送る。reactive でない popup は、クライアントが
+  `xdg_popup.reposition` を求めるまで、元の位置のままである（見えている範囲から、はみ出すことがある）。
+- 入力メソッドの候補ウィンドウ（`input-popup`）も、同じ範囲に収める（カーソルの矩形の下に収まらなければ、上に置く）。
+- スクリプトが外されている間（fallback）は、ウィンドウは置いた位置に描かれるので、既定の範囲を使う。スクリプトに戻ると、
+  スクリプトの決めた範囲に戻る。読み直すと、スクリプトの決めた範囲は、すべて既定に戻る。
+- いま使われている範囲は、`state` の `windows` の `popup_bounds` に出る。
+- popup ごとに位置を決めること（`proto-wl` の `place_popup_within`、`set_popup_geometry`）は、スクリプトに見せていない。
+
+### アプリの起動
+
+`hz.spawn(argv, options)` は、プログラムを起動して、待たずに、プロセスの id を返す。
+
+```lua
+local pid, problem = hz.spawn({ "foot" })
+hz.spawn({ "foot", "-e", "htop" }, { env = { TERM = "foot" }, cwd = "/tmp" })
+```
+
+- `argv` は、プログラム（`PATH` から探す）と引数の並びである。shell は通さない。
+- 起動できなかったとき（プログラムが無い、など）は、エラーにせず、`nil` と、理由の文字列を返す。
+- 起動したプログラムの環境は、compositor の環境に、この compositor へつなぐための変数を重ねたものである。
+  `WAYLAND_DISPLAY` は、この compositor の socket になる。`DISPLAY` は、X11 の display を用意しているとき（`--xwayland-satellite`）は
+  その display になり、用意していないときは、消える。`WAYLAND_SOCKET`、`XDG_ACTIVATION_TOKEN`、`DESKTOP_STARTUP_ID` は、消える。
+  `--vulkan-icd` で compositor に渡したドライバーの指定（`VK_DRIVER_FILES`）は、引き継がない（compositor が起動されたときの値に戻る）。
+  `options.env` の変数が、その上に重なる。
+- 起動したプログラムは、自分の process group を持ち、signal を block していない状態で始まる（[X11 のアプリ](README.md#x11-のアプリ)の
+  xwayland-satellite と、同じ処理を通る。`prototype/compositor/src/spawn.rs`）。標準出力と標準エラー出力は、compositor のものを引き継ぐ。
+- compositor が終わっても、起動したプログラムは止めない。
+- 最近起動したものの、プロセスの id と引数が、`state` の `script.spawned` に出る。
+
+組み込みの project のタイル（`tile.luau`）は、logo+Return で端末を起動する。コマンドは、環境変数 `HIZUKURI_TERMINAL`
+（空白で区切った語の並び）で、無ければ `foot` である。
+
+### アプリの一覧
+
+`hz.desktop_entries(options)` は、XDG の desktop entry（Desktop Entry Specification 1.5）を読み、起動できるアプリの一覧を返す。
+解析は、コア（`prototype/compositor/src/desktop_entry.rs`）が行う。何を見せるか、どう並べるか、どう起動するかは、スクリプトが決める。
+
+```lua
+for _, app in hz.desktop_entries() do
+    hz.log(app.name .. ": " .. table.concat(app.exec, " "))
+end
+hz.spawn(app.exec, { cwd = app.working_dir })
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| `id` | desktop file ID（`applications/` からの相対パスの `/` を `-` にしたもの。`org.example.App.desktop`） |
+| `name` | `Name`。locale の値（下） |
+| `default_name` | locale の postfix の無い `Name`。`name` を描けないとき（フォントに、その文字が無い）に使う |
+| `generic_name`、`comment` | `GenericName`、`Comment`。locale の値。無ければ `nil` |
+| `exec` | 起動の argv の表（下）。`hz.spawn` に、そのまま渡せる |
+| `icon` | `Icon`（icon theme の名前か、絶対パス）。無ければ `nil`。画像を探すことは、しない |
+| `terminal` | `Terminal`（端末の中で動かすアプリか） |
+| `working_dir` | `Path`（起動するときの作業用のディレクトリ）。無ければ `nil` |
+| `categories`、`keywords` | `Categories`、`Keywords`（locale の値）の表 |
+| `file` | desktop file の場所 |
+
+- 探す場所: `$XDG_DATA_HOME/applications`（無いか空なら `$HOME/.local/share/applications`）、`$XDG_DATA_DIRS`（無いか空なら
+  `/usr/local/share:/usr/share`）の各ディレクトリの `applications`。この順に、下のディレクトリも含めて読む。相対パスは、無視する。
+  環境変数は、compositor のプロセスのものである。
+- desktop file ID が同じファイルは、先に見つけたものが使われる。先のものが `Hidden` や `NoDisplay` なら、後のものも出ない
+  （利用者が、システムのアプリを、自分のディレクトリのファイルで隠す仕組みである）。同じディレクトリの中の `foo-bar.desktop` と `foo/bar.desktop` は、
+  パスの順で先のものになる。
+- 除くもの: `Type` が `Application` でないもの、`Hidden=true`、`NoDisplay=true`、`Name` が無いもの、`Exec` が無いもの（`DBusActivatable=true` で
+  `Exec` を持たないものは、D-Bus でしか起動できないので、除く）、`Exec` が仕様の上で不正なもの（定義されていない field code、閉じていない引用符）、
+  `TryExec` のプログラムが無いもの（絶対パスか、`PATH` で探し、実行できる通常のファイルがあるか）、`OnlyShowIn` と `NotShowIn` が除くもの。
+  - `OnlyShowIn` と `NotShowIn` は、`XDG_CURRENT_DESKTOP`（コロンで区切った名前の並び）の名前を、先頭から 1 つずつ照らし、
+    最初に、どちらかの表に入っていた名前で決める。どの名前も入っていなければ、`OnlyShowIn` があるものは出さず、無いものは出す。
+    `XDG_CURRENT_DESKTOP` が無いときは、名前が 1 つも無いものとして、同じ規則で決める。compositor は、この変数を自分では決めない
+    （nested なら、親の session の値を受け継ぐ）。
+- locale: `LC_ALL`、`LC_MESSAGES`、`LANG` の順に、最初の、空でないものを、`LC_MESSAGES` の locale とする（`C` と `POSIX` は locale なし）。
+  `lang_COUNTRY.ENCODING@MODIFIER` の encoding を除いて、仕様の順（`lang_COUNTRY@MODIFIER`、`lang_COUNTRY`、`lang@MODIFIER`、`lang`、
+  postfix なし）に、キーを探す。ファイルの側の postfix に書かれた encoding も、照らすときには除く。`LANGUAGE` は、見ない。
+- 値の escape（`\s`、`\n`、`\t`、`\r`、`\\`）を戻す。表の値は、`;` で分け（`\;` は `;`）、空の値は除く。真偽値は `true` と `false`
+  （`1` と `0` も受ける）。`[Desktop Entry]` の group だけを読み、ほかの group（`[Desktop Action ...]`）は読まない。同じキーが 2 度あれば、先のもの。
+  UTF-8 でないファイルは、除く。
+- `exec`: 値の escape を戻した後、`Exec` の引用符の規則で、引数に分ける。引数は空白（とタブ）で区切る。二重引用符の中では、`\` の後の
+  `"`、`` ` ``、`$`、`\` が、その文字になる。引用符の外の `\` は、仕様では許されていないが、次の 1 文字をそのまま入れる。
+  引用符を戻した後で、各引数の field code を展開する（ファイルを渡さない起動として）:
+  - `%f`、`%F`、`%u`、`%U` と、廃止された `%d`、`%D`、`%n`、`%N`、`%v`、`%m` は、除く。それだけの引数は、引数ごと除く（`--open=%u` は `--open=` になる）。
+  - `%i` だけの引数は、`--icon` と `Icon` の 2 つの引数になる（`Icon` が無ければ、除く）。`%c` は `name`、`%k` は `file`、`%%` は `%` になる。
+  - それ以外の field code があれば、仕様に従い、その entry を除く。
+- `options`: `refresh = true` で、必ず読み直す。`locale`（`"ja_JP.UTF-8"` など。環境変数より優先）、`desktops`（名前の表か、コロンで区切った文字列。
+  `XDG_CURRENT_DESKTOP` より優先）。
+- 読んだ結果は、コアが持ち続ける。次の呼び出しでは、前に読んだディレクトリ（と、無かった `applications` のディレクトリ）の更新の時刻だけを確かめ、
+  変わっていなければ、読み直さない（ファイルの追加、削除、置き換えは、ディレクトリの更新の時刻を変える。ファイルを、その場で書き換えたものは、
+  気づかないので、`refresh` を使う）。探す場所、locale、desktop の名前が前と違えば、読み直す。
+- 並びは、`name` の小文字（ASCII 以外は、そのまま）の順、同じなら `id` の順である。
+- 読めなかったファイルと、除いた理由のうち、不正なもの（`Name` が無い、`Exec` が不正、など）は、debug のログに出る。
 
 ### GPU の API（`gfx`）
 
@@ -233,9 +403,14 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
        device address、variable pointer、長さの無い descriptor の配列を使う module は、ここで拒む。
     3. もう一度、validator で検証する。
     4. 自前の検査（`spirv_check.rs`）で、使ってよい capability と extension、Logical の addressing model、
-       SPIR-V 1.4 以上、entry point が 1 つであること、resource が `set 0 / binding N`（N < 16）であること、
+       SPIR-V 1.4 以上、entry point が 1 つであること、resource が `set 0 / binding N`（N < 32）であること、
        添字が定数か、範囲に切り詰められていることを確かめ、reflection を作る。2 の pass が、切り詰めずに成功を返す形
        （untyped pointer など）があるので、2 の結果を信頼しない。
+       1 の validator が通し、ドライバーが受け付けない形も、ここで拒む: 大きさ 0 の stride と、またぐものより小さい stride、
+       sampled の image に付いた format、演算の結果でないものに付いた `NoContraction`、image の読み出しの `SignExtend` と
+       `ZeroExtend`、大きさの違う型の間の `OpBitcast`。
+  - 壊した module を、検査とドライバーに通す試験が、`prototype/gfx-core/tests/spirv_input.rs`（naga が書いた module）と
+    `tests/mutate_3d.rs`（Slang が書いた、3D の機能を使う module）にある。
   - SPIRV-Tools は C++ で、同じプロセスの中で動く。その中で落ちると、プロセスごと落ちる。
 - コアの shader（fallback の `prototype/compositor/shaders/fallback.slang`、KMS の自己診断の `selftest.slang`）と、
   組み込みの project の shader（`prototype/compositor/scripts/shaders/`）は、Slang で書く。`proto-compositor` の `build.rs` が、
@@ -249,8 +424,30 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
   SPIR-V は、標準出力で受け取る。子には、時間の上限（過ぎたら、PID で止める）と、アドレス空間の上限を付け、
   core dump を残させない。環境変数は、引き継がない。エラーは、`ファイル:行:列: error 番号: 文` の形で返す。
   浮動小数点の計算は、いつも `-fp-mode precise` でコンパイルする（呼ぶ側が外す口は無い）。
+- SPIR-V の検査（上の 1〜4）は、device に触れない。`Gpu::shader_checker` が返す `ShaderChecker` は、`Gpu` を借りずに、どのスレッドでも
+  検査でき、検査を通った module を表す `CheckedShader` を返す。`Gpu::create_shader_checked` は、それを、検査をやり直さずに shader にする。
+  検査は、複数のスレッドから同時に呼べる。
+- render pipeline の作成は、2 つに分けられる。`Gpu::prepare_render_pipeline` が、記述を検査して（誤りは、ここで返る）、
+  ドライバーが shader をコンパイルする部分を、`PipelineJob` として返す。job は、どのスレッドでも走らせられる。
+  `Gpu::finish_render_pipeline` は、できていれば handle を、まだなら「まだ」を返す。`Gpu` の drop は、走っている job を待つ。
+  この 2 つは Rust の口で、スクリプトの `gfx` には出していない（スクリプトの shader と pipeline は、呼んだスレッドで検査し、作る）。
 - 記録の呼び出しは、引数と状態を検査してから記録する。エラーを返した呼び出しは、何も記録していない。
-- depth と stencil、MSAA、mip、テクスチャの配列と 3D、cube、indirect draw、query は、未実装である。
+- image は、2D、3D、cube の 3 種類で、mip の段と、sample の数を持てる。3D の image は、読むことと、アップロードだけができる。
+  sample の数が 1 より大きい image は、attachment にだけなり、pass が、別の image に resolve する。
+- pass の attachment は、image の、1 つの mip の段の、1 つの layer である。depth の attachment（`d32float`）を 1 つ持てる。
+  pipeline は、depth の形式と状態（test、write、比較の関数、bias）、表の向き、sample の数を持ち、pass と一致していなければ、
+  `set_pipeline` がエラーを返す。
+- texture の slot は、image の一部（mip の段の範囲、cube の 1 面）だけを見せられる。pass の attachment になっている段を含まない
+  slot は、その pass の中で読める（段 N-1 を読んで、段 N に描ける）。slot の見せ方（2D、3D、cube）は、shader の宣言と
+  合っていなければならない。
+- sampler は、mip の補間、LOD の範囲と bias、異方性、3 つの軸の address mode、border の色を持つ。比較つきの sampler
+  （`compare`）は、depth の texture を、比較つきで読む（`SampleCmp`）ときにだけ使える。比較つきの読み出しに、ふつうの sampler を
+  bind すること、その逆、depth でない texture を比較つきで読むことは、draw がエラーを返す。
+- `gfx.generate_mipmaps` は、段 0 から、下の段を作る。`gfx.format_supports` は、形式が、その device で、ある用途に使えるかを返す。
+- shader が使える capability のうち、`DrawParameters`（`SV_VertexID`、`SV_InstanceID`）、`ClipDistance`（8 つまで）、
+  `SampleRateShading` と `InterpolationFunction`、`Float16`、`Int8`、`Int16`、`Int64`、`ImageGatherExtended` は、
+  device が対応する機能を持つときにだけ有効にし、そのときにだけ、shader に許す。
+- stencil、2D の配列の image、cube の配列、depth の resolve、indirect draw、query は、未実装である。
 
 関数の一覧は、`prototype/gfx-lua/src/api.rs` にある。
 
@@ -288,7 +485,7 @@ proto-ctl --socket "$RT/hz.control" script-mode fallback
 
 `prototype/compositor/projects/animation/` は、組み込みのタイルの配置をそのまま使い、ウィンドウが、そこへ動いていく様子を、
 スクリプトだけで描く例である。`main.luau`（設定と、関数のつなぎ方）と `animate.luau`（アニメーションの計算）の 2 つで、
-`render`、`tile`、`affine` は、組み込みのものを使う（プロジェクトに無いモジュールは、組み込みのものになる）。
+`render`、`tile`、`affine`、`color` は、組み込みのものを使う（プロジェクトに無いモジュールは、組み込みのものになる）。
 例は、shader を持たない。組み込みの `render` が名前で指す shader も、組み込みのもの（バイナリに埋め込まれた SPIR-V）になる。
 
 - logo+shift+H、logo+shift+L での入れ替え、ウィンドウが開く、閉じる、タイルの並びが変わる、のどれでも、ウィンドウは、
@@ -333,27 +530,210 @@ project（`--script` で渡すディレクトリ）は、スクリプトと、sh
   組み込みの project の shader は、ディスクの上の `.spv` ではなく、バイナリに埋め込んだものを読む。
 - 道具は、コアの Slang の module を、`<project>/.build/modules/` に書き出し、`slangc` の探す場所（`-I`）に渡す。
   作者の shader は、`import color;` で使える。
+- entry point の無い `.slang` は、project の module である。それだけでは、何もコンパイルしない。同じディレクトリの shader が、
+  ファイルの名前で `import` する（`shaders/ltc.slang` を `import ltc;`）。ほかの project の module を `import` する口は、無い。
 
 コアの module:
 
 | module | 中身 |
 | --- | --- |
-| `color` | 伝達関数の番号（`TF_LINEAR`、`TF_SRGB`、`TF_POWER`、`TF_PQ`、`TF_BT1886`、`TF_HLG`）と、`tf_decode(e, tf, param)`、`tf_encode(l, tf, param)`。番号と `param` は、`hz.decode_transform` と `hz.encode_transform` が返すもの |
+| `color` | ウィンドウの内容を、作業用の色空間の値として読む型 `WindowTexture` と、その数値 `WindowParams`、素の関数 `window_to_working`（[色](#色)）。伝達関数の番号（`TF_LINEAR`、`TF_SRGB`、`TF_POWER`、`TF_PQ`、`TF_BT1886`、`TF_HLG`）と、`tf_decode(e, tf, param)`、`tf_encode(l, tf, param)`。番号と `param` は、`hz.decode_transform` と `hz.encode_transform` が返すもの |
 
 shader を書くときの決まり:
 
 - 浮動小数点の計算は、いつも `-fp-mode precise` でコンパイルされる。
-- resource は、`[[vk::binding(N, 0)]]` で、set 0 の binding N（N < 16）に置く。`gfx.bind(N, slot)` が、それに当たる。
+- resource は、`[[vk::binding(N, 0)]]` で、set 0 の binding N（N < 32）に置く。`gfx.bind(N, slot)` が、それに当たる。
   push data は、`[[vk::push_constant]] ConstantBuffer<T>` で書く。
 - vertex shader の頂点の番号は、`SV_VulkanVertexID` で受け取る。`SV_VertexID` は、`DrawParameters` の capability を要るので、
-  拒まれる。
+  device がそれに対応するときにだけ使える。
 - `select(cond, a, b)` は、`cond ? a : b` である。
 - 使える capability は、device が有効にしている範囲だけである: `Shader`、`Matrix`、`ImageQuery`、`DerivativeControl`、
   `StorageImageExtendedFormats`、`Sampled1D`、`ShaderNonUniform`、`SampledImageArrayDynamicIndexing`、
-  `SampledImageArrayNonUniformIndexing`、`DemoteToHelperInvocation`。16 bit の浮動小数点、64 bit の整数、subgroup の操作、
-  device address、長さの無い texture の配列、Slang の `DescriptorHandle`（descriptor heap を直接引くもの）は、使えない。
-- 1D、3D、cube、配列の texture と、combined image sampler（`Sampler2D`）は、使えない。texture と `SamplerState` を分けて書く。
+  `SampledImageArrayNonUniformIndexing`、`DemoteToHelperInvocation` と、device が対応するときだけの capability
+  （[GPU の API](#gpu-の-apigfx)）。subgroup の操作、device address、長さの無い texture の配列、
+  Slang の `DescriptorHandle`（descriptor heap を直接引くもの）は、使えない。
+- 1D の texture、texture の 2D 配列（`Texture2DArray`）、cube の配列と、combined image sampler（`Sampler2D`）は、使えない。
+  texture と `SamplerState` を分けて書く。2D、3D、cube の texture は使える。
   texture の配列は、長さを決めて書く（`Texture2D<float4> textures[8]`）。
+
+## 色
+
+スクリプトと shader は、**作業用の色空間**（linear。1.0 が reference white。alpha は premultiplied）の中で描く。
+入口（ウィンドウの内容を読む）と、出口（出力へ出す）の変換は、次の口が受け持つ。project は、行列にも伝達関数にも触れない。
+
+- 作業用の色空間は、session の設定で、コアが持つ（`--working-space`、`hz.working_space()`、`hz.set_working_space()`）。既定は ACEScg である。
+  スクリプトを読み直しても、変わらない。
+- 色を描くバッファの既定の形式は、`hz.color_format()` が返す（`--color-format`）。
+
+### 入口: ウィンドウの内容を読む
+
+コアの Slang の module `color`（`import color;`）:
+
+| | 内容 |
+| --- | --- |
+| `WindowParams` | 1 枚の表面を読むのに要る数値。96 byte。push data、uniform buffer、storage buffer の、どれでも同じ並びである |
+| `WindowTexture(texture, sampler, params)` | `sample(st)`、`sample_level(st, lod)`、`load(texel)` が、作業用の色空間の、linear の、premultiplied alpha の値を返す |
+| `window_to_working(texel, params)` | 自分で読んだ 1 texel を、同じ変換にかける |
+| `window_uv(params, st)` | 表面の座標から、テクスチャの座標へ |
+
+- `st` は、表面の座標（左上が (0, 0)、右下が (1, 1)）である。viewport の切り出し、buffer transform、上下の反転は、`WindowParams` に入っている。
+- 補間は、変換の前の値で行われる。変換した後の値で縮めたいとき（mip の列、ぼかし）は、下の `blit_window` で写してから行う。
+- 伝達関数の種類と、alpha の持ち方は、`WindowParams` の中の番号で分ける。shader の変種は、作らない。
+
+組み込みの project の module `color`（`hz.include("color")`）:
+
+| | 内容 |
+| --- | --- |
+| `color.write_window_params(buf, offset, surface, options)` | Luau の `buffer` に、表面の `WindowParams` を書く。`options.brightness` は、ウィンドウの明るさの倍率（既定は 1: ウィンドウの reference white が、1.0 になる） |
+| `color.window_params(surface, options)` | 96 byte の新しい `buffer` を返す |
+| `color.blit_window(surface, image, options)` | 表面の内容を、変換しながら、`image` の全体に写す（自分で pass を開く）。`options` は、`brightness`、`filter`（`linear`、`nearest`）、`mip`、`layer` |
+
+数値を、スクリプトが詰めない形もある。`hz.window_table()` は、すべての表面（ウィンドウの表面、drag のアイコン、クライアントのカーソルの表面、
+持ち続けている閉じたウィンドウの表面）の `WindowParams` を、コアが書いた storage buffer の slot を返す。shader は、それを
+`StructuredBuffer<WindowParams>` として宣言し、スクリプトは、表面の `params`（添字）だけを渡す。
+
+- 表は、呼ばれたときに、そのフレームのために作る。`hz.window_table()` を呼んだ後の `hz.surfaces` の要素に、`params` が付く。
+- 明るさの倍率は、表に入っていない。shader が、読んだ値に、`scale_light(premultiplied, factor)`（module `color`）で掛ける。
+- 組み込みの矢印のカーソルは、表に入らない。
+
+### 出口: 出力へ出す
+
+| | 内容 |
+| --- | --- |
+| `color.format()` | `hz.color_format()` |
+| `color.composite_for(output)` | 出力と同じ大きさの、作業用の色空間のバッファ（`{ image, slot, width, height, format }`）。出力ごとに持ち続け、大きさが変われば作り直す |
+| `color.present(composite, output, target)` | バッファを、出力の符号の値に変換して、`target`（`frame` に渡された画像）に書く。自分で pass を開く。`composite` は、`composite_for` の戻り値、`{ image, slot }`、または画像の handle。中身は、コアの `hz.present` である |
+| `hz.present(image, slot, output, target)` | 出口の変換。コア（Rust）が行う。出力に OCIO の display と view があれば、OCIO の描画で、無ければ、出力の image description への変換（行列と伝達関数。shader は、バイナリに埋め込んだ `shaders/encode.slang`）で、`target` に書く。project は、この変換を差し替えられない |
+
+```lua
+local color = hz.include("color")
+
+function frame(output, target)
+    local composite = color.composite_for(output)
+    gfx.begin_pass({ color = { { image = composite.image, load = "clear", clear = { hz.color("#1e1e2e") } } } })
+    -- 作業用の色空間の値を描く
+    gfx.end_pass()
+    color.present(composite, output, target)
+end
+```
+
+出力に OCIO の display と view が選ばれているとき、`color.present` は、コアの OCIO の変換の描画で出す（[検証用の compositor](README.md#opencolorioocioの-display-と-view)）。
+project は、呼び方を変えなくてよい。
+
+### OCIO の変換
+
+| | 内容 |
+| --- | --- |
+| `hz.ocio_info()` | config の名前、作業用の色空間（`working`）と、その原色（`working_chromaticities`）、display と、その view（`displays`）、色空間（`color_spaces`）。OCIO が無ければ `nil` |
+| `hz.ocio_set_output(output, display, view)` | 出力の display と view を選ぶ。`output` は、出力の id、名前、または `nil`（自分の設定を持たない、すべての出力）。`display` と `view` が `nil` なら、config の既定。両方 `nil` なら、OCIO を外す。`true`、または `false` と理由を返す |
+| `hz.ocio_set_controls(output, { exposure =, gamma = })` | 出力の、view の前の露出（stop）と、後の gamma |
+| `hz.ocio_apply({ input =, target =, ... })` | 画像に、OCIO の変換を当てて、別の画像に描く。pass の外で呼ぶ |
+| `hz.ocio_present(slot, output, target)` | 出力の display と view で、`target` に描く。描いたら `true`。`color.present` が使う |
+
+`hz.ocio_apply` の引数:
+
+| 欄 | 内容 |
+| --- | --- |
+| `input` | 入力の texture slot。`target` と同じ大きさの画像のもの |
+| `target` | 描画先の画像（`color_target`） |
+| `from` | 入力の色空間（config の色空間か role の名前）。省くと、作業用の色空間 |
+| `to` | 出力の色空間。または、`display` と `view`（`view` を省くと、display の既定の view） |
+| `premultiplied` | 入力が premultiplied alpha なら `true`（alpha で割ってから変換し、掛け直す）。既定は `false` |
+| `scale` | 変換の前に、RGB に掛ける倍率。既定は 1 |
+| `exposure`、`gamma` | `display` と `view` のときだけ。view の前の露出（stop）と、後の gamma |
+
+戻り値は、描いたら `true`。変換をコンパイルしている間は `false`（何も描かない。次のフレームで、もう一度呼ぶ。再描画は、コアが求める）。
+変換を作れないとき（色空間の名前が無い、コンパイルに失敗した）は、`false` と理由。
+
+- `frame` が、`hz.present` を 1 度も呼ばずに戻ると、スクリプトが `target` に描いた値が、変換なしで、そのまま出力に出る。禁じては、いない（出口を、自分で書くスクリプトもある）。
+  コアは、そういうフレームを数え（状態の `script.frames_without_present`）、スクリプトごとに 1 度、ログに警告を出す。
+
+### スクリプトに書く色の値
+
+色は、`hz.color` を通す。色でない数値と、すでに作業用の色空間になっている値は、そのまま渡す。
+
+| 書き方 | 内容 |
+| --- | --- |
+| `hz.color("#1e1e2e")` | `#rgb`、`#rgba`、`#rrggbb`、`#rrggbbaa` |
+| `hz.color(r, g, b)`、`hz.color(r, g, b, a)` | 0 から 1 の値 |
+| 最後の引数に `{ space = ..., premultiply = false }` | 色空間を明示する。alpha を掛けない値で受け取る |
+
+- 戻り値は、作業用の色空間の、linear の、4 つの数である。既定では、alpha を掛けてある。
+- 色空間を書かなければ、色の情報の無い表面と同じ意味（BT.709 の原色、指数 2.2 のべき乗）で読む。
+- `space` は、`"srgb"`（既定と同じ）、image description の名前（`srgb-piecewise`、`display-p3`、`adobe-rgb`、`bt2020-pq` など）、
+  `"acescg"`、`"linear-<原色の名前>"`、または `{ primaries = 名前か色度 8 つ, transfer = 名前か、べき乗の指数 }`。
+
+### 画像の読み込み
+
+`hz.load_image(path, options)` は、project のディレクトリの中のファイルを、テクスチャにして、`{ image, texture, width, height, format, space, filterable }` を返す。
+project の外を指すパス（絶対パス、`..`、外への symlink）は、エラーになる。組み込みの project には、ファイルが無い。
+
+| | 内容 |
+| --- | --- |
+| 色の画像（既定） | 読み込みのときに、作業用の色空間の、linear の、premultiplied alpha に変換し、`rgba16float`（`format = "rgba32float"` も選べる）で持つ。shader は、ふつうのテクスチャとして読む |
+| データの画像（`data = true`） | 値を、そのまま入れる。8 bit の PNG は `rgba8unorm`、16 bit の PNG は `rgba16unorm`、浮動小数点は `rgba32float`（1 channel の生の値は `r32float`）。`format` で変えられる |
+| `space` | 値の意味を、ファイルの情報より優先して決める（`hz.color` と同じ書き方） |
+| `raw = { width, height, channels }` | ファイルを、little endian の `f32` の並びとして読む。`space` を付けなければ、データになる |
+
+- 形式: PNG（8 bit と 16 bit、palette、gray）、Radiance の RGBE（`.hdr`）、生の `f32`。OpenEXR は、未実装である。
+- 色の情報: PNG の `cICP`、`sRGB`、`gAMA`、`cHRM` を読む。無ければ、色の情報の無い表面と同じ意味で読む。ICC プロファイル（`iCCP`）は、未実装である
+  （警告を出し、色の情報が無いものとして読む）。`.hdr` は、BT.709 の原色の linear として読む。
+- mipmap は、未実装である。
+
+## 文字
+
+コアは、文字列を、被覆率（coverage）のテクスチャにする。どこに、どの色で描くか、いつ作り直すかは、スクリプトが決める。
+
+| | 内容 |
+| --- | --- |
+| `hz.load_font(path)` | project の中のフォントのファイル（TrueType、OpenType）を読む。番号を返す（スクリプトを読み直すまで有効） |
+| `hz.load_font()` | session のフォントを読む。無ければ `nil` を返す |
+| `hz.render_text(font, text, options)` | 文字列を描いたテクスチャ `{ image, texture, width, height, format }` を返す。見えるものが無ければ（空、空白だけ）`nil` |
+| `hz.missing_glyphs(font, text)` | `text` の文字のうち、フォントに glyph が無いものの数（空白と制御文字は数えない）。0 でなければ、別の文字列か、別のフォントで描く |
+
+- session のフォントは、起動の引数 `--font FILE`、無ければ環境変数 `HIZUKURI_FONT` のファイルである。どちらも無ければ、
+  `/usr/share/fonts` と `/usr/local/share/fonts` の下から、決まった名前（`DejaVuSans.ttf`、`NotoSans-Regular.ttf`、`LiberationSans-Regular.ttf`、
+  `Roboto-Regular.ttf`、`FreeSans.ttf`）のファイルを、この順に探す。fontconfig は、使わない。見つからない、または読めないときは、
+  `hz.load_font()` が `nil` を返すので、project は、文字なしで描く。
+- `options`: `size`（画素。既定は 16）、`max_width`（折り返す幅）、`format`（`"rgba8unorm"`（既定。白に、被覆率を alpha として掛けたもの。
+  色を掛けて、premultiplied として描く）か、`"r8unorm"`（被覆率だけ））。改行（`\n`）で、行を分ける。
+- テクスチャは、スクリプトのものである。文字列が変わらないかぎり、作り直さずに使い回す。
+- 1 つのフォントだけで描く。フォントに無い文字は、そのフォントの `.notdef` の glyph（フォントによって、空か、四角）になる。
+  複数のフォントの組み合わせ（日本語の fallback）、文字の向き、合字の整形（shaping）は、未実装である。
+  session のフォントを探す名前の表に、日本語の文字を持つフォントは無い。日本語の locale の名前（desktop entry の `name` など）は、
+  `hz.missing_glyphs` で確かめて、描ける文字列（`default_name`）に替える。
+
+## ランチャーの論理
+
+組み込みの module `launcher`（`prototype/compositor/scripts/launcher.luau`）は、アプリを起動するランチャーの、見た目でない部分である:
+アプリの一覧（`hz.desktop_entries`）、打った文字での絞り込み、並び順、起動（`hz.spawn`）。描画は、しない。
+project は、`hz.include("launcher")` で使い、結果を、自分の見た目で描く。project に同じ名前の module があれば、そちらが使われる。
+使い方は、module の先頭のコメントにある。
+
+```lua
+local launcher = hz.include("launcher")
+local menu = launcher.new({ rows = 8 })
+launcher.open(menu)                                      -- 一覧を読み、問いを空にする
+local what = launcher.key(menu, keycode, pressed, mods, k)  -- "typed"、"moved"、"started"、"closed"、nil
+for _, row in launcher.visible(menu) do                  -- 見えている行 { app, index, chosen }
+    draw(launcher.label(row.app, font), row.chosen)
+end
+launcher.start_at(menu, index)                           -- 行を押したとき
+```
+
+- 絞り込み: 問いを空白で語に分け、すべての語が、`name`、`default_name`、`generic_name`、`keywords`、`id`（`.desktop` を除く）の
+  どれかに、大文字と小文字を区別せず（ASCII の文字だけ）含まれるものを残す。含まれる場所が、文字列の頭 > 語の頭（空白、`-`、`_`、`.`、`/`、`:` の後、
+  小文字の後の大文字） > それ以外、の順に、どの欄か（`name` > `default_name` > `generic_name` > `keywords` > `id`）の順に、点が高い。
+- 並び順: 点の高い順。同じくらいなら、この session の中で、よく起動したもの、最近起動したものが上。問いが空なら、起動したもの、残りは名前の順。
+  起動した記録（`menu.memory`）は、ただの表で、project が `unload` と `init` で引き継ぐ。ファイルには残さない（スクリプトに、ファイルに書く口が無い）。
+- キー: 文字（`k.text`）を足す、BackSpace で 1 文字消す（Ctrl で 1 語）、Ctrl+U で空にする、Up と Down（Ctrl+P と Ctrl+N、Tab と Shift+Tab）で選ぶ
+  （端で反対の端へ回る）、Page Up と Page Down、Home と End、Return で起動して閉じる、Escape で閉じる。ランチャーを開くキーは、project が決める。
+  文字と選ぶキーは、押し続けると、0.4 秒の後、1 秒に 25 回、繰り返す（コアは、スクリプトのためにキーを繰り返さないので、module が、
+  project の `frame` から呼ぶ `launcher.repeat_keys(menu, time)` で繰り返す。`menu.held` がある間、project は次のフレームを求める）。
+- 端末のアプリ（`terminal` が真）は、`hz.env("HIZUKURI_TERMINAL")`（無ければ `foot`）を空白で分けた語、`-e`、アプリの argv、の順の argv で起動する。
+  作業用のディレクトリは、`working_dir`。
+- 起動したアプリは、compositor の環境を受け継ぐ（[アプリの起動](#アプリの起動)）。D-Bus で起動を頼むアプリ（`Exec` が `gapplication launch` のもの、
+  すでに動いている自分に頼む GTK のアプリなど）は、すでに動いている session の側に、ウィンドウを開くことがある。
 
 ## コアに残っているもの
 
@@ -369,9 +749,9 @@ shader を書くときの決まり:
 | fallback（`prototype/compositor/src/fallback/`）: スクリプトが使えないときの、最小の描画（`draw.rs`）と当たり判定（`hit_test.rs`）。誰も決めないときの、ウィンドウの表の決まり（`windows.rs`、`placement.rs`） | スクリプトが壊れても、画面を出し、入力を届け続けるため。色の変換も、変形も、装飾もしない。コンポジターの機能ではない（下の「故障したときの動き」） |
 | 入力の配り方と、緊急用のキー | ボタンを押している間の行き先、指が触れている間の行き先（指ごと）、スクリプトが使ったキーの「離す」を渡さないこと、スクリプトが取ったジェスチャーの残りを渡さないこと。緊急用のキーは、スクリプトの `key` より先に、コアが見る |
 | タッチスクリーンと出力の対応づけ | KMS のバックエンドが、タッチスクリーンの座標を、使っている 1 つの出力に当てる（[KMS のバックエンド](kms-backend.md)） |
-| 色の変換の数値（`proto-color`） | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため |
+| 色の変換の数値（`proto-color`）と、作業用の色空間の設定、ウィンドウの内容を読む Slang の型 | 原色の行列や、伝達関数の定数を、スクリプトごとに書き直さないため。スクリプトが、色空間を知らなくても、正しい色で描けるようにするため。出口の変換（`hz.present`）も、コアが行う |
 | 時間の上限、メモリの上限、失敗したときの扱い | スクリプトに任せられない |
-| popup の位置（positioner の計算）、popup の grab、drag and drop | `proto-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く |
+| popup の位置（positioner の計算）、popup の grab、drag and drop | `proto-wl` が持つ。スクリプトは、popup を、ウィンドウの表面の 1 つとして受け取り、描く。収める範囲は、スクリプトが決められる（`hz.set_popup_bounds`） |
 | ポインターの制約の働き（lock の間、ポインターを動かさないこと、confine の間、領域の中に留めること）と、プロトコルの状態 | プロトコルの約束（有効になる時点で、ポインターが表面と領域の中にあること、lock の間は `wl_pointer.motion` を送らないこと）は、スクリプトに任せられない。認めるかどうかと、抜け出し方は、スクリプトが決める |
 | 入力メソッドの候補ウィンドウの位置（アプリが伝えたカーソルの矩形の下、収まらなければ上）、キーボードの grab と仮想キーボードのキーの行き先 | `proto-wl` が持つ（[プロトコルの層](protocol-layer.md#入力メソッド)）。スクリプトは、候補ウィンドウを、text-input に focus のあるウィンドウの、いちばん手前の表面（`input-popup`）として受け取り、描く。スクリプトの `key` は、IME の grab より先に呼ばれる |
 
@@ -405,6 +785,17 @@ shader を書くときの決まり:
 - カーソルは、lock の間も、`hz.cursor()` のとおりに描く（ふつう、クライアントは、カーソルを隠す）。
   見せ方を変えるスクリプトは、`hz.pointer_constraint()` を見る。
 - ウィンドウ管理の関数なので、`hz.manages_windows()` が真のときだけ呼ばれる。`--no-drawing`、fallback の間と、プロジェクトが `pointer_constraint` を定義しないときは、コアの既定に従う。
+
+## ポインターを取る
+
+ウィンドウをポインターで動かす、スクリプトの描いた画面の上で何かを選ぶ、といった操作では、ボタンと動きを、アプリではなく、スクリプトが受け取る。
+
+- 押されているボタンが無いときの press に、`pointer_button` が `"take"` を返すと、スクリプトがポインターを取る。
+  その press は、アプリに届かない。アプリには、ポインターが出ていったこと（leave）が届く。
+- 取っている間、ポインターの動きは `pointer_motion(x, y)` に届き、アプリには届かない。その後のボタンと release も、
+  `pointer_button` にだけ届く（`window` と `surface` は `nil`）。当たり判定（`hit_test`）は、呼ばれない。
+- すべてのボタンが離れると、取っている状態は終わる。ポインターは、その下にあるものに戻る（enter が届く）。
+- ほかのボタンが押されている間の press に `"take"` を返しても、取らない（`true` と同じに扱う）。
 
 ## タッチとジェスチャー
 
@@ -460,7 +851,7 @@ shader を書くときの決まり:
 - コアのもの（クライアントのテクスチャ、出力の画像、ウィンドウの表）は、そのまま残る。ウィンドウは開いたままで、
   クライアントには、configure も focus の変化も届かない。
 - 状態の引き継ぎは、スクリプトの仕事である。コアは、値を預かって渡すだけで、中身を知らない。
-  組み込みのプロジェクトは、タイルの順番、作業用の色空間、ウィンドウの変換を引き継ぐ。
+  組み込みのプロジェクトは、タイルの順番、ウィンドウの変換を引き継ぐ。
   引き継いだ順番に無いウィンドウは、画面の上で、左から右の順に並べる。
 - スクリプトが外されている間に読み直すと、`unload` は呼ばれない（壊れたスクリプトの値を、信じない）。
   組み込みのプロジェクトは、そのとき、すべてのウィンドウを、画面の上の左から右の順に並べ直す。
@@ -470,6 +861,7 @@ shader を書くときの決まり:
 ## 故障したときの動き
 
 スクリプトの呼び出しには、時間の上限（`--script-budget-ms`）と、メモリの上限（`--script-memory-mb`）がある。
+スクリプトが GPU に作る buffer と image には、大きさの合計の上限（`--script-gpu-memory-mb`）がある。
 スクリプトの故障で、compositor は落ちず、クライアントは切断されない。
 
 時間の上限は、VM の interrupt（ループの折り返しと、関数の呼び出しと戻りのたびに呼ばれる）で見る。
@@ -538,8 +930,9 @@ interrupt は、`mlua` の `set_interrupt` を通さずに、VM に直接入れ�
 
 - クライアントからの要求（最大化、全画面、最小化、移動、大きさの変更）を、スクリプトが受け取ること
   （`proto-wl` は、出来事として出している。[プロトコルの層](protocol-layer.md#ウィンドウ)）。
-- popup の位置を、変形に合わせて決めること（`proto-wl` には、置き直す口がある。
-  [プロトコルの層](protocol-layer.md#popup)）。いまは、変形していないウィンドウの位置で、出力の中に収める。
+- popup ごとに、位置を、スクリプトが決めること（`proto-wl` には、置き直す口がある。
+  [プロトコルの層](protocol-layer.md#popup)）。スクリプトが決められるのは、ウィンドウごとの収める範囲（`hz.set_popup_bounds`）までである。
+  組み込みの project は、範囲を決めないので、変形したウィンドウの popup は、変形していないウィンドウの位置で、出力の中に収める。
 - 入力メソッドの候補ウィンドウの位置を、スクリプトが決めること。いまは、変形していないウィンドウの位置で、
   カーソルの矩形の近くに置く。ウィンドウを変形して描くと、候補ウィンドウは、ウィンドウと同じ変換で描かれる。
 - damage を使って、描く範囲を狭めること。

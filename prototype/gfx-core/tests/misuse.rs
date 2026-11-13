@@ -533,7 +533,7 @@ fn out_of_range_and_mismatched_sizes() {
     // Push data outside the shader's block, bindings outside the table.
     expect!(gpu.push(8, &[0; 12]), OutOfRange);
     expect!(gpu.push(u32::MAX, &[0; 4]), OutOfRange);
-    expect!(gpu.bind(16, f.texture_slot), OutOfRange);
+    expect!(gpu.bind(32, f.texture_slot), OutOfRange);
     // Scissor and viewport outside what the target allows.
     expect!(gpu.set_scissor(4, 4, 8, 8), OutOfRange);
     expect!(gpu.set_scissor(u32::MAX, 0, 2, 2), OutOfRange);
