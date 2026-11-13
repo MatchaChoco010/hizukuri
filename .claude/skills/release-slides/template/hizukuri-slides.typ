@@ -10,6 +10,7 @@
 //   #topic[今回のリリースの要点]
 //   #slide(caption: [...])[ ... ]
 //   #item-list()
+//   #chapter[...]                  (optional: groups the items that follow)
 //   #item(kind: "追加", area: "検証用の compositor", title: [...], refs: (...))
 //   #slide(caption: [...])[ ... ]
 //   #slide(caption: [...])[ ... ]
@@ -214,6 +215,25 @@
 #let verify-section() = section("手元で動かして試す")
 #let appendix-section() = section("付録")
 
+// Opens a chapter: the items that follow, up to the next chapter or
+// section, are about one part of the project. For a release whose items
+// span many parts (the first release, for one), the items are grouped by
+// chapter; inside a chapter they keep the order they went into develop.
+// The name of the chapter is shown above the heading of its slides and as
+// a row of the list of the items. Topics may open a chapter, to show what
+// its items build together.
+#let chapter(name) = [#metadata(name) <chapter>]
+
+// The chapter in effect at a location: the last one before it, unless a
+// section was opened after that chapter. none when there is none.
+#let chapter-at(location) = {
+  let chapters = query(selector(<chapter>).before(location))
+  if chapters.len() == 0 { return none }
+  let last = chapters.last()
+  let later = query(selector(<section>).after(last.location()).before(location))
+  if later.len() > 0 { none } else { last.value }
+}
+
 // Opens an item: one unit of change (a pull request or an issue; several of
 // them when they form one piece of work). The slides that follow belong to
 // it and carry its title as their heading.
@@ -278,6 +298,7 @@
     let position = query(of-unit.before(here())).len()
     let number = query(selector(<item>).before(here())).len()
     let sections = query(selector(<section>).before(here()))
+    let chapter = chapter-at(here())
     let unit = unit.value
     let whole = {
       set par(justify: false)
@@ -288,9 +309,11 @@
           grid(
             columns: (1fr, auto),
             align: horizon,
-            [#kind-tag(unit.item.kind)#h(8pt)#unit.item.area],
+            [#if chapter != none [#text(weight: 700, fill: ember, chapter)#h(10pt)]#kind-tag(unit.item.kind)#h(8pt)#unit.item.area],
             ref-links(unit.item.refs),
           )
+        } else if chapter != none {
+          text(weight: 700, fill: ember, chapter)
         } else if sections.len() > 0 {
           text(weight: 700, fill: ember, sections.last().value)
         } else {
@@ -367,17 +390,38 @@
 
 // The list of the items, with the pages each one covers. Comes after the
 // slides that summarize the release and before the first item. `pages` is
-// the number of slides the list is spread over: seven items fit on one.
-// `note` is shown under the end of the list.
+// the number of slides the list is spread over (seven items fit on one), or
+// the number of items on each of them: (6, 7, 5). `note` is shown under the
+// end of the list. When the items are grouped in chapters, each chapter
+// starts with a row that names it.
 #let item-list(pages: 1, note: none) = {
   topic[項目の一覧]
-  for index in range(pages) {
-    slide(caption: [番号の順は、`develop` に入った順である], context {
+  let counts = if type(pages) == array { pages } else { none }
+  let slides = if counts != none { counts.len() } else { pages }
+  let caption = context if query(<chapter>).len() > 0 {
+    [章ごとに並べた。章の中の順は、`develop` に入った順である]
+  } else {
+    [番号の順は、`develop` に入った順である]
+  }
+  for index in range(slides) {
+    slide(caption: caption, context {
       let items = query(<item>)
-      let per-slide = calc.max(1, calc.ceil(items.len() / pages))
-      let first = calc.min(items.len(), index * per-slide)
-      let last = calc.min(items.len(), first + per-slide)
+      let (first, last) = if counts != none {
+        let first = counts.slice(0, index).sum(default: 0)
+        (calc.min(items.len(), first), calc.min(items.len(), first + counts.at(index)))
+      } else {
+        let per-slide = calc.max(1, calc.ceil(items.len() / slides))
+        let first = calc.min(items.len(), index * per-slide)
+        (first, calc.min(items.len(), first + per-slide))
+      }
+      if counts != none and index == slides - 1 {
+        assert(
+          last == items.len(),
+          message: "item-list: the counts in `pages` cover " + str(last) + " of the " + str(items.len()) + " items",
+        )
+      }
       let page-of = location => counter(page).at(location).first()
+      let chapter-of = i => chapter-at(items.at(i).location())
       set par(justify: false)
       show table: set text(size: 12.5pt)
       table(
@@ -396,17 +440,30 @@
             let slides = if units.len() > 1 { query(own.before(units.at(1).location())) } else { query(own) }
             let start = if slides.len() > 0 { page-of(slides.first().location()) } else { page-of(it.location()) + 1 }
             let end = if slides.len() > 0 { page-of(slides.last().location()) } else { start }
-            (
+            let chapter = chapter-of(i)
+            let opens = chapter != none and (i == first or chapter-of(i - 1) != chapter)
+            let heading = if opens {
+              (
+                table.cell(colspan: 5, fill: wash, align: left + horizon, inset: (x: 9pt, y: 5pt), text(
+                  size: 11.5pt,
+                  weight: 700,
+                  fill: ember,
+                  chapter,
+                )),
+              )
+            } else { () }
+            let row = (
               text(weight: 700, fill: ember, two-digits(i + 1)),
               kind-tag(v.kind),
               [#text(weight: 500, v.title) \ #text(size: 10.5pt, fill: ink-soft, v.area)],
               ref-links(v.refs),
               link(it.location(), if end > start [#start〜#end] else [#start]),
             )
+            heading + row
           })
           .flatten(),
       )
-      if note != none and index == pages - 1 {
+      if note != none and index == slides - 1 {
         v(4pt)
         text(size: 11.5pt, fill: ink-soft, note)
       }
