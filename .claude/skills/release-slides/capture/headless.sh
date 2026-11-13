@@ -14,11 +14,11 @@
 #   hz_stop                       stop everything that was started here
 #
 # Nothing started here can reach a session that is already running on the
-# machine: the compositor and its clients get their own runtime directory,
-# home and font configuration, and every variable that names a display or a
-# socket of the surrounding session is removed. Processes are stopped by the
-# ids they were started with, never by name. The runtime directory is removed
-# at the end.
+# machine, or the files of the user who runs it: the compositor and its
+# clients get their own runtime directory, home and font configuration, and
+# every variable that names a display or a socket of the surrounding session
+# is removed. Processes are stopped by the ids they were started with, never
+# by name. The runtime directory is removed at the end.
 
 set -u
 
@@ -83,7 +83,13 @@ hz_start() {
     mkdir -m 700 "$HZ_RT"
     mkdir -p "$HZ_RT/home/.config" "$HZ_RT/home/.cache" "$HZ_OUT"
     _hz_write_fontconfig
-    "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" "$HZ_BIN/proto-compositor" \
+    # The compositor gets the empty home as well: what it keeps between runs
+    # (the compiled OCIO shaders in $XDG_CACHE_HOME, for one) stays here and
+    # goes with the runtime directory, and what it reads from a home (the
+    # desktop entries of the launcher) is not the user's.
+    "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" HOME="$HZ_RT/home" \
+        XDG_CONFIG_HOME="$HZ_RT/home/.config" XDG_CACHE_HOME="$HZ_RT/home/.cache" \
+        "$HZ_BIN/proto-compositor" \
         --backend headless --socket "$HZ_SOCKET" --exit-after "${HZ_SECONDS:-180}" \
         --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" \
         "$@" >"$HZ_RT/proto-compositor.log" 2>&1 &
