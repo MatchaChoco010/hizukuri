@@ -272,27 +272,27 @@ fn depth_misuse() {
     )
     .unwrap();
 
-    // Images: a depth format is not a colour target, and the reverse.
-    expect!(
-        gpu.create_image(&ImageDesc {
-            format: Format::D32Float,
+    // Images: a depth format as a colour target, and the reverse, are
+    // refused unless the device reports the usage for the format. (Vulkan
+    // leaves which usages a format has to the device.)
+    for (format, usage) in [
+        (Format::D32Float, ImageUsage::COLOR_TARGET),
+        (Format::Rgba8Unorm, ImageUsage::DEPTH_TARGET),
+    ] {
+        let made = gpu.create_image(&ImageDesc {
+            format,
             width: 4,
             height: 4,
-            usage: ImageUsage::COLOR_TARGET,
-        }),
-        Unsupported
-    );
-    expect!(
-        gpu.create_image(&ImageDesc {
-            format: Format::Rgba8Unorm,
-            width: 4,
-            height: 4,
-            usage: ImageUsage::DEPTH_TARGET,
-        }),
-        Unsupported
-    );
+            usage,
+        });
+        if gpu.format_supports_usage(format, usage) {
+            made.unwrap();
+        } else {
+            expect!(made, Unsupported);
+        }
+    }
+    // The scene above draws with a D32Float depth target.
     assert!(gpu.format_supports_usage(Format::D32Float, ImageUsage::DEPTH_TARGET));
-    assert!(!gpu.format_supports_usage(Format::D32Float, ImageUsage::COLOR_TARGET));
 
     // Pipelines: the depth format has to be one, a pipeline needs something
     // to draw to, and the bias has to be finite.
