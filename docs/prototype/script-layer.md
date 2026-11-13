@@ -410,6 +410,11 @@ hz.spawn(app.exec, { cwd = app.working_dir })
        sampled の image に付いた format、演算の結果でないものに付いた `NoContraction`、image の読み出しの `SignExtend` と
        `ZeroExtend`、大きさの違う型の間の `OpBitcast`、capability を宣言せずに使う built-in（`CullDistance` を、
        capability の `CullDistance` を宣言せずに使う、など。validator は、`BuiltIn` の decoration の capability を確かめない）。
+       SPIR-V が、module の全体を未定義の動作とする形のうち、module から決まるものも、ここで拒む: 整数の除算と剰余
+       （`OpUDiv`、`OpSDiv`、`OpUMod`、`OpSRem`、`OpSMod`。`OpSpecConstantOp` の中のものも）で、除数の成分が、
+       定数の 0（`OpConstantNull`、specialization constant の既定の値を含む）か、未定義の値（`OpUndef`）のもの、
+       符号付きのもので、定数の最小値か未定義の値を、定数の -1 で割るもの。実行時に計算される除数が 0 になる場合は、
+       検査では見えず、拒まない。
   - 壊した module を、検査とドライバーに通す試験が、`prototype/gfx-core/tests/spirv_input.rs`（naga が書いた module）と
     `tests/mutate_3d.rs`（Slang が書いた、3D の機能を使う module）にある。`mutate_3d` は、途中で失敗すると、
     直前に描いた 3 つの変異体（語の位置と、置き換えた値）を出す。

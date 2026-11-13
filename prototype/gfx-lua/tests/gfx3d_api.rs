@@ -7,6 +7,7 @@
 mod common;
 
 use common::*;
+use proto_gfx_core::Format;
 
 const SCRIPT: &str = r#"
 local function refused(what, f, ...)
@@ -15,13 +16,18 @@ local function refused(what, f, ...)
     return tostring(err)
 end
 
-function run()
-    -- Format queries: one capability or a list of them.
+-- `d32` holds what the device reports for d32float, through the core.
+function run(d32)
+    -- Format queries: one capability or a list of them. Vulkan requires
+    -- the first two of every device. The test draws with a d32float depth
+    -- target; whether d32float has the other usages is the device's to say.
     assert(gfx.format_supports("rgba16float", "color_target"))
     assert(gfx.format_supports("rgba8unorm", { "sampled", "filter_linear", "blend", "mipmaps" }))
     assert(gfx.format_supports("d32float", "depth_target"))
-    assert(not gfx.format_supports("d32float", "color_target"))
-    assert(not gfx.format_supports("d32float", { "sampled", "storage" }))
+    assert(gfx.format_supports("d32float", "color_target") == d32.color_target)
+    assert(gfx.format_supports("d32float", "sampled") == d32.sampled)
+    assert(gfx.format_supports("d32float", "storage") == d32.storage)
+    assert(gfx.format_supports("d32float", { "sampled", "storage" }) == (d32.sampled and d32.storage))
     refused("unknown format", gfx.format_supports, "rgba9000", "sampled")
     refused("unknown capability", gfx.format_supports, "rgba8unorm", "teleport")
     refused("capability of the wrong type", gfx.format_supports, "rgba8unorm", 3)
@@ -106,8 +112,17 @@ end
 fn the_3d_calls_from_a_script() {
     let host = host();
     host.load("gfx3d.luau", SCRIPT).unwrap();
-    host.call_in_frame("run", ()).unwrap();
+    let caps = host.gpu().format_caps(Format::D32Float);
+    let d32 = host
+        .lua()
+        .create_table_from([
+            ("color_target", caps.color_attachment),
+            ("sampled", caps.sampled),
+            ("storage", caps.storage),
+        ])
+        .unwrap();
+    host.call_in_frame("run", d32.clone()).unwrap();
     // The device still records and submits frames.
-    host.call_in_frame("run", ()).unwrap();
+    host.call_in_frame("run", d32).unwrap();
     assert_no_validation_errors();
 }

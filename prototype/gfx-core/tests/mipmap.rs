@@ -520,9 +520,16 @@ fn mip_and_sampler_misuse() {
     );
     gpu.upload_image(integers, &solid([7, 7, 7, 7], 64))
         .unwrap();
-    // Generating: needs the copy usages and a format that can be filtered.
+    // Generating: needs the copy usages and a format the device can blit
+    // with linear filtering. Vulkan leaves the latter to the device, also
+    // for an integer format, so the expectation is what the device says.
     expect!(gpu.generate_mipmaps(no_copy), InvalidArgument);
-    expect!(gpu.generate_mipmaps(integers), Unsupported);
+    let caps = gpu.format_caps(Format::Rgba8Uint);
+    if caps.blit_src && caps.blit_dst && caps.filter_linear {
+        gpu.generate_mipmaps(integers).unwrap();
+    } else {
+        expect!(gpu.generate_mipmaps(integers), Unsupported);
+    }
     // Passes: a level the image does not have; levels of different sizes.
     let at = |image, mip| PassColor {
         sub: Subresource { mip, layer: 0 },

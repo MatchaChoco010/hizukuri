@@ -17,7 +17,10 @@
 //!   (`GLSL.std.450` `SClamp`, `UClamp` or `UMin` with constant bounds), as
 //!   written by SPIRV-Tools' `graphics-robust-access` pass. Runtime arrays
 //!   are allowed only at the end of a storage buffer, where the device's
-//!   `robustBufferAccess` applies.
+//!   `robustBufferAccess` applies;
+//! - no integer division or remainder is by a divisor the module fixes to 0
+//!   (a constant, or an undefined value), and no signed one overflows on
+//!   constants (see [`check_division`]).
 
 use std::collections::{HashMap, HashSet};
 
@@ -111,6 +114,14 @@ const ALLOWED_EXTENSIONS: &[&str] = &[
 const GLSL_UMIN: u32 = 38;
 const GLSL_UCLAMP: u32 = 44;
 const GLSL_SCLAMP: u32 = 45;
+
+/// See [`Ctx::known_components`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Known {
+    Bits(u64),
+    Undefined,
+    Nothing,
+}
 
 struct Ctx<'a> {
     defs: HashMap<u32, &'a Instruction>,
@@ -396,6 +407,49 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// What is known, when the module is read, about each component of an
+    /// integer scalar or vector `value`: the bits of a constant (or of the
+    /// default of a specialization constant), an undefined value, or nothing.
+    fn known_components(&self, value: u32) -> Vec<Known> {
+        let Ok(inst) = self.def(value) else {
+            return vec![Known::Nothing];
+        };
+        let count = inst
+            .result_type
+            .and_then(|ty| self.def(ty).ok())
+            .filter(|ty| ty.class.opcode == Op::TypeVector)
+            .and_then(|ty| lit(ty.operands.get(1)?).ok())
+            .unwrap_or(1) as usize;
+        match inst.class.opcode {
+            Op::Constant | Op::SpecConstant => match inst.operands.first() {
+                Some(Operand::LiteralBit32(v)) => vec![Known::Bits(u64::from(*v))],
+                Some(Operand::LiteralBit64(v)) => vec![Known::Bits(*v)],
+                _ => vec![Known::Nothing],
+            },
+            Op::ConstantNull => vec![Known::Bits(0); count],
+            Op::Undef => vec![Known::Undefined; count],
+            Op::ConstantComposite | Op::SpecConstantComposite => inst
+                .operands
+                .iter()
+                .flat_map(|c| match id(c) {
+                    Ok(c) => self.known_components(c),
+                    Err(_) => vec![Known::Nothing],
+                })
+                .collect(),
+            _ => vec![Known::Nothing; count],
+        }
+    }
+
+    /// Bits of the integer scalar or vector type `ty`'s components.
+    fn int_width(&self, ty: u32) -> Option<u32> {
+        let inst = self.def(ty).ok()?;
+        match inst.class.opcode {
+            Op::TypeInt => lit(inst.operands.first()?).ok(),
+            Op::TypeVector => self.int_width(id(inst.operands.first()?).ok()?),
+            _ => None,
+        }
+    }
+
     /// Whether `index` is known to be below `len`.
     fn index_in_range(&self, index: u32, len: u64) -> bool {
         if let Some(v) = self.constant(index) {
@@ -528,6 +582,13 @@ pub(crate) fn reflect_spirv_with(
     }
     let ctx = Ctx::new(&module)?;
     check_layout_decorations(&ctx, &module)?;
+    for inst in &module.types_global_values {
+        if inst.class.opcode == Op::SpecConstantOp
+            && let Some(Operand::LiteralSpecConstantOpInteger(op)) = inst.operands.first()
+        {
+            check_division(&ctx, *op, &inst.operands[1..])?;
+        }
+    }
 
     let model = match stage {
         ShaderStage::Vertex => spirv::ExecutionModel::Vertex,
@@ -812,6 +873,70 @@ fn check_instruction(ctx: &Ctx<'_>, inst: &Instruction) -> Result<(), String> {
         let to = inst.result_type.and_then(|ty| ctx.value_bits(ty));
         if from.is_none() || from != to {
             return Err("OpBitcast between types of different sizes is not accepted".into());
+        }
+    }
+    check_division(ctx, inst.class.opcode, &inst.operands)
+}
+
+/// Integer division and remainder by a divisor the module fixes. SPIR-V
+/// makes `OpUDiv`, `OpSDiv`, `OpUMod`, `OpSRem` and `OpSMod` undefined
+/// behaviour, for the whole module, when a component of the divisor is 0,
+/// and the signed ones when it is -1 and the dividend is the minimum value.
+/// SPIRV-Tools' validator lets both through, and a driver's compiler may
+/// assume they never run. A module is refused when a component of the
+/// divisor is a constant 0 or an undefined value (`OpUndef` may be 0), or
+/// when a signed one divides a constant minimum value, or an undefined one,
+/// by a constant -1. `operands` are the
+/// instruction's, or those of an `OpSpecConstantOp` after the opcode. A
+/// divisor computed at run time is not something these checks can follow.
+fn check_division(ctx: &Ctx<'_>, op: Op, operands: &[Operand]) -> Result<(), String> {
+    if !matches!(op, Op::UDiv | Op::SDiv | Op::UMod | Op::SRem | Op::SMod) {
+        return Ok(());
+    }
+    let (Some(dividend), Some(divisor)) = (operands.first(), operands.get(1)) else {
+        return Err(format!("malformed Op{op:?}"));
+    };
+    let (dividend, divisor) = (id(dividend)?, id(divisor)?);
+    let width = ctx
+        .def(divisor)?
+        .result_type
+        .and_then(|ty| ctx.int_width(ty))
+        .ok_or_else(|| format!("the divisor of Op{op:?} is not an integer"))?;
+    let mask = if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    };
+    let signed = op != Op::UDiv && op != Op::UMod;
+    let divisors = ctx.known_components(divisor);
+    let dividends = ctx.known_components(dividend);
+    for (i, d) in divisors.iter().enumerate() {
+        match *d {
+            Known::Bits(bits) if bits & mask == 0 => {
+                return Err(format!(
+                    "Op{op:?} divides by a constant 0, which is undefined behaviour"
+                ));
+            }
+            Known::Undefined => {
+                return Err(format!(
+                    "Op{op:?} divides by an undefined value, which may be 0 (undefined behaviour)"
+                ));
+            }
+            Known::Bits(bits) if signed && bits & mask == mask => {
+                let min = 1u64 << (width - 1);
+                let overflows = match dividends.get(i) {
+                    Some(Known::Bits(n)) => n & mask == min,
+                    Some(Known::Undefined) => true,
+                    _ => false,
+                };
+                if !overflows {
+                    continue;
+                }
+                return Err(format!(
+                    "Op{op:?} may divide the minimum value by -1, which overflows (undefined behaviour)"
+                ));
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -1387,6 +1512,142 @@ mod tests {
                 e.contains(&format!("{built_in:?}")) && e.contains("does not declare"),
                 "{e}"
             );
+        }
+    }
+
+    /// A fragment shader that applies `op` once. `values` makes the
+    /// dividend, the divisor and the result type, given the 32-bit integer
+    /// type of the signedness asked for.
+    fn division(
+        op: Op,
+        signed: bool,
+        values: impl FnOnce(&mut rspirv::dr::Builder, u32) -> (u32, u32, u32),
+    ) -> Vec<u32> {
+        use rspirv::binary::Assemble;
+        let mut b = rspirv::dr::Builder::new();
+        b.set_version(1, 4);
+        b.capability(Capability::Shader);
+        b.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
+        let void = b.type_void();
+        let function = b.type_function(void, vec![]);
+        let int = b.type_int(32, u32::from(signed));
+        let (dividend, divisor, ty) = values(&mut b, int);
+        let main = b
+            .begin_function(void, None, spirv::FunctionControl::NONE, function)
+            .unwrap();
+        b.begin_block(None).unwrap();
+        let result = b.id();
+        b.insert_into_block(
+            rspirv::dr::InsertPoint::End,
+            Instruction::new(
+                op,
+                Some(ty),
+                Some(result),
+                vec![Operand::IdRef(dividend), Operand::IdRef(divisor)],
+            ),
+        )
+        .unwrap();
+        b.ret().unwrap();
+        b.end_function().unwrap();
+        b.entry_point(spirv::ExecutionModel::Fragment, main, "main", []);
+        b.execution_mode(main, spirv::ExecutionMode::OriginUpperLeft, []);
+        b.module().assemble()
+    }
+
+    /// Integer division by a divisor the module fixes to 0 is undefined
+    /// behaviour in SPIR-V, which SPIRV-Tools' validator lets through: it is
+    /// refused, in every form the module can fix it in. A divisor that is
+    /// not 0 is accepted.
+    #[test]
+    fn division_by_a_fixed_zero_is_refused() {
+        let constants = |dividend: u32, divisor: u32| {
+            move |b: &mut rspirv::dr::Builder, int: u32| {
+                (
+                    b.constant_bit32(int, dividend),
+                    b.constant_bit32(int, divisor),
+                    int,
+                )
+            }
+        };
+        let refused = |words: Vec<u32>, what: &str| {
+            let Err(e) = crate::spirv_input::accept_spirv(&words, ShaderStage::Fragment, "main")
+            else {
+                panic!("accepted; expected a refusal for {what}");
+            };
+            assert!(e.contains(what), "{e}");
+        };
+        let accepted = |words: Vec<u32>| {
+            crate::spirv_input::accept_spirv(&words, ShaderStage::Fragment, "main").unwrap();
+        };
+
+        accepted(division(Op::UDiv, false, constants(7, 3)));
+        for op in [Op::UDiv, Op::UMod] {
+            refused(division(op, false, constants(7, 0)), "constant 0");
+        }
+        for op in [Op::SDiv, Op::SRem, Op::SMod] {
+            accepted(division(op, true, constants(7, 3)));
+            refused(division(op, true, constants(7, 0)), "constant 0");
+        }
+        // OpConstantNull, and one component of a vector.
+        refused(
+            division(Op::UDiv, false, |b, int| {
+                (b.constant_bit32(int, 7), b.constant_null(int), int)
+            }),
+            "constant 0",
+        );
+        refused(
+            division(Op::SDiv, true, |b, int| {
+                let vec2 = b.type_vector(int, 2);
+                let (two, zero) = (b.constant_bit32(int, 2), b.constant_bit32(int, 0));
+                let divisor = b.constant_composite(vec2, [two, zero]);
+                let dividend = b.constant_composite(vec2, [two, two]);
+                (dividend, divisor, vec2)
+            }),
+            "constant 0",
+        );
+        // An undefined value may be 0.
+        refused(
+            division(Op::UDiv, false, |b, int| {
+                (b.constant_bit32(int, 7), b.undef(int, None), int)
+            }),
+            "undefined value",
+        );
+        // A specialization constant whose default is 0, divided by in the
+        // body and in an OpSpecConstantOp.
+        refused(
+            division(Op::UDiv, false, |b, int| {
+                (b.constant_bit32(int, 7), b.spec_constant_bit32(int, 0), int)
+            }),
+            "constant 0",
+        );
+        refused(
+            division(Op::UDiv, false, |b, int| {
+                let (seven, zero) = (b.constant_bit32(int, 7), b.spec_constant_bit32(int, 0));
+                let id = b.id();
+                b.insert_types_global_values(
+                    rspirv::dr::InsertPoint::End,
+                    Instruction::new(
+                        Op::SpecConstantOp,
+                        Some(int),
+                        Some(id),
+                        vec![
+                            Operand::LiteralSpecConstantOpInteger(Op::UDiv),
+                            Operand::IdRef(seven),
+                            Operand::IdRef(zero),
+                        ],
+                    ),
+                );
+                (seven, seven, int)
+            }),
+            "constant 0",
+        );
+        // The signed ones overflow on the minimum value divided by -1.
+        for op in [Op::SDiv, Op::SRem, Op::SMod] {
+            refused(
+                division(op, true, constants(0x8000_0000, u32::MAX)),
+                "minimum value by -1",
+            );
+            accepted(division(op, true, constants(7, u32::MAX)));
         }
     }
 
