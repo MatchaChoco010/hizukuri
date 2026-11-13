@@ -88,8 +88,9 @@
   PQ の振れ幅は、最大の輝度の指定によらず、10000 cd/m² である。
 - HLG は、BT.2100 の OOTF（system gamma は `1.2 + 0.42 log10(最大の輝度 / 1000)`）をかけて、表示の光にしてから合成する。
   BT.1886 は、最小の輝度を黒の水準として扱う。どちらも、表面の側だけで扱う（出力の名前には無い）。
-- 8 bit の値は、合成用のバッファを往復すると、1 階調ずれることがある。0 に近い値は、数階調ずれる
-  （半精度の浮動小数点が 0 の近くで粗く、出力の 2.2 の曲線がそれを引き伸ばすため）。
+- 色を描くバッファが `RGBA32F` のとき、8 bit の値は、合成用のバッファを往復して、同じ意味の出力に、そのまま戻る
+  （`prototype/compositor/tests/project_colors.rs` が、例の project で確かめている）。`RGBA16F` のときは、1 階調ずれることがあり、
+  0 に近い値は、数階調ずれる（半精度の浮動小数点が 0 の近くで粗く、出力の 2.2 の曲線がそれを引き伸ばすため）。
 
 image description の名前:
 
@@ -481,7 +482,8 @@ DISPLAY=:0 xterm &
   つなぐ。X11 のアプリでコピーしたものが Wayland に渡るのは、その X11 のウィンドウにキーボードの focus があるときである。
 - pointer の lock と confine、relative motion のために、xwayland-satellite は、compositor の pointer-constraints と
   relative-pointer を、そのまま Xwayland に通す。X11 のアプリでこれを確かめる検査は、無い。
-- `DISPLAY` は、`state` の `x11.display` で知る。compositor は、自分でアプリを起動しないので、`DISPLAY` を配らない。
+- スクリプトが `hz.spawn` で起動したアプリには、`DISPLAY` が渡る（[アプリの起動](script-layer.md#アプリの起動)）。それ以外の方法で起動するアプリは、
+  `DISPLAY` を、`state` の `x11.display` で知る。
 
 ## 検証用のクライアント
 
@@ -624,4 +626,3 @@ weston-terminal を headless の `proto-compositor` の中で動かし、制御�
 - スクリプトが、タッチを自分で使う（アプリへのタッチを取り消す）こと。タッチパッドの設定（tap、自然なスクロール、加速など）。
 - data control を、信頼するクライアントにだけ見せること（`wp_security_context_v1`）。
 - 候補ウィンドウの位置を、スクリプトが決めること。text-input-v3 の version 2。
-- X11 の display を、compositor が起動するアプリへ渡すこと（compositor は、アプリを起動しない）。
