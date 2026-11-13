@@ -177,8 +177,9 @@ fn the_depth_test_keeps_the_nearest_fragment() {
     gpu.end_pass().unwrap();
     gpu.end_frame().unwrap();
     let pixels = gpu.read_image(target).unwrap();
-    assert_eq!(&pixels[..4], [32, 0, 0, 255], "0.125");
-    assert_eq!(&pixels[12..16], [64, 0, 0, 255], "0.25");
+    let px = |i: usize| -> [u8; 4] { pixels[i * 4..i * 4 + 4].try_into().unwrap() };
+    assert_close8(px(0), [32, 0, 0, 255], UNORM8_CONVERSION, "0.125");
+    assert_close8(px(3), [64, 0, 0, 255], UNORM8_CONVERSION, "0.25");
     no_validation_errors();
 }
 
@@ -589,7 +590,13 @@ fn a_comparison_sampler_reads_a_shadow_map() {
     let pixels = draw(&mut gpu, compare, &[(0, shadow_slot), (1, greater)]).unwrap();
     assert_eq!((pixels[0], pixels[12]), (255, 0), "greater");
     let pixels = draw(&mut gpu, plain_read, &[(0, shadow_slot), (2, plain)]).unwrap();
-    assert_eq!((pixels[0], pixels[12]), (64, 191), "the depth itself");
+    assert!(
+        pixels[0].abs_diff(64) <= UNORM8_CONVERSION
+            && pixels[12].abs_diff(191) <= UNORM8_CONVERSION,
+        "the depth itself: {} and {}",
+        pixels[0],
+        pixels[12]
+    );
 
     // A comparison needs a comparison sampler and a depth texture; a plain
     // read needs a plain sampler.
