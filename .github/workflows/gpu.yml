@@ -64,8 +64,11 @@ jobs:
     # Spot is the default; RunsOn falls back to on-demand without capacity.
     # The image leaves too little of its own disk free for a build.
     runs-on: runs-on=${{ github.run_id }}/family=g4dn.xlarge/image=ubuntu24-gpu-x64/volume=80gb
-    # Nothing is cached: the dependencies are built from scratch.
-    timeout-minutes: 30
+    # Nothing is cached: the dependencies are built from scratch, twice
+    # (the crates whose tests run one at a time are built on their own).
+    # The limit leaves room for a run that passes and for one stuck test to
+    # be reported by tools/ci-watch.sh (HIZUKURI_TEST_STALL_SECONDS).
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
