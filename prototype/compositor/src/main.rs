@@ -365,8 +365,9 @@ struct RunArgs {
     color_format: Option<String>,
 
     /// The font file scripts get from `hz.load_font()`. Without it, the
-    /// environment variable HIZUKURI_FONT, then the first well-known font
-    /// found where systems keep them.
+    /// environment variable HIZUKURI_FONT, then the font fontconfig picks
+    /// for sans-serif, then the first well-known font found where systems
+    /// keep them.
     #[arg(long)]
     font: Option<PathBuf>,
 

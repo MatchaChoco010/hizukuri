@@ -5,13 +5,18 @@
 //!
 //! A font is a file: one of the project (`hz.load_font("fonts/x.ttf")`), or
 //! the session's (`hz.load_font()`), which is the file the session was
-//! started with (`--font`), or else the first of a few well-known fonts
-//! found where systems keep them. A session without any font has no text:
+//! started with (`--font`), or else the one fontconfig picks for
+//! sans-serif, or else the first of a few well-known fonts found where
+//! systems keep them. A session without any font has no text:
 //! `hz.load_font()` returns nil then, and a project has to do without.
 
 use std::cell::RefCell;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
 use mlua::{Lua, Table};
@@ -28,8 +33,20 @@ const MAX_SIDE: u32 = 8192;
 /// The longest string rendered at once, in bytes.
 const MAX_TEXT_BYTES: usize = 4096;
 
+/// How fontconfig is asked for the session's font: its `fc-match`, which
+/// answers with the file and the face of the best match. The family the
+/// person's configuration (and locale) chooses for sans-serif first; when
+/// that one cannot be read (a collection of faces, such as many CJK fonts),
+/// the one it chooses for English text.
+const FONTCONFIG: &[&str] = &["fc-match", "--format", "%{file}\t%{index}\n"];
+const FONTCONFIG_PATTERNS: &[&str] = &["sans-serif", "sans-serif:lang=en"];
+/// How long fontconfig may take to answer (it may build its cache first).
+const FONTCONFIG_TIMEOUT: Duration = Duration::from_secs(5);
+/// The files of one TrueType or OpenType face, which fontdue reads.
+const FONT_EXTENSIONS: &[&str] = &["ttf", "otf"];
+
 /// Where systems keep fonts, and the files looked for there, in order of
-/// preference. No configuration is read.
+/// preference, when there is no fontconfig.
 const FONT_DIRS: &[&str] = &["/usr/share/fonts", "/usr/local/share/fonts"];
 const FONT_NAMES: &[&str] = &[
     "DejaVuSans.ttf",
@@ -72,6 +89,85 @@ pub(crate) fn find_font(dirs: &[&Path], names: &[&str]) -> Option<PathBuf> {
             .find(|path| path.file_name().is_some_and(|f| f == *name))
             .cloned()
     })
+}
+
+/// The session's font when it was given none: the one fontconfig picks, or
+/// else the first well-known one. Looked up once, when it is first asked
+/// for.
+fn system_font() -> Option<PathBuf> {
+    static FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            FONTCONFIG_PATTERNS
+                .iter()
+                .find_map(|pattern| {
+                    let mut command = FONTCONFIG.to_vec();
+                    command.push(pattern);
+                    usable_font(&answer(&command, FONTCONFIG_TIMEOUT)?)
+                })
+                .or_else(|| {
+                    let dirs: Vec<&Path> = FONT_DIRS.iter().map(Path::new).collect();
+                    find_font(&dirs, FONT_NAMES)
+                })
+        })
+        .clone()
+}
+
+/// What `command` prints. `None` when the program is missing, fails, or
+/// does not end within `timeout` (it is killed then).
+pub(crate) fn answer(command: &[&str], timeout: Duration) -> Option<String> {
+    let (program, arguments) = command.split_first()?;
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::spawn::prepare(&mut command, &[]);
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    // Read on another thread, so that the pipe never fills while this one
+    // waits for the program to end.
+    let reader = std::thread::Builder::new()
+        .name("fontconfig".into())
+        .spawn(move || {
+            let mut text = String::new();
+            let _ = stdout.read_to_string(&mut text);
+            text
+        })
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                tracing::warn!("{program} did not answer within {timeout:?}");
+                return None;
+            }
+        }
+    };
+    let text = reader.join().ok()?;
+    status.success().then_some(text)
+}
+
+/// The file fontconfig answered with (`file<TAB>index`), when fontdue reads
+/// it: a file of one TrueType or OpenType face, there. The index holds the
+/// face in its low 16 bits and a named instance of a variable font above
+/// them; fontdue draws the default instance.
+pub(crate) fn usable_font(answer: &str) -> Option<PathBuf> {
+    let (file, index) = answer.lines().next()?.split_once('\t')?;
+    let path = Path::new(file);
+    let one_face = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| FONT_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)));
+    let first_face = index.trim().parse::<u32>().is_ok_and(|i| i & 0xffff == 0);
+    (one_face && first_face && path.is_file()).then(|| path.to_path_buf())
 }
 
 fn read_font(path: &Path) -> Result<fontdue::Font, String> {
@@ -171,13 +267,7 @@ pub(super) fn register(
                     }
                     None => {
                         let configured = state.borrow().font.clone();
-                        let file = match configured {
-                            Some(file) => Some(file),
-                            None => {
-                                let dirs: Vec<&Path> = FONT_DIRS.iter().map(Path::new).collect();
-                                find_font(&dirs, FONT_NAMES)
-                            }
-                        };
+                        let file = configured.or_else(system_font);
                         let Some(file) = file else {
                             return Ok(None);
                         };
@@ -368,5 +458,44 @@ mod tests {
         assert_eq!(find_font(&[&dir], &["Third.ttf"]), None);
         assert_eq!(find_font(&[&dir.join("none")], &["First.ttf"]), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_font_fontconfig_answers_with_is_used_when_fontdue_reads_it() {
+        let dir = std::env::temp_dir().join(format!("hz-fontconfig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["Sans.OTF", "bitmap.pcf.gz", "collection.ttc"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        let answer = |name: &str, index: u32| format!("{}\t{index}\n", dir.join(name).display());
+        assert_eq!(
+            usable_font(&answer("Sans.OTF", 0)),
+            Some(dir.join("Sans.OTF"))
+        );
+        // A named instance of a variable font: the default one is drawn.
+        assert_eq!(
+            usable_font(&answer("Sans.OTF", 3 << 16)),
+            Some(dir.join("Sans.OTF"))
+        );
+        // Not a file of one face that fontdue reads, not its first face,
+        // not there.
+        assert_eq!(usable_font(&answer("bitmap.pcf.gz", 0)), None);
+        assert_eq!(usable_font(&answer("collection.ttc", 0)), None);
+        assert_eq!(usable_font(&answer("Sans.OTF", 1)), None);
+        assert_eq!(usable_font(&answer("gone.ttf", 0)), None);
+        assert_eq!(usable_font(""), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn fontconfig_is_asked_with_a_time_limit() {
+        let timeout = Duration::from_secs(10);
+        assert_eq!(answer(&["echo", "a"], timeout).as_deref(), Some("a\n"));
+        assert_eq!(answer(&["false"], timeout), None);
+        assert_eq!(answer(&["hizukuri-no-such-program"], timeout), None);
+        let began = Instant::now();
+        assert_eq!(answer(&["sleep", "30"], Duration::from_millis(200)), None);
+        assert!(began.elapsed() < Duration::from_secs(10));
     }
 }

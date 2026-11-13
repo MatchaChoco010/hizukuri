@@ -52,10 +52,11 @@ VM に送るバイナリは、[Nix の devShell](nix-environment.md) の中で�
 | --- | --- |
 | Mesa | lavapipe。Vulkan の loader は、lavapipe だけを見る（`VK_DRIVER_FILES`） |
 | アプリ | `foot`、weston（`weston-terminal`）、`alacritty`、`vulkan-tools`（`vkcube`、`vulkaninfo`）、`wl-clipboard` |
-| 入力メソッド | fcitx5 と、日本語の変換エンジンの Anthy（`fcitx5-anthy`）だけ。Qt と GTK の IM module、設定の道具は入れない。session bus のための `dbus`（`dbus-run-session`）。日本語のフォント（IPAex） |
+| 入力メソッド | fcitx5 と、日本語の変換エンジンの Anthy（`fcitx5-anthy`）だけ。Qt と GTK の IM module、設定の道具は入れない。session bus のための `dbus`（`dbus-run-session`） |
 | X11 のアプリ | `xwayland-satellite`（Xwayland を連れてくる）、`xterm`、`xclip`、`xdotool`、`xprop`、`xwininfo` |
 | 機器と入力を調べる道具 | `drm_info`、`libinput`、`evtest`、`wayland-utils`、`wev` |
-| そのほか | `gdb`、`strace`、`rsync`、`vim`、validation layer、Python（libevdev と python-xlib つき）、等幅のフォント、カーソルのテーマ |
+| フォント | DejaVu（fontconfig の `sans-serif` と `monospace`。compositor が `hz.load_font()` に渡すのは、fontconfig が `sans-serif` に選ぶ DejaVu Sans）、IPAex（日本語） |
+| そのほか | `gdb`、`strace`、`rsync`、`vim`、validation layer、Python（libevdev と python-xlib つき）、カーソルのテーマ |
 | session | logind と polkit。seatd も入っている（自動では起動しない。`tty-run --seatd` が起動する） |
 | 補助のスクリプト | `tools/vm/guest/` のもの（`tty-run`、`hzk`、`vkms-load`、`freeze-main-loop`、`uinput-touchpad.py`、`uinput-touchscreen.py`、`x11-test-client.py`）。ゲストの PATH にある |
 
@@ -459,7 +460,7 @@ GPU は、要らない。数分で終わる。
 
 | 指定 | 内容 |
 | --- | --- |
-| `--only PART,...` | 回す部を選ぶ。既定は、`lavapipe,script,vkms,safety,outputs,ime,x11` |
+| `--only PART,...` | 回す部を選ぶ。既定は、`lavapipe,script,animation,projects,vkms,safety,outputs,ime,x11` |
 | `--out DIR` | 結果を置く場所。既定は、`artifacts/vm-check/<日時>/` |
 | `--skip-build` | ビルドしない。すでにあるバイナリを送る |
 
@@ -467,6 +468,7 @@ GPU は、要らない。数分で終わる。
 | --- | --- | --- |
 | `lavapipe` | スクリプトの描画を lavapipe で動かし、dumb buffer で scanout する。描くだけのプロジェクトで、配置は fallback。起動、モード、ウィンドウ、ポインター、キー、VT の切り替え、実際のアプリ、終了のしかた（キー、時間、制御口、SIGHUP）、`hzk`、プロトコル、相対的な動きと pointer lock と data control、uinput の仮想のタッチスクリーンとタッチパッドからのタッチとジェスチャー、色のプロトコル（wayland-info、vkcube、検証用のクライアント）、スクリプトの層、自己診断（`kms-selftest`） | 既定 |
 | `animation` | アニメーションの例（`prototype/compositor/projects/animation`）で、検証用のクライアントの窓を 2 つ開き、logo+shift+L で入れ替える。入れ替わり、止まり、スクリプトが失敗しないこと。動きは、画面の取り込みが途中を捉えられるように、3 秒に延ばす（`main.luau` の `move_duration` を書き換えた写しで動かす）。前、途中、後の画面と、スクリプトが描いた位置（`animation_state`）を残す。途中の位置は、実時間なので、確かめない（`tests/animation.rs` が、止まった時計で確かめる） | 既定 |
+| `projects` | 2 つの例のプロジェクト（`fancy`、`room`）を、`hzk project` と同じく、フォントを指定せずに（`--font` も `HIZUKURI_FONT` も無しに）起動する。ランチャーが session のフォントを持つこと（`fancy_launcher`、`room_state` の `font`）、logo+D でランチャーが開くこと、スクリプトが失敗しないこと。開いたランチャーの画面を残す。文字の形は、比べない | 既定 |
 | `script` | スクリプトの層（組み込みのプロジェクトのウィンドウ管理を含む）を、実際のアプリで。タイル、キーとタッチパッドの 3 本指の swipe の割り当て、スクリプトの故障と読み直し、VT の切り替え、watchdog、1920x1080 で 4 つのアプリを動かしたときのフレームの時間（`apps-1080p`。描くだけのプロジェクトで配置は fallback のものと、組み込みのプロジェクトでタイルに並べたものの 2 つ）、`hzk script` | 既定 |
 | `vkms` | vkms の上で、VT なしで起動する（描くだけのプロジェクト）。自己診断 | 既定 |
 | `safety` | watchdog（メインループが固まると終わること、プロセスの全体が止められただけでは終わらないこと） | 既定 |
@@ -477,7 +479,8 @@ GPU は、要らない。数分で終わる。
 
 - compositor は、lavapipe の上で、スクリプトで描く。スクリプトのウィンドウ管理を確かめる項目は、組み込みのプロジェクトで動かす。そのほかは、
   描くだけのプロジェクトで動かし、ウィンドウを、項目が置いた場所に保つ。`vm-check.py` は、バイナリと一緒に、
-  描くだけのプロジェクトを、ゲストの `/home/hizukuri/hzk-draw-only` へ、アニメーションの例を `/home/hizukuri/hzk-animation` へ送る。
+  描くだけのプロジェクトを、ゲストの `/home/hizukuri/hzk-draw-only` へ、アニメーションの例を `/home/hizukuri/hzk-animation` へ、
+  2 つの例のプロジェクトを `/home/hizukuri/hzk-fancy` と `/home/hizukuri/hzk-room` へ送る。
 - 自己診断の項目（`selftest`、`selftest-1080p`、`vkms/selftest-1080p`）は、`kms-selftest` を動かす。パターンは、`proto-gfx-core` で描く。
 
 既定の実行に入らない `real-hardware` の部は、VM の起動のしかたが違う。VM を止めてから、実行する。

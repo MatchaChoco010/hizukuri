@@ -699,15 +699,19 @@ project の外を指すパス（絶対パス、`..`、外への symlink）は、
 | `hz.missing_glyphs(font, text)` | `text` の文字のうち、フォントに glyph が無いものの数（空白と制御文字は数えない）。0 でなければ、別の文字列か、別のフォントで描く |
 
 - session のフォントは、起動の引数 `--font FILE`、無ければ環境変数 `HIZUKURI_FONT` のファイルである。どちらも無ければ、
+  fontconfig の `fc-match` に、`sans-serif` を尋ねる。答えのフォントが、1 つの書体だけの TrueType か OpenType のファイル
+  （`.ttf`、`.otf`）でないとき（多くの CJK のフォントのような、複数の書体を収めたファイル `.ttc` など）は、`sans-serif:lang=en`
+  （英語の文字のための `sans-serif`）を尋ね直す。variable font は、既定の instance で描く。
+  `fc-match` が無い、5 秒のうちに答えない、どちらにも使えるものを答えないときは、
   `/usr/share/fonts` と `/usr/local/share/fonts` の下から、決まった名前（`DejaVuSans.ttf`、`NotoSans-Regular.ttf`、`LiberationSans-Regular.ttf`、
-  `Roboto-Regular.ttf`、`FreeSans.ttf`）のファイルを、この順に探す。fontconfig は、使わない。見つからない、または読めないときは、
-  `hz.load_font()` が `nil` を返すので、project は、文字なしで描く。
+  `Roboto-Regular.ttf`、`FreeSans.ttf`）のファイルを、この順に探す。探すのは、最初に `hz.load_font()` が呼ばれたときの 1 回だけで、
+  その後は、同じファイルを使う。見つからない、または読めないときは、`hz.load_font()` が `nil` を返すので、project は、文字なしで描く。
 - `options`: `size`（画素。既定は 16）、`max_width`（折り返す幅）、`format`（`"rgba8unorm"`（既定。白に、被覆率を alpha として掛けたもの。
   色を掛けて、premultiplied として描く）か、`"r8unorm"`（被覆率だけ））。改行（`\n`）で、行を分ける。
 - テクスチャは、スクリプトのものである。文字列が変わらないかぎり、作り直さずに使い回す。
 - 1 つのフォントだけで描く。フォントに無い文字は、そのフォントの `.notdef` の glyph（フォントによって、空か、四角）になる。
   複数のフォントの組み合わせ（日本語の fallback）、文字の向き、合字の整形（shaping）は、未実装である。
-  session のフォントを探す名前の表に、日本語の文字を持つフォントは無い。日本語の locale の名前（desktop entry の `name` など）は、
+  session のフォントに、日本語の文字があるとは限らない。日本語の locale の名前（desktop entry の `name` など）は、
   `hz.missing_glyphs` で確かめて、描ける文字列（`default_name`）に替える。
 
 ## ランチャーの論理
