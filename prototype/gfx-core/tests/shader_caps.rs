@@ -3,6 +3,7 @@
 //! with here), and the ones it refuses. Needs `slangc`.
 
 use proto_gfx_core::*;
+use vulkan::{Entry, vk};
 
 mod slang;
 use slang::*;
@@ -169,22 +170,97 @@ fn what_the_api_cannot_check_is_refused() {
     no_validation_errors();
 }
 
-/// What the device supports is asked, not assumed.
+/// The optimal tiling features of every format in `Format::ALL`, as Vulkan
+/// reports them for the physical device named `device_name`: asked here,
+/// through an instance of the test's own, and not through the API.
+fn optimal_tiling_features(device_name: &str) -> Vec<vk::FormatFeatureFlags> {
+    // SAFETY: the instance is created and destroyed here; the queries only
+    // read.
+    unsafe {
+        let entry = Entry::load().unwrap();
+        let app = vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 4, 0));
+        let instance = entry
+            .create_instance(
+                &vk::InstanceCreateInfo::default().application_info(&app),
+                None,
+            )
+            .unwrap();
+        let physical_device = instance
+            .enumerate_physical_devices()
+            .unwrap()
+            .into_iter()
+            .find(|physical_device| {
+                let properties = instance.get_physical_device_properties(*physical_device);
+                properties
+                    .device_name_as_c_str()
+                    .ok()
+                    .map(|s| s.to_string_lossy())
+                    == Some(device_name.into())
+            })
+            .unwrap_or_else(|| panic!("Vulkan does not list the device {device_name}"));
+        let features = Format::ALL
+            .iter()
+            .map(|format| {
+                instance
+                    .get_physical_device_format_properties(physical_device, format.vk())
+                    .optimal_tiling_features
+            })
+            .collect();
+        instance.destroy_instance(None);
+        features
+    }
+}
+
+/// What the device supports is asked, not assumed: the answers are the
+/// device's own, whatever they are.
 #[test]
 fn formats_are_queried() {
     let gpu = gpu();
-    for format in Format::ALL {
+    let features = optimal_tiling_features(gpu.device_name());
+    use vk::FormatFeatureFlags as F;
+    let usages = [
+        (ImageUsage::SAMPLED, F::SAMPLED_IMAGE),
+        (ImageUsage::COLOR_TARGET, F::COLOR_ATTACHMENT),
+        (ImageUsage::DEPTH_TARGET, F::DEPTH_STENCIL_ATTACHMENT),
+        (ImageUsage::STORAGE, F::STORAGE_IMAGE),
+        (ImageUsage::COPY_SRC, F::TRANSFER_SRC),
+        (ImageUsage::COPY_DST, F::TRANSFER_DST),
+    ];
+    for (format, features) in Format::ALL.iter().zip(&features) {
+        for (usage, feature) in usages {
+            assert_eq!(
+                gpu.format_supports_usage(*format, usage),
+                features.contains(feature),
+                "{} {usage:?}",
+                format.name()
+            );
+        }
+        // Several usages at once: all of them, or it is refused.
+        for (first, first_feature) in usages {
+            for (second, second_feature) in usages {
+                assert_eq!(
+                    gpu.format_supports_usage(*format, first | second),
+                    features.contains(first_feature) && features.contains(second_feature),
+                    "{} {first:?} {second:?}",
+                    format.name()
+                );
+            }
+        }
         let caps = gpu.format_caps(*format);
         assert_eq!(
-            gpu.format_supports_usage(*format, ImageUsage::COLOR_TARGET),
-            caps.color_attachment,
-            "{}",
-            format.name()
+            caps.filter_linear,
+            features.contains(F::SAMPLED_IMAGE_FILTER_LINEAR)
         );
+        assert_eq!(caps.blend, features.contains(F::COLOR_ATTACHMENT_BLEND));
+        assert_eq!(caps.blit_src, features.contains(F::BLIT_SRC));
+        assert_eq!(caps.blit_dst, features.contains(F::BLIT_DST));
         assert!(!(caps.depth_attachment && caps.color_attachment));
         assert_eq!(Format::from_name(format.name()), Some(*format));
     }
-    // Every device has these.
+    // What the Vulkan specification requires of every device (its table of
+    // mandatory format support). It requires a depth attachment of
+    // D32_SFLOAT or of X8_D24_UNORM_PACK32, not of D32_SFLOAT itself, and
+    // storage of neither.
     for format in [
         Format::Rgba8Unorm,
         Format::Rgba16Float,
@@ -199,6 +275,4 @@ fn formats_are_queried() {
         Format::Rgba16Float,
         ImageUsage::SAMPLED | ImageUsage::COLOR_TARGET | ImageUsage::COPY_SRC
     ));
-    assert!(gpu.format_caps(Format::D32Float).depth_attachment);
-    assert!(!gpu.format_supports_usage(Format::D32Float, ImageUsage::STORAGE));
 }

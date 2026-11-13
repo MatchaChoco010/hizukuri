@@ -4,6 +4,8 @@
 //! accepted and draws, with the validation layer watching. The process
 //! never goes down. The shader is Slang; needs `slangc`.
 
+use std::collections::VecDeque;
+
 use proto_gfx_core::*;
 use proto_slangc::{Compiler, Input, Stage};
 
@@ -65,6 +67,28 @@ fn bytes(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
+/// The mutants handed to `draw` last. When the test fails on the way (the
+/// device is lost, the driver gives an error), they are printed: a frame is
+/// waited for only frames later, so the mutant that did it is one of these.
+struct LastDrawn {
+    entry: String,
+    /// The word, its value in the valid module and in the mutant.
+    mutants: VecDeque<(usize, u32, u32)>,
+}
+
+impl Drop for LastDrawn {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            for (at, was, value) in &self.mutants {
+                eprintln!(
+                    "{}: drawn shortly before the failure: word {at} {was:#010x} replaced by {value:#010x}",
+                    self.entry
+                );
+            }
+        }
+    }
+}
+
 /// Replaces each word of a valid module, one at a time, by each value of
 /// `every_bit`. Each mutant is refused, or is accepted and handed to `draw`,
 /// which builds a pipeline with it and draws (and says whether the draw was
@@ -81,6 +105,10 @@ fn mutate(
         .unwrap();
     assert!(draw(gpu, original), "the unchanged module draws");
     let (mut refused, mut accepted, mut drawn) = (0, 0, 0);
+    let mut last = LastDrawn {
+        entry: entry.to_owned(),
+        mutants: VecDeque::new(),
+    };
     // The header (5 words) is left alone: it only says which version and
     // generator wrote the module.
     for at in 5..words.len() {
@@ -95,6 +123,10 @@ fn mutate(
                 continue;
             };
             accepted += 1;
+            if last.mutants.len() == 3 {
+                last.mutants.pop_front();
+            }
+            last.mutants.push_back((at, words[at], value));
             if draw(gpu, shader) {
                 drawn += 1;
             }

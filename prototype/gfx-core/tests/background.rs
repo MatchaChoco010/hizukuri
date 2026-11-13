@@ -87,6 +87,12 @@ fn frame(kit: &mut Kit, pipeline: Option<Handle>) -> [u8; 4] {
     gpu.read_image(kit.target).unwrap()[..4].try_into().unwrap()
 }
 
+/// The pixel of a frame drawn with the pipeline: the push constant's color,
+/// whose 0.5 may come out as 127 or 128.
+fn assert_orange(pixel: [u8; 4]) {
+    assert_close8(pixel, [255, 128, 0, 255], UNORM8_CONVERSION, "drawn");
+}
+
 /// Polls until the pending pipeline is there.
 fn wait(gpu: &mut Gpu, pending: &PendingPipeline) -> Result<Handle> {
     let start = Instant::now();
@@ -139,7 +145,7 @@ fn a_pipeline_is_built_while_frames_go_on() {
     worker.join().unwrap();
     eprintln!("{frames} frame(s) were drawn while the pipeline was built");
     assert_eq!(kit.gpu.pending_pipelines(), 0);
-    assert_eq!(frame(&mut kit, Some(pipeline)), [255, 128, 0, 255]);
+    assert_orange(frame(&mut kit, Some(pipeline)));
     // The pending pipeline is used up.
     expect!(kit.gpu.finish_render_pipeline(&pending), InvalidHandle);
     kit.gpu.destroy(pipeline).unwrap();
@@ -155,7 +161,7 @@ fn a_thread_is_started_for_the_job() {
         .create_render_pipeline_in_background(&description, &PipelineExtra::default())
         .unwrap();
     let pipeline = wait(&mut kit.gpu, &pending).unwrap();
-    assert_eq!(frame(&mut kit, Some(pipeline)), [255, 128, 0, 255]);
+    assert_orange(frame(&mut kit, Some(pipeline)));
     // Several at once, finished in another order than they were started.
     let pending: Vec<_> = (0..6)
         .map(|_| {
@@ -166,7 +172,7 @@ fn a_thread_is_started_for_the_job() {
         .collect();
     for pending in pending.iter().rev() {
         let pipeline = wait(&mut kit.gpu, pending).unwrap();
-        assert_eq!(frame(&mut kit, Some(pipeline)), [255, 128, 0, 255]);
+        assert_orange(frame(&mut kit, Some(pipeline)));
     }
     no_validation_errors();
 }
@@ -231,7 +237,7 @@ fn what_can_go_wrong_with_a_pending_pipeline() {
     kit.gpu.cancel_render_pipeline(second);
     assert_eq!(kit.gpu.pending_pipelines(), 0);
     let pipeline = kit.gpu.create_render_pipeline(&description).unwrap();
-    assert_eq!(frame(&mut kit, Some(pipeline)), [255, 128, 0, 255]);
+    assert_orange(frame(&mut kit, Some(pipeline)));
 
     // A pending pipeline of another device is not this one's.
     let mut other = kit_with(GpuConfig::for_tests());
