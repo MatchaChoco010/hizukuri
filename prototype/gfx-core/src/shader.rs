@@ -44,6 +44,16 @@ pub enum BindingKind {
     SampledTexture {
         class: NumClass,
     },
+    /// A 3D texture that is sampled or loaded (lookup tables). Only a slot
+    /// that shows a 3D image can be bound to it.
+    SampledTexture3D {
+        class: NumClass,
+    },
+    /// A cube texture that is sampled. Only a slot that shows all six layers
+    /// of a cube image can be bound to it.
+    SampledTextureCube {
+        class: NumClass,
+    },
     /// A fixed-size array of 2D textures, indexed in the shader. Backed by
     /// `count` consecutive heap slots. The index is clamped to the array
     /// before the device sees the shader.
@@ -70,6 +80,8 @@ impl BindingKind {
     pub fn describe(&self) -> String {
         match self {
             Self::SampledTexture { class } => format!("sampled texture ({class:?})"),
+            Self::SampledTexture3D { class } => format!("sampled 3D texture ({class:?})"),
+            Self::SampledTextureCube { class } => format!("sampled cube texture ({class:?})"),
             Self::TextureArray { class, count } => {
                 format!("array of {count} sampled textures ({class:?})")
             }
@@ -113,6 +125,9 @@ pub struct Reflection {
     pub outputs: Vec<IoVar>,
     /// `(texture binding, sampler binding)` pairs that are used together.
     pub sampling_pairs: Vec<(u32, u32)>,
+    /// Those of the pairs that are used for depth comparisons. A pair is
+    /// used for comparisons or for plain reads, never both.
+    pub comparison_pairs: Vec<(u32, u32)>,
     pub workgroup_size: [u32; 3],
 }
 
@@ -123,8 +138,10 @@ pub(crate) struct CompiledShader {
     pub reflection: Reflection,
 }
 
-/// Bindings are numbered `0..MAX_BINDINGS`.
-pub const MAX_BINDINGS: u32 = 16;
+/// Bindings are numbered `0..MAX_BINDINGS`. Each binding a pipeline declares
+/// takes 4 bytes of push data (its heap index), next to the shader's own
+/// push block, so the device's push data size bounds the two together.
+pub const MAX_BINDINGS: u32 = 32;
 
 /// Largest texture array a shader may declare. Every element is validated
 /// when the bindings of a draw change, so this bounds that work.

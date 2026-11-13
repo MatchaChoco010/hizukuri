@@ -123,9 +123,19 @@ impl Primaries {
         white: Chromaticity::new(0.314, 0.351),
     };
 
+    /// ACES AP1, the primaries of ACEScg (SMPTE ST 2065-1 defines the white;
+    /// the primaries are those of Academy S-2014-004).
+    pub const ACES_AP1: Primaries = Primaries {
+        red: Chromaticity::new(0.713, 0.293),
+        green: Chromaticity::new(0.165, 0.830),
+        blue: Chromaticity::new(0.128, 0.044),
+        white: Chromaticity::new(0.32168, 0.33767),
+    };
+
     /// Named primaries known to this crate, with the names used on the
     /// command line and in state dumps.
-    pub const NAMED: [(&'static str, Primaries); 10] = [
+    pub const NAMED: [(&'static str, Primaries); 11] = [
+        ("acescg", Primaries::ACES_AP1),
         ("srgb", Primaries::SRGB),
         ("display-p3", Primaries::DISPLAY_P3),
         ("bt2020", Primaries::BT2020),

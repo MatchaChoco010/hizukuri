@@ -24,7 +24,9 @@ use proto_gfx_core::{ErrorCode, GfxError};
 use super::{Mode, ScriptRuntime, Shared};
 use crate::fallback;
 use crate::scene::Hit;
-use crate::wm::{ConstraintView, GestureStart, GestureStep, Modifiers, WindowManager, WmRequest};
+use crate::wm::{
+    ButtonUse, ConstraintView, GestureStart, GestureStep, Modifiers, WindowManager, WmRequest,
+};
 
 /// Something that happened, waiting to be told to the script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,8 @@ enum Event {
     /// The client of a window asked for something the window manager
     /// decides (fullscreen, activation...).
     Request(WindowId, proto_wl::WindowRequest),
+    /// Another key is the logo key now.
+    LogoKey(proto_backend::LogoKey),
 }
 
 /// What the script side keeps besides the table.
@@ -129,7 +133,15 @@ pub(crate) fn register(
     }
 
     // Sets the logical position of a window (global logical coordinates).
+    //
+    // A window that is gone, but whose `window_closed` the script has not
+    // been given yet, is still in the script's own lists (several windows
+    // that close together are reported one after the other). Requests
+    // about it are dropped, not refused.
     def!("place", |table, (id, x, y): (u64, i32, i32)| {
+        if table.departed(WindowId(id)) {
+            return Ok(());
+        }
         if !table.contains(WindowId(id)) {
             return Err(unknown(id));
         }
@@ -152,6 +164,9 @@ pub(crate) fn register(
             (None, None) => None,
             _ => return Err(wm_error(format!("invalid size {width:?} x {height:?}"))),
         };
+        if table.departed(WindowId(id)) {
+            return Ok(());
+        }
         if !table.configure(WindowId(id), size) {
             return Err(unknown(id));
         }
@@ -163,6 +178,9 @@ pub(crate) fn register(
         if let Some(id) = id
             && !table.contains(WindowId(id))
         {
+            if table.departed(WindowId(id)) {
+                return Ok(());
+            }
             return Err(unknown(id));
         }
         table.set_focus(id.map(WindowId));
@@ -171,6 +189,9 @@ pub(crate) fn register(
 
     // Moves a window to the top of the stacking order.
     def!("raise", |table, id: u64| {
+        if table.departed(WindowId(id)) {
+            return Ok(());
+        }
         if !table.contains(WindowId(id)) {
             return Err(unknown(id));
         }
@@ -181,6 +202,10 @@ pub(crate) fn register(
     // Sets the stacking order, bottom to top. Windows that are not listed
     // stay below the listed ones, in their current order.
     def!("restack", |table, order: Vec<u64>| {
+        let order: Vec<u64> = order
+            .into_iter()
+            .filter(|id| !table.departed(WindowId(*id)))
+            .collect();
         if let Some(id) = order.iter().find(|id| !table.contains(WindowId(**id))) {
             return Err(unknown(*id));
         }
@@ -191,6 +216,9 @@ pub(crate) fn register(
 
     // Asks a window to close. The client decides whether it does.
     def!("close", |table, id: u64| {
+        if table.departed(WindowId(id)) {
+            return Ok(());
+        }
         if !table.contains(WindowId(id)) {
             return Err(unknown(id));
         }
@@ -231,11 +259,31 @@ pub(crate) fn register(
         )?;
     }
 
+    // Says whether a window is seen. While it is not, the core holds its
+    // frame callbacks (and those of its subsurfaces and popups; once a
+    // second they are let through), does not report its presentation
+    // feedback, does not draw a frame for what it commits, and tells a
+    // client that knows the `suspended` state of xdg-shell that it is
+    // suspended. The script may still draw it; what it shows is then what
+    // the client last drew.
+    def!("set_visible", |table, (id, visible): (u64, bool)| {
+        if table.departed(WindowId(id)) {
+            return Ok(());
+        }
+        if !table.set_visible(WindowId(id), visible) {
+            return Err(unknown(id));
+        }
+        Ok(())
+    });
+
     // Tells a window whether it is maximized and whether it is fullscreen
     // (`{ maximized = bool, fullscreen = bool }`; a missing field is false).
     // Where it goes and how large it is asked to be stay `hz.place` and
     // `hz.configure`.
     def!("set_states", |table, (id, states): (u64, Table)| {
+        if table.departed(WindowId(id)) {
+            return Ok(());
+        }
         if !table.contains(WindowId(id)) {
             return Err(unknown(id));
         }
@@ -249,7 +297,53 @@ pub(crate) fn register(
         });
         Ok(())
     });
+
+    // Says where the popups of a window should be kept: `{ x, y, width,
+    // height }` relative to its window geometry (rounded to whole logical
+    // pixels), or nil for the output the window is on. For a script that
+    // draws the window somewhere else than its place on the output: the
+    // part of the window's coordinates that is on screen.
+    def!(
+        "set_popup_bounds",
+        |table, (id, rect): (u64, Option<Table>)| {
+            let bounds = match rect {
+                None => None,
+                Some(rect) => Some(popup_rect(&rect)?),
+            };
+            if table.departed(WindowId(id)) {
+                return Ok(());
+            }
+            if !table.set_popup_bounds(WindowId(id), bounds) {
+                return Err(unknown(id));
+            }
+            Ok(())
+        }
+    );
     Ok(())
+}
+
+/// The rectangle of `hz.set_popup_bounds`.
+fn popup_rect(rect: &Table) -> mlua::Result<Rect> {
+    // Far beyond any screen, and small enough that sums of these stay in
+    // an i32.
+    const LIMIT: f64 = (1 << 24) as f64;
+    let field = |name: &str| -> mlua::Result<i32> {
+        let value: f64 = rect
+            .get::<Option<f64>>(name)?
+            .ok_or_else(|| wm_error(format!("popup bounds without {name}")))?;
+        let value = value.round();
+        if !value.is_finite() || value.abs() > LIMIT {
+            return Err(wm_error(format!("popup bounds: {name} is out of range")));
+        }
+        Ok(value as i32)
+    };
+    let (x, y, width, height) = (field("x")?, field("y")?, field("width")?, field("height")?);
+    if width <= 0 || height <= 0 {
+        return Err(wm_error(format!(
+            "popup bounds of an empty size {width} x {height}"
+        )));
+    }
+    Ok(Rect::new(x, y, width, height))
 }
 
 /// The table `window_request` receives: `kind`, and what comes with it.
@@ -302,6 +396,26 @@ impl ScriptWm {
         Ok(Self { runtime })
     }
 
+    /// The modifier keys as a script sees them: `{ ctrl, alt, shift, logo }`.
+    fn modifier_table(&self, modifiers: Modifiers) -> Option<Table> {
+        let mods = self.runtime.host.lua().create_table().ok()?;
+        mods.set("ctrl", modifiers.ctrl).ok()?;
+        mods.set("alt", modifiers.alt).ok()?;
+        mods.set("shift", modifiers.shift).ok()?;
+        mods.set("logo", modifiers.logo).ok()?;
+        mods.set("inhibited", modifiers.inhibited).ok()?;
+        Some(mods)
+    }
+
+    fn symbol_table(&self, symbol: &proto_wl::KeySymbol) -> Option<Table> {
+        let k = self.runtime.host.lua().create_table().ok()?;
+        if !symbol.sym.is_empty() {
+            k.set("sym", symbol.sym.as_str()).ok()?;
+        }
+        k.set("text", symbol.text.as_deref()).ok()?;
+        Some(k)
+    }
+
     fn table<R>(&self, f: impl FnOnce(&mut fallback::Windows) -> R) -> R {
         f(&mut self.runtime.windows.borrow_mut())
     }
@@ -352,30 +466,61 @@ impl WindowManager for ScriptWm {
         self.table(|table| table.set_size(id, size))
     }
 
-    fn key(&mut self, keycode: u32, pressed: bool, modifiers: Modifiers) -> bool {
-        let mods = match self.runtime.host.lua().create_table() {
-            Ok(table) => table,
-            Err(_) => return false,
+    fn logo_key_changed(&mut self, key: proto_backend::LogoKey) {
+        self.event(Event::LogoKey(key));
+    }
+
+    fn key(
+        &mut self,
+        keycode: u32,
+        pressed: bool,
+        modifiers: Modifiers,
+        symbol: &proto_wl::KeySymbol,
+    ) -> bool {
+        let Some(mods) = self.modifier_table(modifiers) else {
+            return false;
         };
-        let _ = mods.set("ctrl", modifiers.ctrl);
-        let _ = mods.set("alt", modifiers.alt);
-        let _ = mods.set("shift", modifiers.shift);
-        let _ = mods.set("logo", modifiers.logo);
+        // What the key is: { sym, text }. A script that only binds keys by
+        // their code ignores it.
+        let Some(k) = self.symbol_table(symbol) else {
+            return false;
+        };
         matches!(
             self.runtime
-                .call::<_, Option<bool>>("key", (keycode, pressed, mods)),
+                .call::<_, Option<bool>>("key", (keycode, pressed, mods, k)),
             Some(Ok(Some(true)))
         )
     }
 
-    fn pointer_button(&mut self, button: u32, pressed: bool, hit: Option<&Hit>) -> bool {
+    fn pointer_button(
+        &mut self,
+        button: u32,
+        pressed: bool,
+        hit: Option<&Hit>,
+        modifiers: Modifiers,
+    ) -> ButtonUse {
         let window = hit.map(|h| h.window.0);
         let surface = hit.map(|h| h.surface.0);
-        matches!(
-            self.runtime
-                .call::<_, Option<bool>>("pointer_button", (button, pressed, window, surface)),
-            Some(Ok(Some(true)))
-        )
+        let Some(mods) = self.modifier_table(modifiers) else {
+            return ButtonUse::Unused;
+        };
+        // `true`: the script decided the focus. `"take"`: it takes the
+        // pointer. Anything else, or a failure: nothing.
+        match self
+            .runtime
+            .call::<_, mlua::Value>("pointer_button", (button, pressed, window, surface, mods))
+        {
+            Some(Ok(mlua::Value::Boolean(true))) => ButtonUse::FocusDecided,
+            Some(Ok(mlua::Value::String(answer))) if answer.as_bytes() == b"take" => {
+                ButtonUse::Taken
+            }
+            _ => ButtonUse::Unused,
+        }
+    }
+
+    fn pointer_motion(&mut self, position: (f64, f64)) {
+        self.runtime
+            .call::<_, ()>("pointer_motion", (position.0, position.1));
     }
 
     fn touch_down(&mut self, slot: u32, position: (f64, f64), hit: Option<&Hit>) -> bool {
@@ -494,6 +639,8 @@ impl WindowManager for ScriptWm {
                 }
                 Event::Closed(id) => {
                     self.runtime.call::<_, ()>("window_closed", id.0);
+                    // From here on the script knows.
+                    self.table(|table| table.forget_departed(id));
                 }
                 Event::Focus(id) => {
                     self.runtime
@@ -506,6 +653,9 @@ impl WindowManager for ScriptWm {
                     if let Ok(table) = request_table(self.runtime.host.lua(), request) {
                         self.runtime.call::<_, ()>("window_request", (id.0, table));
                     }
+                }
+                Event::LogoKey(key) => {
+                    self.runtime.call::<_, ()>("logo_key_changed", key.name());
                 }
             }
         }
@@ -558,7 +708,22 @@ impl WindowManager for ScriptWm {
         self.runtime.windows.borrow().configure_hint(id)
     }
 
+    /// What the script said. Without the script the windows are drawn
+    /// where they are placed: the output again.
+    fn popup_bounds(&self, id: WindowId) -> Option<Rect> {
+        if self.runtime.mode() == Mode::Fallback {
+            return None;
+        }
+        self.runtime.windows.borrow().popup_bounds(id)
+    }
+
     fn take_requests(&mut self) -> Vec<WmRequest> {
         self.table(|table| table.take_requests())
+    }
+
+    /// What the script said (`hz.set_visible`). Without the script (the
+    /// fallback draws every window), every window is seen.
+    fn is_visible(&self, id: WindowId) -> bool {
+        self.runtime.mode() == Mode::Fallback || self.runtime.windows.borrow().is_visible(id)
     }
 }

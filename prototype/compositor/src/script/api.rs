@@ -23,12 +23,12 @@ use proto_wl::SurfaceRole;
 use super::Shared;
 use crate::scene::{CursorImage, SceneRequest};
 
-type SharedRef = Rc<RefCell<Shared>>;
+pub(super) type SharedRef = Rc<RefCell<Shared>>;
 
 /// Registry key of the table that caches loaded modules.
 const MODULES: &str = "hz.modules";
 
-fn arg_error(message: impl Into<String>) -> mlua::Error {
+pub(super) fn arg_error(message: impl Into<String>) -> mlua::Error {
     mlua::Error::external(GfxError {
         code: ErrorCode::InvalidArgument,
         message: message.into(),
@@ -37,7 +37,7 @@ fn arg_error(message: impl Into<String>) -> mlua::Error {
 
 /// The primaries a script names: one of the named sets, or a table of eight
 /// chromaticity coordinates (red x, y, green x, y, blue x, y, white x, y).
-fn primaries(value: &Value) -> mlua::Result<Primaries> {
+pub(super) fn primaries(value: &Value) -> mlua::Result<Primaries> {
     match value {
         Value::String(name) => {
             let name = name.to_str()?;
@@ -76,6 +76,14 @@ fn primaries(value: &Value) -> mlua::Result<Primaries> {
         _ => Err(arg_error(
             "primaries are a name or eight chromaticity coordinates",
         )),
+    }
+}
+
+/// The working primaries a call names, or the session's when it names none.
+pub(super) fn working(shared: &SharedRef, value: &Value) -> mlua::Result<Primaries> {
+    match value {
+        Value::Nil => Ok(shared.borrow().working),
+        value => primaries(value),
     }
 }
 
@@ -152,7 +160,17 @@ fn role_name(role: SurfaceRole) -> &'static str {
 
 /// The fields of a surface that come from its texture.
 fn texture_fields(shared: &Shared, t: &Table, surface: proto_wl::SurfaceId) -> mlua::Result<()> {
+    params_field(shared, t, surface)?;
     set_texture_fields(t, shared.textures.get(&surface))
+}
+
+/// The index of a surface in the table `hz.window_table` made for this
+/// frame, when it made one.
+fn params_field(shared: &Shared, t: &Table, surface: proto_wl::SurfaceId) -> mlua::Result<()> {
+    if let Some(index) = shared.window_table.index_of(surface) {
+        t.set("params", index)?;
+    }
+    Ok(())
 }
 
 fn set_texture_fields(t: &Table, texture: Option<&super::SurfaceTexture>) -> mlua::Result<()> {
@@ -309,6 +327,8 @@ pub fn register(
             t.set("max_width", window.max_size.0)?;
             t.set("max_height", window.max_size.1)?;
             t.set("x11", window.x11)?;
+            t.set("visible", window.visible)?;
+            t.set("suspended", window.suspended)?;
             t.set(
                 "opacity",
                 shared.opacity.get(&window.window).copied().unwrap_or(1.0),
@@ -342,6 +362,7 @@ pub fn register(
             t.set("height", node.size.1)?;
             t.set("scale", node.buffer_scale)?;
             t.set("alpha_mode", node.alpha_mode.name())?;
+            params_field(&shared, &t, node.surface)?;
             set_texture_fields(&t, textures.get(&node.surface))?;
             // Where the surface's rectangle lies in the texture.
             if let (Some(source), Some(texture)) = (node.source, textures.get(&node.surface)) {
@@ -443,6 +464,14 @@ pub fn register(
         Ok((r, g, b))
     });
 
+    // The key the person presses for the logo key: "super", or "alt" or
+    // "ctrl" when the backend hands that on as the logo (a parent
+    // compositor keeps Super combinations to itself). Key events still say
+    // logo; this is for what shows key combinations to the person.
+    def!("logo_key", |lua, shared, (): ()| {
+        Ok(shared.borrow().world.logo_key.name())
+    });
+
     // Seconds since the script runtime started, on the clock frames are
     // timed with (the clock `frame` is given its time on).
     def!("time", |lua, shared, (): ()| {
@@ -526,17 +555,18 @@ pub fn register(
 
     // How to bring a surface's values into linear light in the working
     // primaries: a row-major 3x3 matrix, the transfer function and how alpha
-    // is stored. `color` is the `color` field of a surface.
+    // is stored. `color` is the `color` field of a surface. Without
+    // `working`, the session's working space (`hz.working_space()`).
     def!(
         "decode_transform",
-        |lua, shared, (color, working): (u32, Value)| {
+        |lua, shared, (color, space): (u32, Value)| {
             let (description, alpha) = *shared
                 .borrow()
                 .colors
                 .get(color as usize)
                 .ok_or_else(|| arg_error(format!("unknown color {color}")))?;
             let space = CompositeSpace {
-                primaries: primaries(&working)?,
+                primaries: working(shared, &space)?,
             };
             let transform = DecodeTransform::new(&description, alpha, &space)
                 .ok_or_else(|| arg_error("degenerate primaries or luminances"))?;
@@ -558,7 +588,10 @@ pub fn register(
     // values of an output.
     def!(
         "encode_transform",
-        |lua, shared, (working, output): (Value, u64)| {
+        |lua, shared, (space, output): (Value, u64)| {
+            let space = CompositeSpace {
+                primaries: working(shared, &space)?,
+            };
             let shared = shared.borrow();
             let output = shared
                 .world
@@ -566,9 +599,6 @@ pub fn register(
                 .iter()
                 .find(|o| o.id.0 == output)
                 .ok_or_else(|| arg_error(format!("unknown output {output}")))?;
-            let space = CompositeSpace {
-                primaries: primaries(&working)?,
-            };
             let transform = EncodeTransform::new(&space, &output.image_description)
                 .ok_or_else(|| arg_error("degenerate primaries or luminances"))?;
             let t = lua.create_table()?;
@@ -585,16 +615,15 @@ pub fn register(
     // working primaries. For clear colors.
     def!("decode_color", |lua,
                           shared,
-                          (r, g, b, a, working): (
+                          (r, g, b, a, space): (
         f32,
         f32,
         f32,
         f32,
         Value
     )| {
-        let _ = shared;
         let space = CompositeSpace {
-            primaries: primaries(&working)?,
+            primaries: working(shared, &space)?,
         };
         let transform = DecodeTransform::new(
             &proto_wl::DEFAULT_SURFACE_IMAGE_DESCRIPTION,
@@ -627,12 +656,65 @@ pub fn register(
     // Offers the linear compositing buffer for verification captures.
     def!(
         "debug_composite",
-        |lua, shared, (image, working): (i64, Value)| {
-            shared.borrow_mut().debug_composite =
-                Some((Handle::from_bits(image), primaries(&working)?));
+        |lua, shared, (image, space): (i64, Value)| {
+            let primaries = working(shared, &space)?;
+            shared.borrow_mut().debug_composite = Some((Handle::from_bits(image), primaries));
             Ok(())
         }
     );
+
+    // ----- applications -------------------------------------------------------
+
+    // Starts a program: `hz.spawn({ "foot" })`, with options
+    // `{ env = { NAME = "value" }, cwd = "/path" }`. The program gets the
+    // compositor's environment, with `WAYLAND_DISPLAY` (and `DISPLAY`)
+    // pointing at this compositor. Returns its process id without waiting
+    // for it, or nil and a message when it could not be started.
+    def!(
+        "spawn",
+        |lua, shared, (argv, options): (Vec<String>, Option<Table>)| {
+            if argv.is_empty() {
+                return Err(arg_error("hz.spawn: the list of arguments is empty"));
+            }
+            let mut app = crate::spawn::App {
+                argv,
+                env: shared.borrow().app_env.clone(),
+                cwd: None,
+            };
+            if let Some(options) = options {
+                if let Some(env) = options.get::<Option<Table>>("env")? {
+                    for pair in env.pairs::<String, String>() {
+                        let (name, value) = pair?;
+                        app.env.push((name, Some(value)));
+                    }
+                }
+                app.cwd = options
+                    .get::<Option<String>>("cwd")?
+                    .map(std::path::PathBuf::from);
+            }
+            match crate::spawn::spawn_app(&app) {
+                Ok(pid) => {
+                    tracing::info!(pid, argv = ?app.argv, "started an application");
+                    let mut shared = shared.borrow_mut();
+                    shared.spawned.push((pid, app.argv));
+                    if shared.spawned.len() > 16 {
+                        shared.spawned.remove(0);
+                    }
+                    Ok((Some(pid), None))
+                }
+                Err(error) => {
+                    tracing::warn!(argv = ?app.argv, "could not start an application: {error}");
+                    Ok((None, Some(error.to_string())))
+                }
+            }
+        }
+    );
+
+    // An environment variable of the compositor, or nil.
+    hz.set(
+        "env",
+        lua.create_function(|_, name: String| Ok(std::env::var(name).ok()))?,
+    )?;
 
     hz.set(
         "log",
@@ -676,7 +758,15 @@ pub fn register(
         )?;
     }
 
+    super::apps::register(lua, &hz, shared)?;
+    super::color_api::register(lua, &hz, shared, gpu)?;
+    super::images::register(lua, &hz, shared, gpu)?;
+    super::present::register(lua, &hz, shared, gpu)?;
+    super::text::register(lua, &hz, shared, gpu)?;
+    super::window_table::register(lua, &hz, shared, gpu)?;
     super::wm::register(lua, &hz, shared, windows)?;
+    #[cfg(feature = "ocio")]
+    super::ocio::register(lua, &hz, shared, gpu)?;
 
     lua.globals().set("hz", hz)?;
     Ok(())

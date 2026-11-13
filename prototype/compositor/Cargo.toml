@@ -13,6 +13,7 @@ proto-backend.workspace = true
 proto-gfx-core.workspace = true
 proto-gfx-lua.workspace = true
 proto-slangc.workspace = true
+proto-ocio = { workspace = true, optional = true }
 mlua = { workspace = true, features = ["serde"] }
 calloop = { workspace = true, features = ["signals"] }
 tracing.workspace = true
@@ -23,7 +24,22 @@ serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 rustix = { version = "1", features = ["fs", "event", "process"] }
 png = "0.18"
+fontdue = "0.9"
 libc = "0.2"
+
+[features]
+default = ["ocio"]
+# The OCIO conversions of the core (src/ocio). Needs the OpenColorIO shared
+# library when building and when running.
+ocio = ["dep:proto-ocio"]
+
+[[test]]
+name = "ocio_pass"
+required-features = ["ocio"]
+
+[[test]]
+name = "ocio_output"
+required-features = ["ocio"]
 
 [build-dependencies]
 proto-slangc.workspace = true

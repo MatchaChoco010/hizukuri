@@ -21,7 +21,7 @@ use proto_test_client::{
     BufferKind, ClientEvent, ClientOptions, Pattern, PixelLayout, TestClient, Transform, Viewport,
 };
 
-const SPACE: CompositeSpace = CompositeSpace::BT2020_LINEAR;
+const SPACE: CompositeSpace = CompositeSpace::ACESCG;
 /// What a surface without color information is.
 const UNMANAGED: ImageDescription = ImageDescription::SRGB_GAMMA22;
 /// Default background of the compositor (`--background 202020`).
@@ -239,7 +239,7 @@ fn display_p3_output_matches_the_cpu_reference(device: Device) {
     );
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
-        "luminance:x(79.8/79.8) | primaries:bt2020->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise"
+        "luminance:x(79.8/79.8) | primaries:acescg->display-p3 | clip[0,1] | inverse-eotf:srgb-piecewise"
     );
 
     // sRGB red is color(display-p3 0.9175 0.2003 0.1386): 234, 51, 35.
@@ -429,7 +429,7 @@ fn surface_image_description_is_honored(device: Device) {
     });
     assert_eq!(
         window(&state, "p3").unwrap()["surfaces"][0]["decode_pipeline"],
-        "unpremultiply | eotf:srgb-piecewise | primaries:display-p3->bt2020 | luminance:x(79.8/79.8) | premultiply"
+        "unpremultiply | eotf:srgb-piecewise | primaries:display-p3->acescg | luminance:x(79.8/79.8) | premultiply"
     );
 
     let (encoded, composite) = session.screenshot("display-p3");
@@ -481,7 +481,7 @@ fn pq_output_puts_sdr_white_at_the_reference_white(device: Device) {
     assert_eq!(state["outputs"][0]["format"], "rgba16");
     assert_eq!(
         state["outputs"][0]["encode_pipeline"],
-        "luminance:x(202.995/10000) | primaries:bt2020->bt2020 | clip[0,1] | inverse-eotf:pq"
+        "luminance:x(202.995/10000) | primaries:acescg->bt2020 | clip[0,1] | inverse-eotf:pq"
     );
 
     let (encoded, composite) = session.screenshot("white");

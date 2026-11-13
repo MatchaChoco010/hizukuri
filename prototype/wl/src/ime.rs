@@ -281,6 +281,12 @@ impl State {
         }
     }
 
+    /// The seat got another keymap of its own.
+    pub(crate) fn keymap_replaced(&mut self) {
+        self.ime.foreign_keymap = false;
+        self.init_ime();
+    }
+
     /// A key of a real keyboard is about to be handled: a keymap a virtual
     /// keyboard brought in gives way to the seat's own.
     pub(crate) fn restore_keymap(&mut self) {
@@ -304,10 +310,13 @@ impl State {
 }
 
 impl TextInputActivation for State {
-    fn activated(&mut self, _content_type: Option<(ContentHint, ContentPurpose)>) {
+    fn activated(&mut self, content_type: Option<(ContentHint, ContentPurpose)>) {
         let before = self.input_popup_window();
         self.ime.active = true;
         self.note_input_popup(before);
+        self.outside_ime_activated(
+            content_type.map(|(hint, purpose)| (hint.bits(), purpose as u32)),
+        );
     }
 
     fn deactivated(&mut self) {

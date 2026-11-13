@@ -1,0 +1,11 @@
+[package]
+name = "proto-ltc-fit"
+description = "Fits linearly transformed cosines to the GGX BRDF and writes the tables an area light shader looks up"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ltc-fit"
+path = "src/main.rs"

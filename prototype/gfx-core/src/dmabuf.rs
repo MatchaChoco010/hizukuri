@@ -22,7 +22,7 @@ use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 
 use vulkan::vk;
 
-use crate::desc::ImageUsage;
+use crate::desc::{ImageKind, ImageUsage, Subresource};
 use crate::device::{DeviceCtx, vk_error};
 use crate::error::{ErrorCode, GfxError, Result, bail};
 use crate::format::Format;
@@ -370,15 +370,21 @@ impl Gpu {
         };
         let image = Image {
             vk: vk_image,
-            view: vk::ImageView::null(),
+            views: Vec::new(),
             memory: ImageMemory::Imported(memory),
             format,
             width: desc.width,
             height: desc.height,
+            depth: 1,
+            layers: 1,
+            mip_levels: 1,
+            samples: 1,
+            kind: ImageKind::D2,
             usage: ImageUsage::SAMPLED,
             layout: vk::ImageLayout::UNDEFINED,
             rest: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             in_pass: false,
+            attached: Subresource::default(),
             // The memory is the producer's; it does not count against the
             // budget of this device's objects.
             bytes: 0,
@@ -396,7 +402,7 @@ impl Gpu {
             Err((image, e)) => {
                 self.retire(Garbage::Image {
                     vk: image.vk,
-                    view: image.view,
+                    views: image.views,
                     memory: image.memory,
                     bytes: image.bytes,
                 });

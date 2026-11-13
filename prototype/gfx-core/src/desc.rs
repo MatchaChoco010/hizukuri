@@ -55,6 +55,7 @@ flags! {
         STORAGE = 4 => "storage",
         COPY_SRC = 8 => "copy_src",
         COPY_DST = 16 => "copy_dst",
+        DEPTH_TARGET = 32 => "depth_target",
     }
 }
 
@@ -72,6 +73,72 @@ pub struct ImageDesc {
     pub usage: ImageUsage,
 }
 
+/// The dimensionality of an image.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ImageKind {
+    /// A 2D image.
+    D2,
+    /// A 3D image (a volume, such as a colour lookup table).
+    D3,
+    /// Six square 2D layers that a shader reads as a cube.
+    Cube,
+}
+
+impl ImageKind {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "2d" => Some(Self::D2),
+            "3d" => Some(Self::D3),
+            "cube" => Some(Self::Cube),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::D2 => "2d",
+            Self::D3 => "3d",
+            Self::Cube => "cube",
+        }
+    }
+}
+
+/// What an image has beyond [`ImageDesc`]. The default is a plain 2D image
+/// with one mip level and one sample per texel.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ImageExtra {
+    pub kind: ImageKind,
+    /// Depth of a 3D image in texels; 1 for the other kinds.
+    pub depth: u32,
+    /// Number of mip levels, from the full size down.
+    pub mip_levels: u32,
+    /// Samples per texel (1, 2, 4 or 8). More than one makes a multisampled
+    /// image, which can only be an attachment.
+    pub samples: u32,
+}
+
+impl Default for ImageExtra {
+    fn default() -> Self {
+        Self {
+            kind: ImageKind::D2,
+            depth: 1,
+            mip_levels: 1,
+            samples: 1,
+        }
+    }
+}
+
+/// Which part of an image a texture slot shows to a shader.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct TextureView {
+    /// First mip level the shader sees (its level 0).
+    pub base_mip: u32,
+    /// Number of mip levels; `None` for all that remain.
+    pub mip_count: Option<u32>,
+    /// Shows one layer (a face of a cube image) as a 2D texture.
+    pub layer: Option<u32>,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Filter {
     Nearest,
@@ -83,6 +150,81 @@ pub enum AddressMode {
     ClampToEdge,
     Repeat,
     MirrorRepeat,
+    /// Outside the image the sampler returns its border colour.
+    ClampToBorder,
+}
+
+/// The colour a sampler returns outside the image with
+/// [`AddressMode::ClampToBorder`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BorderColor {
+    TransparentBlack,
+    OpaqueBlack,
+    OpaqueWhite,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CompareOp {
+    Never,
+    Less,
+    Equal,
+    LessOrEqual,
+    Greater,
+    NotEqual,
+    GreaterOrEqual,
+    Always,
+}
+
+impl CompareOp {
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "never" => Self::Never,
+            "less" => Self::Less,
+            "equal" => Self::Equal,
+            "less-equal" => Self::LessOrEqual,
+            "greater" => Self::Greater,
+            "not-equal" => Self::NotEqual,
+            "greater-equal" => Self::GreaterOrEqual,
+            "always" => Self::Always,
+            _ => return None,
+        })
+    }
+}
+
+/// What a sampler has beyond [`SamplerDesc`]. The default reads every mip
+/// level of the texture, picking the nearest one.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct SamplerExtra {
+    /// How two neighbouring mip levels are combined.
+    pub mip: Filter,
+    pub address_w: AddressMode,
+    pub lod_min: f32,
+    /// Upper bound of the level of detail. Large values mean "no bound".
+    pub lod_max: f32,
+    pub lod_bias: f32,
+    /// Largest anisotropy ratio; 1 turns anisotropic filtering off.
+    pub anisotropy: f32,
+    pub border: BorderColor,
+    /// Makes a comparison sampler (shadow maps): a read compares a reference
+    /// value with the depth in the texture and returns how much of it
+    /// passes. Such a sampler can only be used for comparisons, on depth
+    /// textures.
+    pub compare: Option<CompareOp>,
+}
+
+impl Default for SamplerExtra {
+    fn default() -> Self {
+        Self {
+            mip: Filter::Nearest,
+            address_w: AddressMode::ClampToEdge,
+            lod_min: 0.0,
+            lod_max: 1000.0,
+            lod_bias: 0.0,
+            anisotropy: 1.0,
+            border: BorderColor::TransparentBlack,
+            compare: None,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -221,6 +363,55 @@ pub struct RenderPipelineDesc {
     pub cull: CullMode,
 }
 
+/// Which winding order is the front of a triangle, as the triangle appears
+/// on the screen.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FrontFace {
+    CounterClockwise,
+    Clockwise,
+}
+
+/// An offset added to the depth of every fragment (shadow maps).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DepthBias {
+    pub constant: f32,
+    pub slope: f32,
+    /// Bound of the total offset; 0 for none.
+    pub clamp: f32,
+}
+
+/// The depth attachment a pipeline draws with, and what it does with it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DepthState {
+    pub format: Format,
+    /// Discard fragments that fail `compare` against the stored depth.
+    pub test: bool,
+    /// Store the depth of the fragments that pass.
+    pub write: bool,
+    pub compare: CompareOp,
+    pub bias: Option<DepthBias>,
+}
+
+/// What a render pipeline has beyond [`RenderPipelineDesc`]. The default is
+/// no depth attachment, counter-clockwise fronts and one sample.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PipelineExtra {
+    pub depth: Option<DepthState>,
+    pub front_face: FrontFace,
+    /// Samples per pixel of the attachments the pipeline draws to.
+    pub samples: u32,
+}
+
+impl Default for PipelineExtra {
+    fn default() -> Self {
+        Self {
+            depth: None,
+            front_face: FrontFace::CounterClockwise,
+            samples: 1,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum LoadOp {
     Clear([f32; 4]),
@@ -233,6 +424,60 @@ pub struct ColorAttachment {
     pub image: Handle,
     pub load: LoadOp,
     pub store: bool,
+}
+
+/// One mip level of one layer of an image.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct Subresource {
+    pub mip: u32,
+    pub layer: u32,
+}
+
+/// A colour attachment of a pass: one mip level of one layer of an image.
+#[derive(Copy, Clone, Debug)]
+pub struct PassColor {
+    pub image: Handle,
+    pub sub: Subresource,
+    pub load: LoadOp,
+    pub store: bool,
+    /// For a multisampled attachment: the single-sampled image that receives
+    /// the resolved result when the pass ends.
+    pub resolve: Option<(Handle, Subresource)>,
+}
+
+impl From<ColorAttachment> for PassColor {
+    fn from(a: ColorAttachment) -> Self {
+        Self {
+            image: a.image,
+            sub: Subresource::default(),
+            load: a.load,
+            store: a.store,
+            resolve: None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum DepthLoadOp {
+    Clear(f32),
+    Load,
+    DontCare,
+}
+
+/// The depth attachment of a pass.
+#[derive(Copy, Clone, Debug)]
+pub struct PassDepth {
+    pub image: Handle,
+    pub sub: Subresource,
+    pub load: DepthLoadOp,
+    pub store: bool,
+}
+
+/// The attachments of a pass. A pass needs at least one of them.
+#[derive(Clone, Debug, Default)]
+pub struct PassDesc {
+    pub color: Vec<PassColor>,
+    pub depth: Option<PassDepth>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

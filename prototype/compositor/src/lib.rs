@@ -23,6 +23,8 @@
 //!
 //! - [`safety`]: telling a virtual machine from real hardware, and a
 //!   watchdog for a hung main loop.
+//! - [`desktop_entry`]: the applications installed on the machine (XDG
+//!   desktop entries), for scripts that offer to start them.
 //! - [`selftest`]: the KMS self test, which drives one output with a test
 //!   pattern and writes down what happened.
 //!
@@ -31,14 +33,18 @@
 
 pub mod compositor;
 pub mod control;
+pub mod desktop_entry;
 pub mod fallback;
 pub mod geometry;
 pub mod image;
+#[cfg(feature = "ocio")]
+pub mod ocio;
 pub mod safety;
 pub mod scene;
 pub mod script;
 pub mod selftest;
 pub mod shaders;
+pub mod spawn;
 pub mod targets;
 pub mod timing;
 pub mod wm;

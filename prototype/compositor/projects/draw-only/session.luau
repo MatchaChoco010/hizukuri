@@ -12,16 +12,12 @@ function init(saved)
     render.init()
     if saved then
         render.restore(saved.transforms)
-        if saved.working then
-            render.set_working(saved.working)
-        end
     end
 end
 
 function unload()
     return {
         transforms = render.save(),
-        working = render.working,
     }
 end
 
@@ -43,10 +39,14 @@ function set_transform(window, transform)
     render.set_transform(window, transform)
 end
 
+function set_brightness(window, factor)
+    render.set_brightness(window, factor)
+end
+
 function set_working_space(name)
-    render.set_working(name)
+    hz.set_working_space(name)
 end
 
 function working_space()
-    return render.working
+    return (hz.working_space())
 end

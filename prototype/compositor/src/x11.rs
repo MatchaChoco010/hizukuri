@@ -26,7 +26,6 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{SocketAddr, UnixListener};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::rc::Rc;
@@ -303,13 +302,7 @@ impl Satellite {
             .args(Self::arguments(socket))
             .env("WAYLAND_DISPLAY", &self.config.wayland_display)
             .env("DISPLAY", socket.display())
-            // WAYLAND_SOCKET would win over WAYLAND_DISPLAY; it is not
-            // ours to hand on.
-            .env_remove("WAYLAND_SOCKET")
-            .stdin(Stdio::null())
-            // Its own process group: a signal meant for the compositor's
-            // terminal does not reach it.
-            .process_group(0);
+            .stdin(Stdio::null());
         match &self.config.log {
             Some(path) => {
                 let file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -319,27 +312,10 @@ impl Satellite {
                 command.stdout(Stdio::null()).stderr(Stdio::null());
             }
         }
+        // The child keeps the listening sockets, gets a process group of
+        // its own and an empty signal mask.
         let inherited: Vec<i32> = socket.listeners().iter().map(|l| l.as_raw_fd()).collect();
-        // SAFETY: only fcntl and pthread_sigmask, which are
-        // async-signal-safe, run between fork and exec. The descriptors stay
-        // open in the parent until then.
-        unsafe {
-            command.pre_exec(move || {
-                for &fd in &inherited {
-                    let fd = std::os::fd::BorrowedFd::borrow_raw(fd);
-                    rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())?;
-                }
-                // The event loop blocks the signals it handles (SIGTERM,
-                // SIGINT, SIGHUP); a child would inherit that mask, and
-                // could then not be stopped with them.
-                let mut none: libc::sigset_t = std::mem::zeroed();
-                libc::sigemptyset(&mut none);
-                if libc::pthread_sigmask(libc::SIG_SETMASK, &none, std::ptr::null_mut()) != 0 {
-                    return Err(io::Error::other("pthread_sigmask failed"));
-                }
-                Ok(())
-            });
-        }
+        crate::spawn::prepare(&mut command, &inherited);
         let child = command.spawn()?;
         let pid = Pid::from_raw(child.id() as i32).expect("a child has a process id");
         let pidfd = match rustix::process::pidfd_open(pid, PidfdFlags::empty()) {

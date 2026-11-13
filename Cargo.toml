@@ -8,7 +8,10 @@ members = [
     "prototype/gfx-core",
     "prototype/gfx-lua",
     "prototype/slangc",
+    "prototype/ocio",
     "tools/test-client",
+    "tools/ltc-fit",
+    "tools/ltc-check",
 ]
 
 [workspace.package]
@@ -39,6 +42,8 @@ proto-gfx-lua = { path = "prototype/gfx-lua" }
 # Runs slangc, the Slang compiler, as a child process: for build scripts and
 # `build-shaders`.
 proto-slangc = { path = "prototype/slangc" }
+# OpenColorIO: a thin C++ layer over the shared library.
+proto-ocio = { path = "prototype/ocio" }
 # For tests only (a dev-dependency): writes the SPIR-V of short shaders that
 # tests give as WGSL or GLSL. Nothing built into a binary compiles shaders.
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-in", "spv-out"] }
@@ -65,6 +70,10 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# The brute-force integrations that ltc-check compares a shader with.
+[profile.dev.package.proto-ltc-fit]
+opt-level = 3
 
 # The checks (tools/ci.sh) build with this profile. Most of their time goes
 # into compiling the dependencies, and the tests spend little time inside

@@ -258,14 +258,9 @@ fn modules_the_api_cannot_vouch_for_are_refused() {
             "OpTypeRuntimeArray",
         ),
         (
-            "16-bit floats (a feature the device does not enable)",
-            wgsl_spirv(
-                ShaderStage::Fragment,
-                "enable f16;
-                 @fragment fn main() -> @location(0) vec4<f32> { let h = vec4<f16>(1.0h); return vec4<f32>(h); }",
-                "main",
-            ),
-            "Float16",
+            "64-bit floats (a feature the device does not enable)",
+            assemble(&plain_fs_asm("OpCapability Float64", "Logical")),
+            "Float64",
         ),
         (
             "a second descriptor set",
@@ -281,7 +276,7 @@ fn modules_the_api_cannot_vouch_for_are_refused() {
             "a binding beyond the table",
             wgsl_spirv(
                 ShaderStage::Fragment,
-                "@group(0) @binding(16) var t: texture_2d<f32>;
+                "@group(0) @binding(32) var t: texture_2d<f32>;
                  @fragment fn main() -> @location(0) vec4<f32> { return textureLoad(t, vec2(0), 0); }",
                 "main",
             ),

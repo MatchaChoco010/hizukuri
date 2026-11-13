@@ -301,7 +301,7 @@ fn surface_description_takes_effect_at_commit() {
     assert_eq!(s["image_description"]["name"], "bt2020-pq");
     assert_eq!(
         s["decode_pipeline"],
-        "unpremultiply | eotf:pq | primaries:bt2020->bt2020 | luminance:x(10000/202.995) | premultiply"
+        "unpremultiply | eotf:pq | primaries:bt2020->acescg | luminance:x(10000/202.995) | premultiply"
     );
 
     // unset_image_description is double-buffered too.

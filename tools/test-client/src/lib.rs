@@ -22,6 +22,7 @@ mod ime;
 mod pointer;
 mod satellite;
 mod touch;
+mod transfer;
 
 use std::collections::HashMap;
 use std::io;
@@ -49,7 +50,9 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 pub use clipboard::{DataControlProtocol, SelectionKind};
 pub use color::{ColorTarget, CreatorStep, ImageInfo};
 pub use external::{ExternalDmabuf, create_udmabuf};
-pub use features::{PopupOptions, SurfaceKind, ToplevelRequest};
+pub use features::{
+    PopupAdjustments, PopupEdge, PopupOptions, PopupPositioner, SurfaceKind, ToplevelRequest,
+};
 pub use ime::{ImeEvent, InputMethodMode};
 pub use pointer::ConstraintRequest;
 pub use satellite::DialogOptions;
@@ -225,6 +228,15 @@ pub struct ClientOptions {
     /// first commit.
     pub min_size: Option<(i32, i32)>,
     pub max_size: Option<(i32, i32)>,
+    /// Bind `xdg_wm_base` with at most this version. The `suspended`
+    /// toplevel state needs 6.
+    pub xdg_wm_base_version: u32,
+    /// Draw again whenever a frame callback is done, as an animation does:
+    /// every frame looks different (the color changes a little).
+    pub redraw_on_frame: bool,
+    /// With `redraw_on_frame`: do not draw while the window is told it is
+    /// suspended (and draw once when it is no longer).
+    pub pause_when_suspended: bool,
 }
 
 impl Default for ClientOptions {
@@ -250,6 +262,9 @@ impl Default for ClientOptions {
             color_manager_version: None,
             min_size: None,
             max_size: None,
+            xdg_wm_base_version: 3,
+            redraw_on_frame: false,
+            pause_when_suspended: false,
         }
     }
 }
@@ -329,6 +344,12 @@ pub enum ClientEvent {
         fullscreen: bool,
         resizing: bool,
     },
+    /// The window was told it is, or no longer is, suspended
+    /// (`xdg_toplevel` state `suspended`, xdg-shell 6). Recorded when it
+    /// changes.
+    Suspended {
+        suspended: bool,
+    },
     /// `wl_surface.preferred_buffer_scale`.
     PreferredBufferScale {
         scale: i32,
@@ -386,6 +407,11 @@ pub enum ClientEvent {
     },
     /// `xdg_popup.popup_done`: the compositor dismissed the popup.
     PopupDone,
+    /// `xdg_popup.repositioned`: the answer to
+    /// [`TestClient::reposition_popup`]. A configure follows.
+    PopupRepositioned {
+        token: u32,
+    },
     /// The selection changed: the MIME types on offer, or none.
     Selection {
         mime_types: Vec<String>,
@@ -607,6 +633,10 @@ struct Window {
     /// `xdg_toplevel.configure`, and as last reported.
     pending_states: [bool; 3],
     states: [bool; 3],
+    /// `suspended`: as in the latest `xdg_toplevel.configure`, and as last
+    /// reported.
+    pending_suspended: bool,
+    suspended: bool,
     /// Size of the buffer currently shown.
     drawn: Option<(u32, u32)>,
     configured: bool,
@@ -935,6 +965,8 @@ impl State {
                 pending: (0, 0, false),
                 pending_states: [false; 3],
                 states: [false; 3],
+                pending_suspended: false,
+                suspended: false,
                 drawn: None,
                 configured: false,
             });
@@ -1122,7 +1154,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                     state.globals.shm = Some(registry.bind(name, 1, handle, ()));
                 }
                 "xdg_wm_base" => {
-                    state.globals.wm_base = Some(registry.bind(name, version.min(2), handle, ()));
+                    state.globals.wm_base = Some(registry.bind(
+                        name,
+                        version.min(state.options.xdg_wm_base_version.max(1)),
+                        handle,
+                        (),
+                    ));
                 }
                 "wl_seat" => {
                     state.globals.seat = Some(registry.bind(name, version.min(8), handle, ()));
@@ -1248,6 +1285,19 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
                     height,
                     activated,
                 });
+                if window.pending_suspended != window.suspended {
+                    window.suspended = window.pending_suspended;
+                    state.events.push(ClientEvent::Suspended {
+                        suspended: window.suspended,
+                    });
+                    // An animation that paused starts again.
+                    if !window.suspended && state.options.redraw_on_frame {
+                        state.needs_draw = true;
+                    }
+                    if !state.needs_draw {
+                        window.surface.commit();
+                    }
+                }
                 if window.pending_states != window.states {
                     window.states = window.pending_states;
                     let [maximized, fullscreen, resizing] = window.states;
@@ -1294,6 +1344,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
                         has(xdg_toplevel::State::Fullscreen),
                         has(xdg_toplevel::State::Resizing),
                     ];
+                    window.pending_suspended = has(xdg_toplevel::State::Suspended);
                 }
             }
             xdg_toplevel::Event::Close => {
@@ -1376,6 +1427,14 @@ impl Dispatch<wl_callback::WlCallback, ()> for State {
             state.events.push(ClientEvent::FrameDone {
                 time_ms: callback_data,
             });
+            let paused = state.options.pause_when_suspended
+                && state.window.as_ref().is_some_and(|w| w.suspended);
+            if state.options.redraw_on_frame && !paused {
+                // The next picture of the animation: a slightly other color.
+                let [r, g, b, a] = state.options.color;
+                state.options.color = [r, g.wrapping_add(1), b, a];
+                state.needs_draw = true;
+            }
         }
     }
 }

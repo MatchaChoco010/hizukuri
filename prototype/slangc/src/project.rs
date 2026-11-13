@@ -9,6 +9,10 @@
 //! directory of the build for the built-in project. The compositor reads
 //! SPIR-V only; it never compiles.
 //!
+//! A source without an entry point is a module of the project: the other
+//! sources of its directory import it by its file name (`import ltc;` for
+//! `ltc.slang`), and nothing is compiled from it alone.
+//!
 //! Build scripts use it for the shaders a crate carries (the compositor's
 //! built-in project, the examples of `proto-gfx-lua`), and
 //! `proto-compositor build-shaders` for any project.
@@ -199,13 +203,10 @@ fn compile_one(
     let entries = compiler
         .entry_points(path, &scratch)
         .map_err(|e| e.to_string())?;
-    if entries.is_empty() {
-        return Err(format!(
-            "{}: no entry point (give each one a [shader(\"vertex\")], [shader(\"fragment\")] \
-             or [shader(\"compute\")] attribute)",
-            path.display()
-        ));
-    }
+    // A source without an entry point is a module of the project: the other
+    // sources import it (`import name;` finds it next to them), and nothing
+    // is compiled from it alone. Its empty list still records that it was
+    // looked at.
     let mut warnings = Vec::new();
     for (entry, stage) in &entries {
         let compiled = compiler
@@ -217,8 +218,8 @@ fn compile_one(
     }
     let names: Vec<String> = entries.into_iter().map(|(name, _)| name).collect();
     let list = entries_file(output, rel);
-    std::fs::write(&list, names.join("\n") + "\n")
-        .map_err(|e| format!("{}: {e}", list.display()))?;
+    let text: String = names.iter().map(|name| format!("{name}\n")).collect();
+    std::fs::write(&list, text).map_err(|e| format!("{}: {e}", list.display()))?;
     Ok((names, warnings))
 }
 

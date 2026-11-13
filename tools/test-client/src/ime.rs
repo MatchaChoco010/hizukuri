@@ -338,6 +338,19 @@ impl TestClient {
         self.commit_text_input()
     }
 
+    /// Sends the text around the cursor (cursor and anchor in bytes) and
+    /// commits.
+    pub fn text_input_set_surrounding(
+        &mut self,
+        text: &str,
+        cursor: i32,
+        anchor: i32,
+    ) -> Result<(), ClientError> {
+        self.text_input()?
+            .set_surrounding_text(text.to_string(), cursor, anchor);
+        self.commit_text_input()
+    }
+
     /// Disables the text input and commits.
     pub fn text_input_disable(&mut self) -> Result<(), ClientError> {
         self.text_input()?.disable();
@@ -401,6 +414,13 @@ impl TestClient {
         let input_method = self.input_method()?;
         input_method.commit_string(text.to_string());
         input_method.set_preedit_string(String::new(), 0, 0);
+        self.state.ime_commit();
+        Ok(())
+    }
+
+    /// Asks for bytes around the cursor to be deleted, and commits.
+    pub fn ime_delete_surrounding(&mut self, before: u32, after: u32) -> Result<(), ClientError> {
+        self.input_method()?.delete_surrounding_text(before, after);
         self.state.ime_commit();
         Ok(())
     }

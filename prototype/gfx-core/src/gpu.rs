@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use vulkan::vk;
 use vulkan_alloc::{Allocation, AllocationCreateDesc, AllocationScheme, MemoryLocation};
 
+use crate::background::{Background, Inner, PendingPipeline, PipelineJob};
+use crate::checked::{CheckedShader, ShaderChecker};
 use crate::desc::*;
 use crate::device::{DeviceCtx, vk_error};
 use crate::error::{ErrorCode, GfxError, Result, bail};
@@ -57,25 +59,185 @@ pub(crate) enum ImageMemory {
 
 pub(crate) struct Image {
     pub vk: vk::Image,
-    pub view: vk::ImageView,
+    /// Attachment views, one per mip level and layer, at index
+    /// `mip * layers + layer`. Empty unless the image can be an attachment.
+    pub views: Vec<vk::ImageView>,
     pub memory: ImageMemory,
     pub format: Format,
     pub width: u32,
     pub height: u32,
+    /// Depth of a 3D image; 1 otherwise.
+    pub depth: u32,
+    /// Array layers: 6 for a cube image, 1 otherwise.
+    pub layers: u32,
+    pub mip_levels: u32,
+    pub samples: u32,
+    pub kind: ImageKind,
     pub usage: ImageUsage,
-    /// Layout the image is in at the current point of recording.
+    /// Layout the image is in at the current point of recording. While the
+    /// image is an attachment of the open pass, this is the layout of every
+    /// subresource except the attached one.
     pub layout: vk::ImageLayout,
     /// Layout the image returns to after every operation.
     pub rest: vk::ImageLayout,
-    /// Whether the image is an attachment of the open pass.
+    /// Whether a subresource of the image is an attachment of the open pass.
     pub in_pass: bool,
+    /// The attached subresource while `in_pass`.
+    pub attached: Subresource,
+    /// Memory the image is charged for: every level, layer and sample.
     pub bytes: u64,
+}
+
+impl Image {
+    /// Every mip level and layer.
+    pub fn full_range(&self) -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            aspect_mask: self.format.aspect(),
+            base_mip_level: 0,
+            level_count: self.mip_levels,
+            base_array_layer: 0,
+            layer_count: self.layers,
+        }
+    }
+
+    pub fn sub_range(&self, sub: Subresource) -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            aspect_mask: self.format.aspect(),
+            base_mip_level: sub.mip,
+            level_count: 1,
+            base_array_layer: sub.layer,
+            layer_count: 1,
+        }
+    }
+
+    pub fn sub_layers(&self, sub: Subresource) -> vk::ImageSubresourceLayers {
+        vk::ImageSubresourceLayers {
+            aspect_mask: self.format.aspect(),
+            mip_level: sub.mip,
+            base_array_layer: sub.layer,
+            layer_count: 1,
+        }
+    }
+
+    /// Width, height and depth of a mip level.
+    pub fn level_extent(&self, mip: u32) -> (u32, u32, u32) {
+        (
+            (self.width >> mip).max(1),
+            (self.height >> mip).max(1),
+            (self.depth >> mip).max(1),
+        )
+    }
+
+    /// Bytes of one layer of a mip level, tightly packed.
+    pub fn level_bytes(&self, mip: u32) -> u64 {
+        let (w, h, d) = self.level_extent(mip);
+        u64::from(w) * u64::from(h) * u64::from(d) * u64::from(self.format.bytes_per_pixel())
+    }
+
+    /// Checks that `sub` names a mip level and a layer the image has.
+    pub fn check_sub(&self, sub: Subresource, image: Handle) -> Result<()> {
+        if sub.mip >= self.mip_levels || sub.layer >= self.layers {
+            bail!(
+                OutOfRange,
+                "{image:?} has {} mip level(s) and {} layer(s); mip {} of layer {} does not exist",
+                self.mip_levels,
+                self.layers,
+                sub.mip,
+                sub.layer
+            );
+        }
+        Ok(())
+    }
+
+    pub fn attachment_view(&self, sub: Subresource) -> vk::ImageView {
+        self.views[(sub.mip * self.layers + sub.layer) as usize]
+    }
+}
+
+/// The part of an image a sampled-texture slot shows.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SlotView {
+    /// How the shader must declare the texture.
+    pub kind: ImageKind,
+    pub base_mip: u32,
+    pub mip_count: u32,
+    pub base_layer: u32,
+    pub layer_count: u32,
+}
+
+impl SlotView {
+    pub fn contains(&self, sub: Subresource) -> bool {
+        (self.base_mip..self.base_mip + self.mip_count).contains(&sub.mip)
+            && (self.base_layer..self.base_layer + self.layer_count).contains(&sub.layer)
+    }
 }
 
 pub(crate) struct Shader {
     pub spirv: Vec<u32>,
     pub entry: std::ffi::CString,
     pub reflection: Reflection,
+}
+
+impl Shader {
+    fn stage(&self) -> StageRef<'_> {
+        StageRef {
+            spirv: &self.spirv,
+            entry: &self.entry,
+            reflection: &self.reflection,
+        }
+    }
+}
+
+/// What building a pipeline reads of one of its shaders.
+#[derive(Copy, Clone)]
+pub(crate) struct StageRef<'a> {
+    pub spirv: &'a [u32],
+    pub entry: &'a std::ffi::CStr,
+    pub reflection: &'a Reflection,
+}
+
+/// A copy of the same, for a build that outlives the shader.
+pub(crate) struct StageCode {
+    spirv: Vec<u32>,
+    entry: std::ffi::CString,
+    reflection: Reflection,
+}
+
+impl StageCode {
+    pub fn as_ref(&self) -> StageRef<'_> {
+        StageRef {
+            spirv: &self.spirv,
+            entry: &self.entry,
+            reflection: &self.reflection,
+        }
+    }
+}
+
+impl From<StageRef<'_>> for StageCode {
+    fn from(stage: StageRef<'_>) -> Self {
+        Self {
+            spirv: stage.spirv.to_vec(),
+            entry: stage.entry.to_owned(),
+            reflection: stage.reflection.clone(),
+        }
+    }
+}
+
+/// Bytes from one slot to the next in the two descriptor heaps: what a
+/// pipeline's mapping of bindings to the heaps depends on.
+#[derive(Copy, Clone)]
+pub(crate) struct HeapStrides {
+    resource: u32,
+    sampler: u32,
+}
+
+impl HeapStrides {
+    fn of(ctx: &DeviceCtx) -> Self {
+        Self {
+            resource: ctx.resource_heap.stride as u32,
+            sampler: ctx.sampler_heap.stride as u32,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +258,8 @@ pub(crate) struct PipelineCommon {
     /// Size of the block plus the heap indices that follow it.
     pub push_total_size: u32,
     pub sampling_pairs: Vec<(u32, u32)>,
+    /// Those of `sampling_pairs` that are used for depth comparisons.
+    pub comparison_pairs: Vec<(u32, u32)>,
 }
 
 pub(crate) struct VertexBufferRequirement {
@@ -108,6 +272,8 @@ pub(crate) struct VertexBufferRequirement {
 pub(crate) struct RenderPipeline {
     pub common: PipelineCommon,
     pub color_formats: Vec<Format>,
+    pub depth_format: Option<Format>,
+    pub samples: u32,
     pub vertex_buffers: Vec<VertexBufferRequirement>,
 }
 
@@ -117,7 +283,7 @@ pub(crate) struct ComputePipeline {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum SlotContent {
-    SampledImage { image: Handle },
+    SampledImage { image: Handle, view: SlotView },
     StorageImage { image: Handle },
     UniformBuffer { buffer: Handle, size: u64 },
     StorageBuffer { buffer: Handle, size: u64 },
@@ -135,7 +301,12 @@ impl SlotContent {
 }
 
 pub(crate) struct SamplerSlot {
+    /// Whether any of the sampler's filters is linear.
     pub filtering: bool,
+    /// Whether an address mode returns the (floating-point) border colour.
+    pub border: bool,
+    /// Whether the sampler compares (`SamplerExtra::compare`).
+    pub compare: bool,
 }
 
 pub(crate) enum Garbage {
@@ -146,7 +317,7 @@ pub(crate) enum Garbage {
     },
     Image {
         vk: vk::Image,
-        view: vk::ImageView,
+        views: Vec<vk::ImageView>,
         memory: ImageMemory,
         bytes: u64,
     },
@@ -185,6 +356,11 @@ pub struct ImageInfo {
     pub format: Format,
     pub width: u32,
     pub height: u32,
+    pub kind: ImageKind,
+    /// Depth of a 3D image; 1 otherwise.
+    pub depth: u32,
+    pub mip_levels: u32,
+    pub samples: u32,
 }
 
 /// A device plus everything a script created on it.
@@ -230,6 +406,13 @@ pub struct Gpu {
     pub(crate) compute_binds: BindTable,
     pub(crate) compute_pipeline: Option<Handle>,
     pub(crate) stats: Stats,
+
+    /// Shared with the jobs that build pipelines on other threads.
+    background: std::sync::Arc<Background>,
+    /// Pipelines that were prepared and not finished yet, by ticket: all of
+    /// the pipeline except its Vulkan object.
+    pending_pipelines: std::collections::HashMap<u64, RenderPipeline>,
+    next_ticket: u64,
 }
 
 impl Gpu {
@@ -293,6 +476,9 @@ impl Gpu {
             compute_binds: BindTable::default(),
             compute_pipeline: None,
             stats: Stats::default(),
+            background: Background::new(),
+            pending_pipelines: std::collections::HashMap::new(),
+            next_ticket: 0,
         })
     }
 
@@ -327,11 +513,16 @@ impl Gpu {
     }
 
     pub fn format_caps(&self, format: Format) -> FormatCaps {
-        let index = Format::ALL
+        self.ctx().format_caps[format.index()]
+    }
+
+    /// Whether images of `format` can be created with `usage` on this
+    /// device.
+    pub fn format_supports_usage(&self, format: Format, usage: ImageUsage) -> bool {
+        let caps = self.format_caps(format);
+        usage_table(&caps)
             .iter()
-            .position(|f| *f == format)
-            .expect("format is in ALL");
-        self.ctx().format_caps[index]
+            .all(|(flag, supported, _, _)| !usage.contains(*flag) || *supported)
     }
 
     /// Turns the per-call validation off or on. Handle resolution stays.
@@ -425,12 +616,14 @@ impl Gpu {
                 }
                 Garbage::Image {
                     vk,
-                    view,
+                    views,
                     memory,
                     bytes,
                 } => {
-                    if !view.is_null() {
-                        ctx.device.destroy_image_view(view, None);
+                    for view in views {
+                        if !view.is_null() {
+                            ctx.device.destroy_image_view(view, None);
+                        }
                     }
                     ctx.device.destroy_image(vk, None);
                     match memory {
@@ -727,12 +920,56 @@ impl Gpu {
     // ----- images -----------------------------------------------------------
 
     pub fn create_image(&mut self, desc: &ImageDesc) -> Result<Handle> {
+        self.create_image_with(desc, &ImageExtra::default())
+    }
+
+    /// Creates a 3D image of `desc.width × desc.height × depth` texels, for
+    /// lookup tables.
+    pub fn create_image_3d(&mut self, desc: &ImageDesc, depth: u32) -> Result<Handle> {
+        self.create_image_with(
+            desc,
+            &ImageExtra {
+                kind: ImageKind::D3,
+                depth,
+                ..ImageExtra::default()
+            },
+        )
+    }
+
+    /// Creates an image with mip levels, of another kind than 2D, or with
+    /// more than one sample per texel.
+    ///
+    /// - A 3D image can only be sampled and filled with `upload_image`.
+    /// - A cube image is square and has six layers.
+    /// - A multisampled image can only be an attachment; a pass resolves it
+    ///   into a single-sampled image.
+    pub fn create_image_with(&mut self, desc: &ImageDesc, extra: &ImageExtra) -> Result<Handle> {
         self.alive()?;
-        let max = self.ctx().limits.max_image_dimension;
-        if desc.width == 0 || desc.height == 0 || desc.width > max || desc.height > max {
+        let limits = &self.ctx().limits;
+        let (max, what) = match extra.kind {
+            ImageKind::D2 => (limits.max_image_dimension, "image"),
+            ImageKind::D3 => (limits.max_image_dimension_3d, "3D image"),
+            ImageKind::Cube => (limits.max_image_dimension_cube, "cube image"),
+        };
+        if [desc.width, desc.height, extra.depth]
+            .iter()
+            .any(|d| *d == 0 || *d > max)
+        {
             bail!(
                 InvalidArgument,
-                "image size {}x{} is outside 1..={max}",
+                "{what} size {}x{}x{} is outside 1..={max}",
+                desc.width,
+                desc.height,
+                extra.depth
+            );
+        }
+        if extra.kind != ImageKind::D3 && extra.depth != 1 {
+            bail!(InvalidArgument, "only a 3D image has a depth other than 1");
+        }
+        if extra.kind == ImageKind::Cube && desc.width != desc.height {
+            bail!(
+                InvalidArgument,
+                "a cube image is square, got {}x{}",
                 desc.width,
                 desc.height
             );
@@ -740,41 +977,54 @@ impl Gpu {
         if desc.usage.is_empty() {
             bail!(InvalidArgument, "image usage must not be empty");
         }
+        let full_chain = 32 - desc.width.max(desc.height).leading_zeros();
+        if extra.mip_levels == 0 || extra.mip_levels > full_chain {
+            bail!(
+                InvalidArgument,
+                "a {}x{} image has 1..={full_chain} mip levels, got {}",
+                desc.width,
+                desc.height,
+                extra.mip_levels
+            );
+        }
+        if !matches!(extra.samples, 1 | 2 | 4 | 8) {
+            bail!(
+                InvalidArgument,
+                "samples must be 1, 2, 4 or 8, got {}",
+                extra.samples
+            );
+        }
+        let attachment = ImageUsage::COLOR_TARGET | ImageUsage::DEPTH_TARGET;
+        if extra.kind == ImageKind::D3 {
+            let allowed = ImageUsage::SAMPLED | ImageUsage::COPY_DST;
+            if desc.usage.0 & !allowed.0 != 0 {
+                bail!(
+                    InvalidArgument,
+                    "a 3D image may only be `sampled` and `copy_dst`"
+                );
+            }
+            if extra.mip_levels != 1 {
+                bail!(InvalidArgument, "a 3D image has one mip level");
+            }
+        }
+        if extra.samples > 1 {
+            if extra.kind != ImageKind::D2 || extra.mip_levels != 1 {
+                bail!(
+                    InvalidArgument,
+                    "a multisampled image is 2D and has one mip level"
+                );
+            }
+            if desc.usage.0 & !attachment.0 != 0 {
+                bail!(
+                    InvalidArgument,
+                    "a multisampled image may only be `color_target` or `depth_target`; resolve it into another image to read it"
+                );
+            }
+        }
         let caps = self.format_caps(desc.format);
         let name = desc.format.name();
         let mut usage = vk::ImageUsageFlags::empty();
-        for (flag, supported, vk_flag, what) in [
-            (
-                ImageUsage::SAMPLED,
-                caps.sampled,
-                vk::ImageUsageFlags::SAMPLED,
-                "sampled",
-            ),
-            (
-                ImageUsage::COLOR_TARGET,
-                caps.color_attachment,
-                vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                "color_target",
-            ),
-            (
-                ImageUsage::STORAGE,
-                caps.storage,
-                vk::ImageUsageFlags::STORAGE,
-                "storage",
-            ),
-            (
-                ImageUsage::COPY_SRC,
-                caps.transfer_src,
-                vk::ImageUsageFlags::TRANSFER_SRC,
-                "copy_src",
-            ),
-            (
-                ImageUsage::COPY_DST,
-                caps.transfer_dst,
-                vk::ImageUsageFlags::TRANSFER_DST,
-                "copy_dst",
-            ),
-        ] {
+        for (flag, supported, vk_flag, what) in usage_table(&caps) {
             if desc.usage.contains(flag) {
                 if !supported {
                     bail!(
@@ -785,9 +1035,61 @@ impl Gpu {
                 usage |= vk_flag;
             }
         }
-        let bytes = u64::from(desc.width)
-            * u64::from(desc.height)
-            * u64::from(desc.format.bytes_per_pixel());
+        let layers = if extra.kind == ImageKind::Cube { 6 } else { 1 };
+        let image_type = if extra.kind == ImageKind::D3 {
+            vk::ImageType::_3D
+        } else {
+            vk::ImageType::_2D
+        };
+        let flags = if extra.kind == ImageKind::Cube {
+            vk::ImageCreateFlags::CUBE_COMPATIBLE
+        } else {
+            vk::ImageCreateFlags::empty()
+        };
+        // The device has the last word on the combination of format, kind,
+        // usage, size, mip levels and samples.
+        // SAFETY: the query only reads; every argument is a valid enum value.
+        let properties = unsafe {
+            let ctx = self.ctx();
+            ctx.instance.get_physical_device_image_format_properties(
+                ctx.physical_device,
+                desc.format.vk(),
+                image_type,
+                vk::ImageTiling::OPTIMAL,
+                usage,
+                flags,
+            )
+        };
+        let supported = properties.is_ok_and(|p| {
+            desc.width <= p.max_extent.width
+                && desc.height <= p.max_extent.height
+                && extra.depth <= p.max_extent.depth
+                && extra.mip_levels <= p.max_mip_levels
+                && layers <= p.max_array_layers
+                && p.sample_counts.as_raw() & extra.samples != 0
+        });
+        if !supported {
+            bail!(
+                Unsupported,
+                "this device cannot create a {}x{}x{} {} image of {name} with {} mip level(s), {} sample(s) and this usage",
+                desc.width,
+                desc.height,
+                extra.depth,
+                extra.kind.name(),
+                extra.mip_levels,
+                extra.samples
+            );
+        }
+        let bytes: u64 = (0..extra.mip_levels)
+            .map(|mip| {
+                u64::from((desc.width >> mip).max(1))
+                    * u64::from((desc.height >> mip).max(1))
+                    * u64::from((extra.depth >> mip).max(1))
+            })
+            .sum::<u64>()
+            * u64::from(desc.format.bytes_per_pixel())
+            * u64::from(layers)
+            * u64::from(extra.samples);
         self.charge_memory(bytes, "an image")?;
         if self.images.live() >= self.images.capacity() {
             bail!(
@@ -797,22 +1099,24 @@ impl Gpu {
             );
         }
 
-        // SAFETY: format, extent and usage were validated against the device
-        // above; partially created objects are released on every error path.
+        // SAFETY: format, kind, extent, mip levels, samples and usage were
+        // validated against the device above; partially created objects are
+        // released on every error path.
         let image = unsafe {
             let ctx = self.ctx.as_mut().expect("device lives until drop");
             let vk_image = match ctx.device.create_image(
                 &vk::ImageCreateInfo::default()
-                    .image_type(vk::ImageType::_2D)
+                    .flags(flags)
+                    .image_type(image_type)
                     .format(desc.format.vk())
                     .extent(vk::Extent3D {
                         width: desc.width,
                         height: desc.height,
-                        depth: 1,
+                        depth: extra.depth,
                     })
-                    .mip_levels(1)
-                    .array_layers(1)
-                    .samples(vk::SampleCountFlagBits::_1)
+                    .mip_levels(extra.mip_levels)
+                    .array_layers(layers)
+                    .samples(vk::SampleCountFlagBits::from_raw(extra.samples))
                     .tiling(vk::ImageTiling::OPTIMAL)
                     .usage(usage)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -838,40 +1142,59 @@ impl Gpu {
                     bail!(OutOfMemory, "allocate image memory: {e}");
                 }
             };
-            // Only attachments need a view object; descriptors are written
-            // from a view description.
-            let needs_view = desc.usage.contains(ImageUsage::COLOR_TARGET);
-            let view = ctx
+            // Only attachments need view objects, one per mip level and
+            // layer; descriptors are written from a view description.
+            let needs_views = desc.usage.0 & attachment.0 != 0;
+            let mut views = Vec::new();
+            let created = ctx
                 .device
                 .bind_image_memory(vk_image, allocation.memory(), allocation.offset())
                 .and_then(|()| {
-                    if !needs_view {
-                        return Ok(vk::ImageView::null());
+                    if !needs_views {
+                        return Ok(());
                     }
-                    ctx.device.create_image_view(
-                        &vk::ImageViewCreateInfo::default()
-                            .image(vk_image)
-                            .view_type(vk::ImageViewType::_2D)
-                            .format(desc.format.vk())
-                            .subresource_range(COLOR_RANGE),
-                        None,
-                    )
+                    for mip in 0..extra.mip_levels {
+                        for layer in 0..layers {
+                            views.push(
+                                ctx.device.create_image_view(
+                                    &vk::ImageViewCreateInfo::default()
+                                        .image(vk_image)
+                                        .view_type(vk::ImageViewType::_2D)
+                                        .format(desc.format.vk())
+                                        .subresource_range(vk::ImageSubresourceRange {
+                                            aspect_mask: desc.format.aspect(),
+                                            base_mip_level: mip,
+                                            level_count: 1,
+                                            base_array_layer: layer,
+                                            layer_count: 1,
+                                        }),
+                                    None,
+                                )?,
+                            );
+                        }
+                    }
+                    Ok(())
                 });
-            let view = match view {
-                Ok(v) => v,
-                Err(e) => {
-                    ctx.device.destroy_image(vk_image, None);
-                    let _ = ctx.allocator().free(allocation);
-                    return Err(self.fail("create image view", e));
+            if let Err(e) = created {
+                for view in views {
+                    ctx.device.destroy_image_view(view, None);
                 }
-            };
+                ctx.device.destroy_image(vk_image, None);
+                let _ = ctx.allocator().free(allocation);
+                return Err(self.fail("create image view", e));
+            }
             Image {
                 vk: vk_image,
-                view,
+                views,
                 memory: ImageMemory::Allocated(allocation),
                 format: desc.format,
                 width: desc.width,
                 height: desc.height,
+                depth: extra.depth,
+                layers,
+                mip_levels: extra.mip_levels,
+                samples: extra.samples,
+                kind: extra.kind,
                 usage: desc.usage,
                 layout: vk::ImageLayout::UNDEFINED,
                 rest: if desc.usage.contains(ImageUsage::SAMPLED) {
@@ -880,6 +1203,7 @@ impl Gpu {
                     vk::ImageLayout::GENERAL
                 },
                 in_pass: false,
+                attached: Subresource::default(),
                 bytes,
             }
         };
@@ -892,7 +1216,7 @@ impl Gpu {
             Err((image, e)) => {
                 self.retire(Garbage::Image {
                     vk: image.vk,
-                    view: image.view,
+                    views: image.views,
                     memory: image.memory,
                     bytes: image.bytes,
                 });
@@ -907,9 +1231,12 @@ impl Gpu {
             format: i.format,
             width: i.width,
             height: i.height,
+            kind: i.kind,
+            depth: i.depth,
+            mip_levels: i.mip_levels,
+            samples: i.samples,
         })
     }
-
     // ----- shaders ----------------------------------------------------------
 
     /// Creates a shader from a SPIR-V module (the bytes of a `.spv` file).
@@ -918,6 +1245,11 @@ impl Gpu {
     /// and it is checked against what the API supports before the device
     /// sees it (`spirv_input`). The reflection comes from the module itself.
     /// `entry` names its one entry point, which must be of `stage`.
+    ///
+    /// The checks run here, on the calling thread, and take tens of
+    /// milliseconds on a large module. To keep them off this thread, check
+    /// the module with [`Gpu::shader_checker`] elsewhere and hand the result
+    /// to [`Gpu::create_shader_checked`].
     pub fn create_shader_spirv(
         &mut self,
         stage: ShaderStage,
@@ -925,19 +1257,41 @@ impl Gpu {
         spirv: &[u8],
     ) -> Result<Handle> {
         self.check_shader_capacity()?;
-        if spirv.len() > MAX_SPIRV_BYTES {
+        let checked = self.shader_checker().check(stage, entry, spirv)?;
+        self.create_shader_checked(checked)
+    }
+
+    /// What checks SPIR-V modules for this device. It does not borrow the
+    /// device: clone it, send it to another thread, and check there.
+    pub fn shader_checker(&self) -> ShaderChecker {
+        ShaderChecker::new(crate::spirv_check::optional_capabilities(
+            &self.ctx().optional,
+        ))
+    }
+
+    /// Creates a shader from a module that a [`ShaderChecker`] accepted.
+    /// Nothing is checked again, so this takes no time to speak of.
+    ///
+    /// The checker has to be this device's, or one that allows no more than
+    /// this device does (such as [`ShaderChecker::baseline`]).
+    pub fn create_shader_checked(&mut self, checked: CheckedShader) -> Result<Handle> {
+        self.check_shader_capacity()?;
+        let allowed = crate::spirv_check::optional_capabilities(&self.ctx().optional);
+        if !checked.fits(&allowed) {
             bail!(
-                ShaderCompile,
-                "the SPIR-V module is {} bytes; the limit is {MAX_SPIRV_BYTES}",
-                spirv.len()
+                Mismatch,
+                "the module was checked for a device with other features than this one"
             );
         }
-        let words = crate::spirv_input::words_from_bytes(spirv)
-            .map_err(|message| GfxError::new(ErrorCode::ShaderCompile, message))?;
-        let compiled = run_shader_tool("the SPIR-V checks", || {
-            crate::spirv_input::accept_spirv(&words, stage, entry)
-        })?;
-        self.insert_shader(compiled, stage)
+        let stage = checked.reflection.stage;
+        self.insert_shader(
+            CompiledShader {
+                spirv: checked.spirv,
+                entry: checked.entry,
+                reflection: checked.reflection,
+            },
+            stage,
+        )
     }
 
     fn check_shader_capacity(&self) -> Result<()> {
@@ -1008,7 +1362,13 @@ impl Gpu {
         Ok(handle)
     }
 
-    fn image_slot(&mut self, image: Handle, storage: bool, opaque: bool) -> Result<Handle> {
+    fn image_slot(
+        &mut self,
+        image: Handle,
+        storage: bool,
+        opaque: bool,
+        view: &TextureView,
+    ) -> Result<Handle> {
         self.alive()?;
         let i = self.images.get(image)?;
         let (needed, what, layout, ty) = if storage {
@@ -1032,17 +1392,31 @@ impl Gpu {
                 "{image:?} was not created with usage `{what}`"
             );
         }
-        let mut view = vk::ImageViewCreateInfo::default()
-            .image(i.vk)
-            .view_type(vk::ImageViewType::_2D)
-            .format(i.format.vk())
-            .subresource_range(COLOR_RANGE);
+        let mut view = *view;
+        if storage && view.mip_count.is_none() {
+            view.mip_count = Some(1);
+        }
+        let slot_view = resolve_view(i, image, &view)?;
+        if storage && (slot_view.kind != ImageKind::D2 || slot_view.mip_count != 1) {
+            bail!(
+                InvalidArgument,
+                "a storage texture slot shows one mip level of a 2D image or of one layer"
+            );
+        }
+        if opaque && slot_view.kind != ImageKind::D2 {
+            bail!(
+                InvalidArgument,
+                "{image:?} is a {} image; an opaque slot shows a 2D image",
+                slot_view.kind.name()
+            );
+        }
+        let mut info = view_info(i, &slot_view);
         if opaque {
             // The alpha channel of the image means nothing (`xrgb`): read 1.
-            view = view.components(vk::ComponentMapping::default().a(vk::ComponentSwizzle::ONE));
+            info = info.components(vk::ComponentMapping::default().a(vk::ComponentSwizzle::ONE));
         }
         let image_info = vk::ImageDescriptorInfoEXT::default()
-            .view(&view)
+            .view(&info)
             .layout(layout);
         let info = vk::ResourceDescriptorInfoEXT::default()
             .ty(ty)
@@ -1050,20 +1424,39 @@ impl Gpu {
         let content = if storage {
             SlotContent::StorageImage { image }
         } else {
-            SlotContent::SampledImage { image }
+            SlotContent::SampledImage {
+                image,
+                view: slot_view,
+            }
         };
         self.write_resource_slot(content, &info)
     }
 
     /// Writes a sampled-texture descriptor for `image` into a free heap slot.
+    ///
+    /// The slot shows every mip level. A cube image is shown as a cube, a 3D
+    /// image as a volume; the shader's declaration has to match.
     pub fn create_texture_slot(&mut self, image: Handle) -> Result<Handle> {
-        self.image_slot(image, false, false)
+        self.image_slot(image, false, false, &TextureView::default())
+    }
+
+    /// Like [`Gpu::create_texture_slot`], for a part of the image: a range of
+    /// mip levels, or one layer of a cube image as a 2D texture.
+    ///
+    /// A slot that leaves out a mip level can be read while that level is an
+    /// attachment of the open pass.
+    pub fn create_texture_slot_view(
+        &mut self,
+        image: Handle,
+        view: &TextureView,
+    ) -> Result<Handle> {
+        self.image_slot(image, false, false, view)
     }
 
     /// Like [`Gpu::create_texture_slot`], for an image whose alpha channel
     /// carries no information: the shader reads alpha as 1.
     pub fn create_opaque_texture_slot(&mut self, image: Handle) -> Result<Handle> {
-        self.image_slot(image, false, true)
+        self.image_slot(image, false, true, &TextureView::default())
     }
 
     /// Writes sampled-texture descriptors for `images` into consecutive heap
@@ -1086,23 +1479,31 @@ impl Gpu {
                     "{image:?} was not created with usage `sampled`"
                 );
             }
-            views.push((i.vk, i.format.vk()));
+            if i.kind != ImageKind::D2 {
+                bail!(
+                    InvalidArgument,
+                    "{image:?} is a {} image; texture arrays hold 2D images only",
+                    i.kind.name()
+                );
+            }
+            views.push(resolve_view(i, *image, &TextureView::default())?);
         }
         let handles = self.slots.insert_run(
             images
                 .iter()
-                .map(|image| SlotContent::SampledImage { image: *image })
+                .zip(&views)
+                .map(|(image, view)| SlotContent::SampledImage {
+                    image: *image,
+                    view: *view,
+                })
                 .collect(),
         )?;
         let ctx = self.ctx();
         let heap = &ctx.resource_heap;
         let mut failure = None;
-        for (handle, (image, format)) in handles.iter().zip(views) {
-            let view = vk::ImageViewCreateInfo::default()
-                .image(image)
-                .view_type(vk::ImageViewType::_2D)
-                .format(format)
-                .subresource_range(COLOR_RANGE);
+        for ((handle, image), view) in handles.iter().zip(images).zip(&views) {
+            let i = self.images.get(*image).expect("checked above");
+            let view = view_info(i, view);
             let image_info = vk::ImageDescriptorInfoEXT::default()
                 .view(&view)
                 .layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
@@ -1136,11 +1537,21 @@ impl Gpu {
         Ok(handles)
     }
 
-    /// Writes a storage-texture descriptor for `image` into a free heap slot.
+    /// Writes a storage-texture descriptor for mip level 0 of `image` into a
+    /// free heap slot.
     pub fn create_storage_texture_slot(&mut self, image: Handle) -> Result<Handle> {
-        self.image_slot(image, true, false)
+        self.image_slot(image, true, false, &TextureView::default())
     }
 
+    /// Like [`Gpu::create_storage_texture_slot`], for another mip level or
+    /// one layer of a cube image.
+    pub fn create_storage_texture_slot_view(
+        &mut self,
+        image: Handle,
+        view: &TextureView,
+    ) -> Result<Handle> {
+        self.image_slot(image, true, false, view)
+    }
     fn buffer_slot(
         &mut self,
         buffer: Handle,
@@ -1219,6 +1630,16 @@ impl Gpu {
 
     /// Writes a sampler descriptor into a free slot of the sampler heap.
     pub fn create_sampler(&mut self, desc: &SamplerDesc) -> Result<Handle> {
+        self.create_sampler_with(desc, &SamplerExtra::default())
+    }
+
+    /// Like [`Gpu::create_sampler`], with control over mip levels, the level
+    /// of detail, anisotropy, the third address mode and the border colour.
+    pub fn create_sampler_with(
+        &mut self,
+        desc: &SamplerDesc,
+        extra: &SamplerExtra,
+    ) -> Result<Handle> {
         self.alive()?;
         let filter = |f| match f {
             Filter::Nearest => vk::Filter::NEAREST,
@@ -1228,20 +1649,80 @@ impl Gpu {
             AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
             AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
             AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
+            AddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
         };
+        let limits = &self.ctx().limits;
+        if !extra.lod_min.is_finite()
+            || !extra.lod_max.is_finite()
+            || extra.lod_min < 0.0
+            || extra.lod_max < extra.lod_min
+        {
+            bail!(
+                InvalidArgument,
+                "the level-of-detail range {}..{} is not valid",
+                extra.lod_min,
+                extra.lod_max
+            );
+        }
+        if !extra.lod_bias.is_finite() || extra.lod_bias.abs() > limits.max_sampler_lod_bias {
+            bail!(
+                InvalidArgument,
+                "lod_bias {} is outside ±{}",
+                extra.lod_bias,
+                limits.max_sampler_lod_bias
+            );
+        }
+        if !extra.anisotropy.is_finite() || extra.anisotropy < 1.0 {
+            bail!(
+                InvalidArgument,
+                "anisotropy must be at least 1, got {}",
+                extra.anisotropy
+            );
+        }
+        let anisotropic = extra.anisotropy > 1.0;
+        if anisotropic && !self.ctx().optional.sampler_anisotropy {
+            bail!(
+                Unsupported,
+                "this device does not support anisotropic filtering"
+            );
+        }
         let info = vk::SamplerCreateInfo::default()
             .mag_filter(filter(desc.mag))
             .min_filter(filter(desc.min))
-            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .mipmap_mode(match extra.mip {
+                Filter::Nearest => vk::SamplerMipmapMode::NEAREST,
+                Filter::Linear => vk::SamplerMipmapMode::LINEAR,
+            })
             .address_mode_u(address(desc.address_u))
             .address_mode_v(address(desc.address_v))
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .min_lod(0.0)
-            .max_lod(0.0);
+            .address_mode_w(address(extra.address_w))
+            .mip_lod_bias(extra.lod_bias)
+            .anisotropy_enable(anisotropic)
+            .max_anisotropy(extra.anisotropy.min(limits.max_sampler_anisotropy).max(1.0))
+            .border_color(match extra.border {
+                BorderColor::TransparentBlack => vk::BorderColor::FLOAT_TRANSPARENT_BLACK,
+                BorderColor::OpaqueBlack => vk::BorderColor::FLOAT_OPAQUE_BLACK,
+                BorderColor::OpaqueWhite => vk::BorderColor::FLOAT_OPAQUE_WHITE,
+            })
+            .min_lod(extra.lod_min)
+            .max_lod(extra.lod_max.min(vk::LOD_CLAMP_NONE));
+        let info = match extra.compare {
+            Some(op) => info.compare_enable(true).compare_op(compare_op(op)),
+            None => info,
+        };
+        let border =
+            [desc.address_u, desc.address_v, extra.address_w].contains(&AddressMode::ClampToBorder);
         let handle = self
             .samplers
             .insert(SamplerSlot {
-                filtering: desc.mag == Filter::Linear || desc.min == Filter::Linear,
+                // Anisotropic filtering is a linear filter as far as the
+                // format's capabilities are concerned.
+                filtering: desc.mag == Filter::Linear
+                    || desc.min == Filter::Linear
+                    || extra.mip == Filter::Linear
+                    || anisotropic,
+                border,
+                compare: extra.compare.is_some(),
             })
             .map_err(|(_, e)| e)?;
         let ctx = self.ctx();
@@ -1269,8 +1750,174 @@ impl Gpu {
     // ----- pipelines --------------------------------------------------------
 
     pub fn create_render_pipeline(&mut self, desc: &RenderPipelineDesc) -> Result<Handle> {
+        self.create_render_pipeline_with(desc, &PipelineExtra::default())
+    }
+
+    /// Like [`Gpu::create_render_pipeline`], with a depth attachment, a
+    /// choice of the front face, or multisampling.
+    ///
+    /// The driver compiles the shaders here, which takes tens of
+    /// milliseconds. [`Gpu::prepare_render_pipeline`] does that part on
+    /// another thread.
+    pub fn create_render_pipeline_with(
+        &mut self,
+        desc: &RenderPipelineDesc,
+        extra: &PipelineExtra,
+    ) -> Result<Handle> {
+        let plan = self.plan_render_pipeline(desc, extra)?;
+        let vs = self.shaders.get(desc.vertex)?;
+        let fs = self.shaders.get(desc.fragment)?;
+        // SAFETY: every part of the create info was validated by the plan
+        // against the device limits, the format capabilities and the shader
+        // interfaces.
+        let pipeline = unsafe {
+            build_render_pipeline(
+                &self.ctx().device,
+                HeapStrides::of(self.ctx()),
+                desc,
+                extra,
+                vs.stage(),
+                fs.stage(),
+                &plan.common.bindings,
+            )
+        };
+        match pipeline {
+            Ok(pipeline) => self.insert_render_pipeline(plan, pipeline),
+            Err(e) => Err(self.note_loss(e)),
+        }
+    }
+
+    /// Checks a pipeline description now and leaves the slow part, the
+    /// driver's compilation of the shaders, to a job that runs on another
+    /// thread.
+    ///
+    /// Errors in the description come back here, at once. Run the job
+    /// anywhere ([`PipelineJob::run`]); ask for the pipeline with
+    /// [`Gpu::finish_render_pipeline`]. The job has its own copy of the
+    /// shaders, so they may be destroyed meanwhile. A pending pipeline
+    /// counts towards the limit on pipelines. It is not an object yet:
+    /// [`Gpu::destroy_all`] leaves it alone.
+    pub fn prepare_render_pipeline(
+        &mut self,
+        desc: &RenderPipelineDesc,
+        extra: &PipelineExtra,
+    ) -> Result<(PendingPipeline, PipelineJob)> {
+        let plan = self.plan_render_pipeline(desc, extra)?;
+        let vs = self.shaders.get(desc.vertex)?;
+        let fs = self.shaders.get(desc.fragment)?;
+        let ticket = self.next_ticket;
+        self.next_ticket += 1;
+        let job = PipelineJob::new(Inner {
+            ticket,
+            shared: std::sync::Arc::clone(&self.background),
+            device: self.ctx().device.clone(),
+            strides: HeapStrides::of(self.ctx()),
+            desc: desc.clone(),
+            extra: *extra,
+            vertex: vs.stage().into(),
+            fragment: fs.stage().into(),
+            bindings: plan.common.bindings.clone(),
+        });
+        self.pending_pipelines.insert(ticket, plan);
+        let pending = PendingPipeline {
+            ticket,
+            owner: std::sync::Arc::clone(&self.background),
+        };
+        Ok((pending, job))
+    }
+
+    /// [`Gpu::prepare_render_pipeline`], with the job run on a thread
+    /// started for it.
+    pub fn create_render_pipeline_in_background(
+        &mut self,
+        desc: &RenderPipelineDesc,
+        extra: &PipelineExtra,
+    ) -> Result<PendingPipeline> {
+        let (pending, job) = self.prepare_render_pipeline(desc, extra)?;
+        let spawned = std::thread::Builder::new()
+            .name("pipeline-build".into())
+            .spawn(move || job.run());
+        if let Err(e) = spawned {
+            // The job went with the closure; its result is an error.
+            self.cancel_render_pipeline(pending);
+            bail!(
+                Internal,
+                "cannot start the thread that builds the pipeline: {e}"
+            );
+        }
+        Ok(pending)
+    }
+
+    /// The pipeline of a pending one: `None` while its job has not finished,
+    /// then the handle (once: the pending pipeline is used up) or the error
+    /// of the build. On a lost device it fails like every other creation
+    /// and the pipeline stays pending (cancel it, or drop the `Gpu`).
+    pub fn finish_render_pipeline(&mut self, pending: &PendingPipeline) -> Result<Option<Handle>> {
+        if !std::sync::Arc::ptr_eq(&pending.owner, &self.background)
+            || !self.pending_pipelines.contains_key(&pending.ticket)
+        {
+            bail!(
+                InvalidHandle,
+                "{pending:?} is not pending on this device (it was finished or cancelled, or belongs to another device)"
+            );
+        }
         self.alive()?;
-        if self.render_pipelines.live() >= self.render_pipelines.capacity() {
+        let Some(result) = self.background.take(pending.ticket) else {
+            return Ok(None);
+        };
+        let plan = self
+            .pending_pipelines
+            .remove(&pending.ticket)
+            .expect("checked above");
+        match result {
+            Ok(pipeline) => self.insert_render_pipeline(plan, pipeline).map(Some),
+            Err(e) => Err(self.note_loss(e)),
+        }
+    }
+
+    /// Gives up on a pending pipeline. Its job may still run to the end;
+    /// what it builds is destroyed.
+    pub fn cancel_render_pipeline(&mut self, pending: PendingPipeline) {
+        if !std::sync::Arc::ptr_eq(&pending.owner, &self.background)
+            || self.pending_pipelines.remove(&pending.ticket).is_none()
+        {
+            return;
+        }
+        if let Some(pipeline) = self.background.cancel(pending.ticket) {
+            self.retire(Garbage::Pipeline(pipeline));
+        }
+    }
+
+    /// How many pipelines are pending.
+    pub fn pending_pipelines(&self) -> usize {
+        self.pending_pipelines.len()
+    }
+
+    fn insert_render_pipeline(
+        &mut self,
+        mut plan: RenderPipeline,
+        pipeline: vk::Pipeline,
+    ) -> Result<Handle> {
+        plan.common.vk = pipeline;
+        match self.render_pipelines.insert(plan) {
+            Ok(handle) => Ok(handle),
+            Err((p, e)) => {
+                self.retire(Garbage::Pipeline(p.common.vk));
+                Err(e)
+            }
+        }
+    }
+
+    /// Checks a pipeline description against the device and the shaders, and
+    /// returns everything of the pipeline but its Vulkan object.
+    fn plan_render_pipeline(
+        &self,
+        desc: &RenderPipelineDesc,
+        extra: &PipelineExtra,
+    ) -> Result<RenderPipeline> {
+        self.alive()?;
+        let pipelines = self.render_pipelines.live() as usize + self.pending_pipelines.len();
+        if pipelines >= self.render_pipelines.capacity() as usize {
             bail!(
                 LimitExceeded,
                 "too many pipelines (limit {})",
@@ -1296,12 +1943,74 @@ impl Gpu {
 
         // Color targets against the device and the fragment outputs.
         let max_targets = MAX_COLOR_TARGETS.min(self.ctx().limits.max_color_attachments as usize);
-        if desc.targets.is_empty() || desc.targets.len() > max_targets {
+        if desc.targets.len() > max_targets {
             bail!(
                 InvalidArgument,
-                "a pipeline needs 1..={max_targets} color targets, got {}",
+                "a pipeline has at most {max_targets} color targets, got {}",
                 desc.targets.len()
             );
+        }
+        if desc.targets.is_empty() && extra.depth.is_none() {
+            bail!(
+                InvalidArgument,
+                "a pipeline needs a color target or a depth attachment"
+            );
+        }
+        if !self.ctx().optional.independent_blend
+            && desc
+                .targets
+                .iter()
+                .any(|t| t.blend != desc.targets[0].blend)
+        {
+            bail!(
+                Unsupported,
+                "this device needs the same blend state on every color target"
+            );
+        }
+        if !matches!(extra.samples, 1 | 2 | 4 | 8) {
+            bail!(
+                InvalidArgument,
+                "samples must be 1, 2, 4 or 8, got {}",
+                extra.samples
+            );
+        }
+        let limits = &self.ctx().limits;
+        let mut sample_counts = u32::MAX;
+        if !desc.targets.is_empty() {
+            sample_counts &= limits.color_sample_counts;
+        }
+        if extra.depth.is_some() {
+            sample_counts &= limits.depth_sample_counts;
+        }
+        if sample_counts & extra.samples == 0 {
+            bail!(
+                Unsupported,
+                "this device does not render with {} samples",
+                extra.samples
+            );
+        }
+        if let Some(depth) = &extra.depth {
+            if !depth.format.is_depth() || !self.format_caps(depth.format).depth_attachment {
+                bail!(
+                    Unsupported,
+                    "{} cannot be a depth attachment on this device",
+                    depth.format.name()
+                );
+            }
+            if let Some(bias) = &depth.bias {
+                if ![bias.constant, bias.slope, bias.clamp]
+                    .iter()
+                    .all(|v| v.is_finite())
+                {
+                    bail!(InvalidArgument, "the depth bias is not finite");
+                }
+                if bias.clamp != 0.0 && !self.ctx().optional.depth_bias_clamp {
+                    bail!(
+                        Unsupported,
+                        "this device does not support a depth bias clamp"
+                    );
+                }
+            }
         }
         for (i, target) in desc.targets.iter().enumerate() {
             let caps = self.format_caps(target.format);
@@ -1339,6 +2048,22 @@ impl Gpu {
                     target.format.class()
                 );
             }
+        }
+
+        // An output that no target receives is a mistake more often than an
+        // intention, and the validation layer warns about it.
+        if let Some(output) = fs
+            .reflection
+            .outputs
+            .iter()
+            .find(|o| o.location as usize >= desc.targets.len())
+        {
+            bail!(
+                ShaderInterface,
+                "the fragment shader writes location {} but the pipeline has {} color target(s)",
+                output.location,
+                desc.targets.len()
+            );
         }
 
         // Vertex buffers against the device limits and the vertex inputs.
@@ -1437,6 +2162,7 @@ impl Gpu {
 
         let (bindings, push_user_size, push_total_size, sampling_pairs) =
             self.merge_interfaces(&[&vs.reflection, &fs.reflection])?;
+        let comparison_pairs = merge_comparisons(&[&vs.reflection, &fs.reflection], &bindings)?;
         for b in &bindings {
             let writable = match b.kind {
                 BindingKind::StorageTexture { .. } => true,
@@ -1453,31 +2179,20 @@ impl Gpu {
             }
         }
 
-        let color_formats: Vec<Format> = desc.targets.iter().map(|t| t.format).collect();
-        // SAFETY: every part of the create info was validated above against the
-        // device limits, the format capabilities and the shader interfaces.
-        let pipeline = unsafe { self.build_render_pipeline(desc, vs, fs, &bindings) };
-        let pipeline = match pipeline {
-            Ok(p) => p,
-            Err(e) => return Err(self.note_loss(e)),
-        };
-        match self.render_pipelines.insert(RenderPipeline {
+        Ok(RenderPipeline {
             common: PipelineCommon {
-                vk: pipeline,
+                vk: vk::Pipeline::null(),
                 bindings,
                 push_user_size,
                 push_total_size,
                 sampling_pairs,
+                comparison_pairs,
             },
-            color_formats,
+            color_formats: desc.targets.iter().map(|t| t.format).collect(),
+            depth_format: extra.depth.map(|d| d.format),
+            samples: extra.samples,
             vertex_buffers: requirements,
-        }) {
-            Ok(handle) => Ok(handle),
-            Err((p, e)) => {
-                self.retire(Garbage::Pipeline(p.common.vk));
-                Err(e)
-            }
-        }
+        })
     }
 
     pub fn create_compute_pipeline(&mut self, shader: Handle) -> Result<Handle> {
@@ -1499,6 +2214,7 @@ impl Gpu {
         }
         let (bindings, push_user_size, push_total_size, sampling_pairs) =
             self.merge_interfaces(&[&cs.reflection])?;
+        let comparison_pairs = merge_comparisons(&[&cs.reflection], &bindings)?;
         for b in &bindings {
             if let BindingKind::StorageTexture { format, .. } = b.kind
                 && !self.format_caps(format).storage
@@ -1523,7 +2239,7 @@ impl Gpu {
             match module {
                 Err(e) => Err(e),
                 Ok(module) => {
-                    let mappings = stage_mappings(ctx, &cs.reflection, &bindings);
+                    let mappings = stage_mappings(HeapStrides::of(ctx), &cs.reflection, &bindings);
                     let mut mapping_info =
                         vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default()
                             .mappings(&mappings);
@@ -1543,7 +2259,7 @@ impl Gpu {
                         None,
                     );
                     ctx.device.destroy_shader_module(module, None);
-                    take_pipeline(ctx, result)
+                    take_pipeline(&ctx.device, result)
                 }
             }
         };
@@ -1558,6 +2274,7 @@ impl Gpu {
                 push_user_size,
                 push_total_size,
                 sampling_pairs,
+                comparison_pairs,
             },
         }) {
             Ok(handle) => Ok(handle),
@@ -1629,158 +2346,14 @@ impl Gpu {
                 "push data needs {push_total_size} bytes ({push_user_size} for the shader's block, 4 per binding); the device allows {max}"
             );
         }
-        Ok((bindings, push_user_size, push_total_size, sampling_pairs))
-    }
-
-    /// # Safety
-    ///
-    /// `desc`, `vs` and `fs` must have passed the checks in
-    /// [`Gpu::create_render_pipeline`].
-    unsafe fn build_render_pipeline(
-        &self,
-        desc: &RenderPipelineDesc,
-        vs: &Shader,
-        fs: &Shader,
-        bindings: &[PipelineBinding],
-    ) -> Result<vk::Pipeline> {
-        let ctx = self.ctx();
-        // SAFETY: guaranteed by the caller.
-        unsafe {
-            let vs_module = ctx
-                .device
-                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&vs.spirv), None)
-                .map_err(|e| vk_error("create shader module", e))?;
-            let fs_module = match ctx
-                .device
-                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&fs.spirv), None)
-            {
-                Ok(m) => m,
-                Err(e) => {
-                    ctx.device.destroy_shader_module(vs_module, None);
-                    return Err(vk_error("create shader module", e));
-                }
-            };
-            let vs_mappings = stage_mappings(ctx, &vs.reflection, bindings);
-            let fs_mappings = stage_mappings(ctx, &fs.reflection, bindings);
-            let mut vs_mapping_info =
-                vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&vs_mappings);
-            let mut fs_mapping_info =
-                vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&fs_mappings);
-            let stages = [
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlagBits::VERTEX)
-                    .module(vs_module)
-                    .name(&vs.entry)
-                    .push_next(&mut vs_mapping_info),
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlagBits::FRAGMENT)
-                    .module(fs_module)
-                    .name(&fs.entry)
-                    .push_next(&mut fs_mapping_info),
-            ];
-
-            let vertex_bindings: Vec<_> = desc
-                .vertex_buffers
-                .iter()
-                .enumerate()
-                .map(|(i, layout)| {
-                    vk::VertexInputBindingDescription::default()
-                        .binding(i as u32)
-                        .stride(layout.stride)
-                        .input_rate(if layout.per_instance {
-                            vk::VertexInputRate::INSTANCE
-                        } else {
-                            vk::VertexInputRate::VERTEX
-                        })
-                })
-                .collect();
-            let vertex_attributes: Vec<_> = desc
-                .vertex_buffers
-                .iter()
-                .enumerate()
-                .flat_map(|(i, layout)| {
-                    layout.attributes.iter().map(move |a| {
-                        vk::VertexInputAttributeDescription::default()
-                            .location(a.location)
-                            .binding(i as u32)
-                            .format(a.format.vk())
-                            .offset(a.offset)
-                    })
-                })
-                .collect();
-            let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-                .vertex_binding_descriptions(&vertex_bindings)
-                .vertex_attribute_descriptions(&vertex_attributes);
-            let input_assembly =
-                vk::PipelineInputAssemblyStateCreateInfo::default().topology(match desc.topology {
-                    Topology::TriangleList => vk::PrimitiveTopology::TRIANGLE_LIST,
-                    Topology::TriangleStrip => vk::PrimitiveTopology::TRIANGLE_STRIP,
-                });
-            let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-                .viewport_count(1)
-                .scissor_count(1);
-            let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
-                .polygon_mode(vk::PolygonMode::FILL)
-                .cull_mode(match desc.cull {
-                    CullMode::None => vk::CullModeFlags::NONE,
-                    CullMode::Front => vk::CullModeFlags::FRONT,
-                    CullMode::Back => vk::CullModeFlags::BACK,
-                })
-                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-                .line_width(1.0);
-            let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-                .rasterization_samples(vk::SampleCountFlagBits::_1);
-            let blend_attachments: Vec<_> = desc
-                .targets
-                .iter()
-                .map(|t| {
-                    let state = vk::PipelineColorBlendAttachmentState::default().color_write_mask(
-                        vk::ColorComponentFlagBits::R
-                            | vk::ColorComponentFlagBits::G
-                            | vk::ColorComponentFlagBits::B
-                            | vk::ColorComponentFlagBits::A,
-                    );
-                    match t.blend {
-                        None => state,
-                        Some(b) => state
-                            .blend_enable(true)
-                            .src_color_blend_factor(blend_factor(b.src_color))
-                            .dst_color_blend_factor(blend_factor(b.dst_color))
-                            .color_blend_op(blend_op(b.color_op))
-                            .src_alpha_blend_factor(blend_factor(b.src_alpha))
-                            .dst_alpha_blend_factor(blend_factor(b.dst_alpha))
-                            .alpha_blend_op(blend_op(b.alpha_op)),
-                    }
-                })
-                .collect();
-            let color_blend =
-                vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
-            let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-            let dynamic =
-                vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-            let color_formats: Vec<_> = desc.targets.iter().map(|t| t.format.vk()).collect();
-            let mut rendering =
-                vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
-            let mut flags = vk::PipelineCreateFlags2CreateInfo::default()
-                .flags(vk::PipelineCreateFlags2::DESCRIPTOR_HEAP_EXT);
-            let info = vk::GraphicsPipelineCreateInfo::default()
-                .stages(&stages)
-                .vertex_input_state(&vertex_input)
-                .input_assembly_state(&input_assembly)
-                .viewport_state(&viewport_state)
-                .rasterization_state(&rasterization)
-                .multisample_state(&multisample)
-                .color_blend_state(&color_blend)
-                .dynamic_state(&dynamic)
-                .push_next(&mut flags)
-                .push_next(&mut rendering);
-            let result =
-                ctx.device
-                    .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None);
-            ctx.device.destroy_shader_module(fs_module, None);
-            ctx.device.destroy_shader_module(vs_module, None);
-            take_pipeline(ctx, result)
+        let capacity = crate::record::PUSH_CAPACITY;
+        if push_user_size as usize > capacity {
+            bail!(
+                LimitExceeded,
+                "the shader's push block is {push_user_size} bytes; the limit is {capacity}"
+            );
         }
+        Ok((bindings, push_user_size, push_total_size, sampling_pairs))
     }
 
     // ----- destruction ------------------------------------------------------
@@ -1807,7 +2380,7 @@ impl Gpu {
                 self.images.release_index(handle.index());
                 self.retire(Garbage::Image {
                     vk: i.vk,
-                    view: i.view,
+                    views: i.views,
                     memory: i.memory,
                     bytes: i.bytes,
                 });
@@ -1868,6 +2441,11 @@ impl Gpu {
     /// Host-side helper for tests and screenshots. Not callable while a frame
     /// is being recorded. Blocks until the GPU is idle.
     pub fn read_image(&mut self, image: Handle) -> Result<Vec<u8>> {
+        self.read_image_level(image, Subresource::default())
+    }
+
+    /// Like [`Gpu::read_image`], for one mip level of one layer.
+    pub fn read_image_level(&mut self, image: Handle, sub: Subresource) -> Result<Vec<u8>> {
         self.alive()?;
         if self.recording {
             bail!(
@@ -1876,7 +2454,7 @@ impl Gpu {
             );
         }
         self.wait_idle()?;
-        let (vk_image, layout, rest, width, height, bytes) = {
+        let (vk_image, layout, rest, extent, bytes, full, layers) = {
             let i = self.images.get(image)?;
             if !i.usage.contains(ImageUsage::COPY_SRC) {
                 bail!(
@@ -1884,7 +2462,16 @@ impl Gpu {
                     "{image:?} was not created with usage `copy_src`"
                 );
             }
-            (i.vk, i.layout, i.rest, i.width, i.height, i.bytes)
+            i.check_sub(sub, image)?;
+            (
+                i.vk,
+                i.layout,
+                i.rest,
+                i.level_extent(sub.mip),
+                i.level_bytes(sub.mip),
+                i.full_range(),
+                i.sub_layers(sub),
+            )
         };
         let timeout = self.config.gpu_timeout.as_nanos().min(u128::from(u64::MAX)) as u64;
         let (util_pool, util_cb, util_fence) = (self.util_pool, self.util_cb, self.util_fence);
@@ -1937,15 +2524,16 @@ impl Gpu {
                     &device,
                     util_cb,
                     vk_image,
+                    full,
                     layout,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 );
                 let regions = [vk::BufferImageCopy2::default()
-                    .image_subresource(COLOR_LAYERS)
+                    .image_subresource(layers)
                     .image_extent(vk::Extent3D {
-                        width,
-                        height,
-                        depth: 1,
+                        width: extent.0,
+                        height: extent.1,
+                        depth: extent.2,
                     })];
                 device.cmd_copy_image_to_buffer2(
                     util_cb,
@@ -1959,6 +2547,7 @@ impl Gpu {
                     &device,
                     util_cb,
                     vk_image,
+                    full,
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     rest,
                 );
@@ -2019,8 +2608,186 @@ impl Gpu {
     }
 }
 
+/// Creates the Vulkan pipeline of a plan. Needs the device and nothing else
+/// of the `Gpu`, so it can run on any thread.
+///
+/// # Safety
+///
+/// `desc`, `extra`, `vs`, `fs` and `bindings` must have passed the checks of
+/// `Gpu::plan_render_pipeline` on the device, and the device must stay alive
+/// for the call.
+pub(crate) unsafe fn build_render_pipeline(
+    device: &vulkan::Device,
+    strides: HeapStrides,
+    desc: &RenderPipelineDesc,
+    extra: &PipelineExtra,
+    vs: StageRef<'_>,
+    fs: StageRef<'_>,
+    bindings: &[PipelineBinding],
+) -> Result<vk::Pipeline> {
+    // SAFETY: guaranteed by the caller.
+    unsafe {
+        let vs_module = device
+            .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(vs.spirv), None)
+            .map_err(|e| vk_error("create shader module", e))?;
+        let fs_module = match device
+            .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(fs.spirv), None)
+        {
+            Ok(m) => m,
+            Err(e) => {
+                device.destroy_shader_module(vs_module, None);
+                return Err(vk_error("create shader module", e));
+            }
+        };
+        let vs_mappings = stage_mappings(strides, vs.reflection, bindings);
+        let fs_mappings = stage_mappings(strides, fs.reflection, bindings);
+        let mut vs_mapping_info =
+            vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&vs_mappings);
+        let mut fs_mapping_info =
+            vk::ShaderDescriptorSetAndBindingMappingInfoEXT::default().mappings(&fs_mappings);
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlagBits::VERTEX)
+                .module(vs_module)
+                .name(vs.entry)
+                .push_next(&mut vs_mapping_info),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlagBits::FRAGMENT)
+                .module(fs_module)
+                .name(fs.entry)
+                .push_next(&mut fs_mapping_info),
+        ];
+
+        let vertex_bindings: Vec<_> = desc
+            .vertex_buffers
+            .iter()
+            .enumerate()
+            .map(|(i, layout)| {
+                vk::VertexInputBindingDescription::default()
+                    .binding(i as u32)
+                    .stride(layout.stride)
+                    .input_rate(if layout.per_instance {
+                        vk::VertexInputRate::INSTANCE
+                    } else {
+                        vk::VertexInputRate::VERTEX
+                    })
+            })
+            .collect();
+        let vertex_attributes: Vec<_> = desc
+            .vertex_buffers
+            .iter()
+            .enumerate()
+            .flat_map(|(i, layout)| {
+                layout.attributes.iter().map(move |a| {
+                    vk::VertexInputAttributeDescription::default()
+                        .location(a.location)
+                        .binding(i as u32)
+                        .format(a.format.vk())
+                        .offset(a.offset)
+                })
+            })
+            .collect();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&vertex_bindings)
+            .vertex_attribute_descriptions(&vertex_attributes);
+        let input_assembly =
+            vk::PipelineInputAssemblyStateCreateInfo::default().topology(match desc.topology {
+                Topology::TriangleList => vk::PrimitiveTopology::TRIANGLE_LIST,
+                Topology::TriangleStrip => vk::PrimitiveTopology::TRIANGLE_STRIP,
+            });
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(match desc.cull {
+                CullMode::None => vk::CullModeFlags::NONE,
+                CullMode::Front => vk::CullModeFlags::FRONT,
+                CullMode::Back => vk::CullModeFlags::BACK,
+            })
+            .front_face(match extra.front_face {
+                FrontFace::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
+                FrontFace::Clockwise => vk::FrontFace::CLOCKWISE,
+            })
+            .line_width(1.0);
+        let bias = extra.depth.and_then(|d| d.bias);
+        let rasterization = match bias {
+            Some(bias) => rasterization
+                .depth_bias_enable(true)
+                .depth_bias_constant_factor(bias.constant)
+                .depth_bias_slope_factor(bias.slope)
+                .depth_bias_clamp(bias.clamp),
+            None => rasterization,
+        };
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlagBits::from_raw(extra.samples));
+        let depth_stencil = match &extra.depth {
+            Some(depth) => vk::PipelineDepthStencilStateCreateInfo::default()
+                .depth_test_enable(depth.test)
+                .depth_write_enable(depth.write)
+                .depth_compare_op(compare_op(depth.compare))
+                .min_depth_bounds(0.0)
+                .max_depth_bounds(1.0),
+            None => vk::PipelineDepthStencilStateCreateInfo::default(),
+        };
+        let blend_attachments: Vec<_> = desc
+            .targets
+            .iter()
+            .map(|t| {
+                let state = vk::PipelineColorBlendAttachmentState::default().color_write_mask(
+                    vk::ColorComponentFlagBits::R
+                        | vk::ColorComponentFlagBits::G
+                        | vk::ColorComponentFlagBits::B
+                        | vk::ColorComponentFlagBits::A,
+                );
+                match t.blend {
+                    None => state,
+                    Some(b) => state
+                        .blend_enable(true)
+                        .src_color_blend_factor(blend_factor(b.src_color))
+                        .dst_color_blend_factor(blend_factor(b.dst_color))
+                        .color_blend_op(blend_op(b.color_op))
+                        .src_alpha_blend_factor(blend_factor(b.src_alpha))
+                        .dst_alpha_blend_factor(blend_factor(b.dst_alpha))
+                        .alpha_blend_op(blend_op(b.alpha_op)),
+                }
+            })
+            .collect();
+        let color_blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachments);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let color_formats: Vec<_> = desc.targets.iter().map(|t| t.format.vk()).collect();
+        let mut rendering = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_formats)
+            .depth_attachment_format(extra.depth.map_or(vk::Format::UNDEFINED, |d| d.format.vk()));
+        let mut flags = vk::PipelineCreateFlags2CreateInfo::default()
+            .flags(vk::PipelineCreateFlags2::DESCRIPTOR_HEAP_EXT);
+        let info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterization)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blend)
+            .dynamic_state(&dynamic)
+            .push_next(&mut flags)
+            .push_next(&mut rendering);
+        let result = device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None);
+        device.destroy_shader_module(fs_module, None);
+        device.destroy_shader_module(vs_module, None);
+        take_pipeline(device, result)
+    }
+}
+
 impl Drop for Gpu {
     fn drop(&mut self) {
+        // No job may be inside the driver when the device goes away. A device
+        // that hangs is not waited for: it is leaked below, so a job that
+        // finishes later still has a device.
+        let unclaimed = self.background.close(!self.hung);
         let Some(ctx) = self.ctx.take() else {
             return;
         };
@@ -2039,6 +2806,10 @@ impl Drop for Gpu {
             self.completed_serial = u64::MAX;
             self.recording = false;
             self.collect_garbage();
+            // Pipelines that were built in the background and never taken.
+            for pipeline in unclaimed {
+                self.ctx().device.destroy_pipeline(pipeline, None);
+            }
             for handle_kind in 0..7 {
                 let garbage: Vec<Garbage> = match handle_kind {
                     0 => self
@@ -2057,7 +2828,7 @@ impl Drop for Gpu {
                         .into_iter()
                         .map(|i| Garbage::Image {
                             vk: i.vk,
-                            view: i.view,
+                            views: i.views,
                             memory: i.memory,
                             bytes: i.bytes,
                         })
@@ -2100,12 +2871,160 @@ pub(crate) const COLOR_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRa
     layer_count: 1,
 };
 
-pub(crate) const COLOR_LAYERS: vk::ImageSubresourceLayers = vk::ImageSubresourceLayers {
-    aspect_mask: vk::ImageAspectFlags::COLOR,
-    mip_level: 0,
-    base_array_layer: 0,
-    layer_count: 1,
-};
+/// The texture and sampler pairs the stages of a pipeline use for depth
+/// comparisons. A pair has to be used the same way in every stage, and the
+/// texture cannot be an array of textures.
+fn merge_comparisons(
+    stages: &[&Reflection],
+    bindings: &[PipelineBinding],
+) -> Result<Vec<(u32, u32)>> {
+    let mut compared: Vec<(u32, u32)> = Vec::new();
+    for reflection in stages {
+        for pair in &reflection.comparison_pairs {
+            if !compared.contains(pair) {
+                compared.push(*pair);
+            }
+        }
+    }
+    for reflection in stages {
+        for pair in &reflection.sampling_pairs {
+            if compared.contains(pair) && !reflection.comparison_pairs.contains(pair) {
+                bail!(
+                    ShaderInterface,
+                    "the texture at binding {} and the sampler at binding {} are used for comparisons in one stage and for plain reads in another",
+                    pair.0,
+                    pair.1
+                );
+            }
+        }
+    }
+    for (texture, _) in &compared {
+        let array = bindings
+            .iter()
+            .any(|b| b.binding == *texture && matches!(b.kind, BindingKind::TextureArray { .. }));
+        if array {
+            bail!(
+                Unsupported,
+                "binding {texture}: comparisons on an array of textures are not supported"
+            );
+        }
+    }
+    Ok(compared)
+}
+
+/// Image usages with what the format has to support for each, the Vulkan
+/// flag, and the name scripts use.
+fn usage_table(caps: &FormatCaps) -> [(ImageUsage, bool, vk::ImageUsageFlags, &'static str); 6] {
+    [
+        (
+            ImageUsage::SAMPLED,
+            caps.sampled,
+            vk::ImageUsageFlags::SAMPLED,
+            "sampled",
+        ),
+        (
+            ImageUsage::COLOR_TARGET,
+            caps.color_attachment,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            "color_target",
+        ),
+        (
+            ImageUsage::DEPTH_TARGET,
+            caps.depth_attachment,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            "depth_target",
+        ),
+        (
+            ImageUsage::STORAGE,
+            caps.storage,
+            vk::ImageUsageFlags::STORAGE,
+            "storage",
+        ),
+        (
+            ImageUsage::COPY_SRC,
+            caps.transfer_src,
+            vk::ImageUsageFlags::TRANSFER_SRC,
+            "copy_src",
+        ),
+        (
+            ImageUsage::COPY_DST,
+            caps.transfer_dst,
+            vk::ImageUsageFlags::TRANSFER_DST,
+            "copy_dst",
+        ),
+    ]
+}
+
+/// Checks a view description against the image and fills in its defaults.
+fn resolve_view(i: &Image, image: Handle, view: &TextureView) -> Result<SlotView> {
+    let mip_count = view
+        .mip_count
+        .unwrap_or_else(|| i.mip_levels.saturating_sub(view.base_mip));
+    if mip_count == 0
+        || view
+            .base_mip
+            .checked_add(mip_count)
+            .is_none_or(|end| end > i.mip_levels)
+    {
+        bail!(
+            OutOfRange,
+            "mip levels {}+{mip_count} are outside {image:?}, which has {}",
+            view.base_mip,
+            i.mip_levels
+        );
+    }
+    let (kind, base_layer, layer_count) = match view.layer {
+        None => (i.kind, 0, i.layers),
+        Some(_) if i.kind == ImageKind::D3 => {
+            bail!(InvalidArgument, "{image:?} is a 3D image; it has no layers")
+        }
+        Some(layer) if layer >= i.layers => bail!(
+            OutOfRange,
+            "layer {layer} is outside {image:?}, which has {}",
+            i.layers
+        ),
+        Some(layer) => (ImageKind::D2, layer, 1),
+    };
+    Ok(SlotView {
+        kind,
+        base_mip: view.base_mip,
+        mip_count,
+        base_layer,
+        layer_count,
+    })
+}
+
+/// The view description of a slot, for the descriptor.
+fn view_info<'a>(i: &Image, view: &SlotView) -> vk::ImageViewCreateInfo<'a> {
+    vk::ImageViewCreateInfo::default()
+        .image(i.vk)
+        .view_type(match view.kind {
+            ImageKind::D2 => vk::ImageViewType::_2D,
+            ImageKind::D3 => vk::ImageViewType::_3D,
+            ImageKind::Cube => vk::ImageViewType::CUBE,
+        })
+        .format(i.format.vk())
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: i.format.aspect(),
+            base_mip_level: view.base_mip,
+            level_count: view.mip_count,
+            base_array_layer: view.base_layer,
+            layer_count: view.layer_count,
+        })
+}
+
+pub(crate) fn compare_op(op: CompareOp) -> vk::CompareOp {
+    match op {
+        CompareOp::Never => vk::CompareOp::NEVER,
+        CompareOp::Less => vk::CompareOp::LESS,
+        CompareOp::Equal => vk::CompareOp::EQUAL,
+        CompareOp::LessOrEqual => vk::CompareOp::LESS_OR_EQUAL,
+        CompareOp::Greater => vk::CompareOp::GREATER,
+        CompareOp::NotEqual => vk::CompareOp::NOT_EQUAL,
+        CompareOp::GreaterOrEqual => vk::CompareOp::GREATER_OR_EQUAL,
+        CompareOp::Always => vk::CompareOp::ALWAYS,
+    }
+}
 
 fn layout_sync(layout: vk::ImageLayout) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
     use vk::{AccessFlags2 as A, ImageLayout as L, PipelineStageFlags2 as S};
@@ -2119,8 +3038,13 @@ fn layout_sync(layout: vk::ImageLayout) -> (vk::PipelineStageFlags2, vk::AccessF
             S::COLOR_ATTACHMENT_OUTPUT,
             A::COLOR_ATTACHMENT_READ | A::COLOR_ATTACHMENT_WRITE,
         ),
-        L::TRANSFER_SRC_OPTIMAL => (S::COPY, A::TRANSFER_READ),
-        L::TRANSFER_DST_OPTIMAL => (S::COPY, A::TRANSFER_WRITE),
+        L::DEPTH_STENCIL_ATTACHMENT_OPTIMAL => (
+            S::EARLY_FRAGMENT_TESTS | S::LATE_FRAGMENT_TESTS,
+            A::DEPTH_STENCIL_ATTACHMENT_READ | A::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        ),
+        // Copies and scaled copies (`generate_mipmaps`).
+        L::TRANSFER_SRC_OPTIMAL => (S::COPY | S::BLIT, A::TRANSFER_READ),
+        L::TRANSFER_DST_OPTIMAL => (S::COPY | S::BLIT, A::TRANSFER_WRITE),
         _ => (S::ALL_COMMANDS, A::MEMORY_READ | A::MEMORY_WRITE),
     }
 }
@@ -2129,12 +3053,14 @@ fn layout_sync(layout: vk::ImageLayout) -> (vk::PipelineStageFlags2, vk::AccessF
 ///
 /// # Safety
 ///
-/// `cb` must be recording outside a render pass, `image` must be alive and in
-/// layout `old` at this point of the command buffer.
+/// `cb` must be recording outside a render pass, `image` must be alive, and
+/// the subresources in `range` must exist and be in layout `old` at this
+/// point of the command buffer.
 pub(crate) unsafe fn image_barrier(
     device: &vulkan::Device,
     cb: vk::CommandBuffer,
     image: vk::Image,
+    range: vk::ImageSubresourceRange,
     old: vk::ImageLayout,
     new: vk::ImageLayout,
 ) {
@@ -2148,7 +3074,7 @@ pub(crate) unsafe fn image_barrier(
         .old_layout(old)
         .new_layout(new)
         .image(image)
-        .subresource_range(COLOR_RANGE)];
+        .subresource_range(range)];
     // SAFETY: guaranteed by the caller.
     unsafe {
         device.cmd_pipeline_barrier2(
@@ -2191,7 +3117,7 @@ fn blend_op(op: BlendOp) -> vk::BlendOp {
 ///   Running on a thread with a very large stack, together with the size
 ///   limit, keeps the inputs measured so far away from that. It is a
 ///   mitigation, not a proof.
-fn run_shader_tool(
+pub(crate) fn run_shader_tool(
     what: &str,
     f: impl FnOnce() -> std::result::Result<CompiledShader, String> + Send,
 ) -> Result<CompiledShader> {
@@ -2223,7 +3149,7 @@ fn run_shader_tool(
 /// to the descriptor heaps: the heap index of binding N is the `u32` at the
 /// binding's offset in push data.
 fn stage_mappings(
-    ctx: &DeviceCtx,
+    strides: HeapStrides,
     reflection: &Reflection,
     bindings: &[PipelineBinding],
 ) -> Vec<vk::DescriptorSetAndBindingMappingEXT<'static>> {
@@ -2236,9 +3162,9 @@ fn stage_mappings(
                 .find(|m| m.binding == b.binding)
                 .expect("merged from this reflection");
             let stride = match b.kind {
-                BindingKind::Sampler => ctx.sampler_heap.stride,
-                _ => ctx.resource_heap.stride,
-            } as u32;
+                BindingKind::Sampler => strides.sampler,
+                _ => strides.resource,
+            };
             // Element `i` of a texture array lives `i` slots after the first.
             let array_stride = match b.kind {
                 BindingKind::TextureArray { .. } => stride,
@@ -2263,9 +3189,9 @@ fn stage_mappings(
 
 /// # Safety
 ///
-/// `result` must come from a pipeline creation call on `ctx.device`.
+/// `result` must come from a pipeline creation call on `device`.
 unsafe fn take_pipeline(
-    ctx: &DeviceCtx,
+    device: &vulkan::Device,
     result: std::result::Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::VkResult)>,
 ) -> Result<vk::Pipeline> {
     match result {
@@ -2277,7 +3203,7 @@ unsafe fn take_pipeline(
             for pipeline in pipelines {
                 if !pipeline.is_null() {
                     // SAFETY: the pipeline was just created and is unused.
-                    unsafe { ctx.device.destroy_pipeline(pipeline, None) };
+                    unsafe { device.destroy_pipeline(pipeline, None) };
                 }
             }
             Err(vk_error("create pipeline", e))

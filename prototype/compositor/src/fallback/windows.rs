@@ -27,6 +27,12 @@ struct Window {
     placement: Placement,
     /// The size the window is configured with. `None`: the client chooses.
     configure: Option<Size>,
+    /// Whether whoever manages the windows said the window is not seen
+    /// (see [`Windows::set_visible`]).
+    hidden: bool,
+    /// Where its popups are kept, relative to the window geometry, when
+    /// whoever edits the table said so. `None`: the output it is on.
+    popup_bounds: Option<Rect>,
 }
 
 /// See the module documentation.
@@ -41,6 +47,9 @@ pub struct Windows {
     /// Bumped by every change of placement, stacking, focus or configured
     /// size.
     revision: u64,
+    /// Windows that were removed and that whoever edits the table may not
+    /// have heard about yet (see [`Self::departed`]).
+    departed: Vec<WindowId>,
 }
 
 impl Windows {
@@ -60,6 +69,19 @@ impl Windows {
 
     pub fn contains(&self, id: WindowId) -> bool {
         self.windows.iter().any(|w| w.placement.window == id)
+    }
+
+    /// Whether a window was removed and not yet forgotten
+    /// ([`Self::forget_departed`]). A script that manages the windows keeps
+    /// its own lists and learns of a removal later than the table does:
+    /// until then its requests about the window are not mistakes.
+    pub fn departed(&self, id: WindowId) -> bool {
+        self.departed.contains(&id)
+    }
+
+    /// The removal of a window was passed on.
+    pub fn forget_departed(&mut self, id: WindowId) {
+        self.departed.retain(|departed| *departed != id);
     }
 
     /// The first output, which new windows are put on.
@@ -119,6 +141,8 @@ impl Windows {
         self.windows.push(Window {
             placement,
             configure: None,
+            hidden: false,
+            popup_bounds: None,
         });
         self.revision += 1;
         placement
@@ -131,6 +155,11 @@ impl Windows {
         self.windows.retain(|w| w.placement.window != id);
         if self.windows.len() != before {
             self.revision += 1;
+            // Bounded, for a table nobody reports removals from.
+            if self.departed.len() >= 256 {
+                self.departed.remove(0);
+            }
+            self.departed.push(id);
         }
         if self.focus == Some(id) {
             self.focus = self.windows.last().map(|w| w.placement.window);
@@ -187,6 +216,29 @@ impl Windows {
             self.revision += 1;
         }
         true
+    }
+
+    /// Sets where the popups of a window are kept (relative to its window
+    /// geometry); `None` puts it back to the output the window is on.
+    /// Returns `false` for an unknown window.
+    pub fn set_popup_bounds(&mut self, id: WindowId, bounds: Option<Rect>) -> bool {
+        let Some(window) = self.window(id) else {
+            return false;
+        };
+        if window.popup_bounds != bounds {
+            window.popup_bounds = bounds;
+            self.revision += 1;
+        }
+        true
+    }
+
+    /// Puts every window's popups back to the output it is on.
+    pub fn clear_popup_bounds(&mut self) {
+        for window in &mut self.windows {
+            if window.popup_bounds.take().is_some() {
+                self.revision += 1;
+            }
+        }
     }
 
     /// Gives the focus to a window, or to nothing, without changing the
@@ -246,6 +298,37 @@ impl Windows {
         self.windows = stack;
         if self.windows.iter().map(|w| w.placement.window).ne(before) {
             self.revision += 1;
+        }
+    }
+
+    /// Says whether a window is seen. Every window is, until it is said
+    /// otherwise; the core then holds its frame callbacks and tells its
+    /// client it is suspended. Not a change of the layout: the revision
+    /// stays. Returns `false` when the window is unknown.
+    pub fn set_visible(&mut self, id: WindowId, visible: bool) -> bool {
+        match self.window(id) {
+            Some(window) => {
+                window.hidden = !visible;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether a window is seen (see [`Self::set_visible`]). An unknown
+    /// window is.
+    pub fn is_visible(&self, id: WindowId) -> bool {
+        !self
+            .windows
+            .iter()
+            .any(|w| w.placement.window == id && w.hidden)
+    }
+
+    /// Every window is seen again: for a new script, which says again what
+    /// it hides.
+    pub fn show_all(&mut self) {
+        for window in &mut self.windows {
+            window.hidden = false;
         }
     }
 
@@ -334,8 +417,19 @@ impl WindowManager for Windows {
         }
     }
 
+    fn popup_bounds(&self, id: WindowId) -> Option<Rect> {
+        self.windows
+            .iter()
+            .find(|w| w.placement.window == id)
+            .and_then(|w| w.popup_bounds)
+    }
+
     fn take_requests(&mut self) -> Vec<WmRequest> {
         std::mem::take(&mut self.requests)
+    }
+
+    fn is_visible(&self, id: WindowId) -> bool {
+        Windows::is_visible(self, id)
     }
 }
 

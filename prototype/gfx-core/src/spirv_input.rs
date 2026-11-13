@@ -59,12 +59,24 @@ fn validate(words: &[u32]) -> Result<(), String> {
         .map_err(|e| format!("invalid SPIR-V: {e}"))
 }
 
-/// Runs steps 1 to 4 on a module received from outside. The result holds the
-/// hardened module, which is what the device gets.
+/// [`accept_spirv_with`] for a device without any optional feature.
+#[cfg(test)]
 pub(crate) fn accept_spirv(
     words: &[u32],
     stage: ShaderStage,
     entry: &str,
+) -> Result<CompiledShader, String> {
+    accept_spirv_with(words, stage, entry, &[])
+}
+
+/// Runs steps 1 to 4 on a module received from outside. The result holds the
+/// hardened module, which is what the device gets. `optional` lists the
+/// capabilities the device has beyond the ones every device has.
+pub(crate) fn accept_spirv_with(
+    words: &[u32],
+    stage: ShaderStage,
+    entry: &str,
+    optional: &[rspirv::spirv::Capability],
 ) -> Result<CompiledShader, String> {
     validate(words)?;
     let mut optimizer = spirv_tools::opt::create(Some(TargetEnv::Vulkan_1_4));
@@ -91,7 +103,7 @@ pub(crate) fn accept_spirv(
         })?;
     let hardened = hardened.as_words().to_vec();
     validate(&hardened)?;
-    let reflection = crate::spirv_check::reflect_spirv(&hardened, stage, entry)?;
+    let reflection = crate::spirv_check::reflect_spirv_with(&hardened, stage, entry, optional)?;
     Ok(CompiledShader {
         spirv: hardened,
         entry: entry.to_owned(),

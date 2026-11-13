@@ -47,6 +47,12 @@ fn main() {
         Err(e) => fail(&e.to_string()),
     };
     compiler.include_dirs.push(shaders.clone());
+    // The compositor compiles OCIO's shaders at run time. When it finds no
+    // slangc where it looks first, it tries the one it was built with.
+    println!(
+        "cargo:rustc-env=HIZUKURI_BUILD_SLANGC={}",
+        compiler.slangc.display()
+    );
 
     for (file, stage, entry) in CORE_SHADERS {
         let compiled = compiler
@@ -56,6 +62,17 @@ fn main() {
         let stem = Path::new(file).file_stem().unwrap().to_str().unwrap();
         std::fs::write(out.join(format!("{stem}.{entry}.spv")), compiled.spirv).unwrap();
     }
+
+    // The vertex stage of the OCIO pass: `OUT_DIR/ocio.vs.spv`.
+    let compiled = compiler
+        .compile(
+            Input::File(&shaders.join("ocio.slang")),
+            Stage::Vertex,
+            "vs",
+        )
+        .unwrap_or_else(|e| fail(&format!("{e}")));
+    warn(compiled.warnings.iter().map(|w| w.to_string()));
+    std::fs::write(out.join("ocio.vs.spv"), compiled.spirv).unwrap();
 
     let output = out.join("builtin-shaders");
     let built = project_shaders::build(&builtin, &output, &compiler)

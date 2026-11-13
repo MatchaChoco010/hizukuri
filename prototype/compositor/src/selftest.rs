@@ -423,7 +423,12 @@ impl SelfTest {
                         }
                     }
                     BackendEvent::QuitRequested => self.quit_requested = true,
-                    BackendEvent::Input(_) => {}
+                    BackendEvent::Input(_)
+                    | BackendEvent::Keymap(_)
+                    | BackendEvent::LogoKey(_)
+                    | BackendEvent::TextInputAvailable(_)
+                    | BackendEvent::TextCompose(_)
+                    | BackendEvent::Selection(_) => {}
                 }
             }
         }

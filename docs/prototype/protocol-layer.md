@@ -56,6 +56,7 @@
 | `zwp_input_method_manager_v2` | 1 | 入力メソッド（IME）。どのクライアントにも見せる |
 | `zwp_virtual_keyboard_manager_v1` | 1 | 仮想キーボード。どのクライアントにも見せる |
 | `xdg_activation_v1` | 1 | activate の要求を、ウィンドウ管理に渡す（下） |
+| `zwp_keyboard_shortcuts_inhibit_manager_v1` | 1 | compositor のショートカットを、focus のある表面に通す求め。求めは、すべて有効にする（`active`）。実際に通すかは、ウィンドウ管理が、キーごとに決める（`WlServer::shortcuts_inhibited`） |
 | `zwp_linux_dmabuf_v1` | 6 または 3 | `--dmabuf` で公開したときだけ（下） |
 | `wp_color_manager_v1` | 3 | parametric な image description だけ。ICC は公開しない（下） |
 
@@ -146,6 +147,10 @@ transform だけを変えて、バッファを付け直さない commit は、�
 - 中核が、ウィンドウのある出力を伝える（`set_window_outputs`）。表面は、その出力にだけ `enter` する。
   望ましい scale（`preferred_buffer_scale`、fractional-scale）は、その出力の scale になる。
 - frame callback と presentation の feedback は、ウィンドウの主な出力（一覧の最初）のフレームに合わせて送る。
+- 中核が、見えていないと伝えたウィンドウ（`set_window_visible`）には、frame callback も presentation の feedback も送らない。
+  callback は溜めておき、`send_window_frame_callbacks`（見えるようになったとき）と `send_hidden_frame_callbacks`
+  （中核が、ときどき呼ぶ）で送る。feedback は、次の commit で置き換わると discarded になり、見えるようになった後のフレームで presented になる。
+  `xdg_wm_base` を版 6 以上で使うクライアントには、`suspended` の状態を、configure で伝える。
 - まだ置かれていないウィンドウの表面は、どの出力にも入らない。カーソルと drag のアイコンの表面は、
   すべての出力にあるものとして扱う。
 - ウィンドウは、1 つの出力にだけ属する。境界をまたいで表示されていても、`enter` するのは片方だけである。
@@ -153,12 +158,18 @@ transform だけを変えて、バッファを付け直さない commit は、�
 ## popup
 
 - 位置は、positioner の求めるとおりに決める。ウィンドウごとの「popup を収める範囲」（`set_popup_bounds`。
-  中核は、ウィンドウのある出力を伝える）があれば、positioner が許す調整（flip、slide、resize）で、その中に収める。
+  中核は、ウィンドウ管理が決めた範囲か、無ければ、ウィンドウのある出力を伝える）があれば、positioner が許す調整（flip、slide、resize）で、その中に収める。
+- 範囲が変わると（ウィンドウが動いた、ウィンドウ管理が範囲を変えた）、まだ位置を伝えていない popup と、
+  reactive の popup（`xdg_positioner.set_reactive`）を、新しい範囲で置き直す。reactive の popup で、位置が変わったものには、
+  次の `flush_clients` で `xdg_popup.configure` を送る。クライアントが、最後に ack した positioner が reactive でなければ
+  （`xdg_popup.reposition` で、reactive でない positioner に替えた）、送らない。
+- `xdg_popup.reposition` には、そのときの範囲で置き直し、次の `flush_clients` で `repositioned` と configure を返す。
 - **位置は、クライアントに伝える前に、置き直せる。** popup ができると、`PopupPlacement` を出す。クライアントに
   位置を伝えるのは、次の `flush_clients` のときである。その間に、`place_popup_within`（親の座標での矩形を渡すと、
   positioner の決まりで、その中に収める）か、`set_popup_geometry`（位置を直接決める）を呼べる。
   `popup_request` で、positioner の求めた位置、anchor の矩形、許されている調整が読める。
-  ウィンドウを変形して描く側が、画面に出ている範囲に合わせて置くための口である。スクリプトへは、未接続である。
+  ウィンドウを変形して描く側が、画面に出ている範囲に合わせて置くための口である。スクリプトへは、未接続である
+  （スクリプトは、ウィンドウごとの範囲だけを決められる。[スクリプトの層](script-layer.md#popup-を収める範囲)）。
 - `xdg_popup.grab` を扱う。grab の間、キーボードは popup に向き、ポインターのイベントは、popup のクライアントにだけ届く。
   そのクライアント以外の場所を押すと、popup を閉じる（`popup_done`）。押した操作は、そのまま続く。
   タッチは grab されない。popup のクライアントの表面へのタッチは、そのまま届く。ほかのクライアントの表面か、
@@ -197,6 +208,20 @@ transform だけを変えて、バッファを付け直さない commit は、�
   そのため、覚えておいた値を返す前に、selection がまだあるかを Smithay に確かめる
   （どの source も持てない MIME type で読み出しを求めると、送らずに、「selection が無い」か「その型は無い」で失敗する）。
 
+### 呼び出し側が持つ selection
+
+- クライアントが selection を決める（消す）と、`WlEvent::Selection(SelectionEvent::Changed)` が出る（MIME type は、offer された順）。
+  持ち主が消えたときも、`Changed`（`None`）が出る（クライアントの要求を処理した後に、上の方法で確かめる）。
+- 呼び出し側は、自分が持ち主になれる（`provide_selection(kind, Some(mime_types), id)`。Smithay の `set_data_device_selection`、
+  `set_primary_selection`）。nested のバックエンドが、親の selection を中に出すのに使う。前の持ち主のクライアントは、取り消される。
+  このとき `Changed` は出ない（Smithay が `new_selection` を呼ばない）ので、外から来たものを外へ返すことにはならない。
+  クライアントが読むと、`SelectionEvent::ProvidedWanted`（`id`、MIME type、読む側の pipe）が出る（`SelectionHandler::send_selection`）。
+  pipe は、呼び出し側が、書くか、ほかの誰かに渡して、閉じる。`provide_selection(kind, None, _)` は、自分が持ち主のときだけ消す。
+- `write_selection(kind, mime_type, fd)` は、クライアントの持ち主に、`fd` に書かせる（`wl_data_source.send`。次の `flush_clients` で届く）。
+  持ち主がいなければ `NoSelection`、持ち主が呼び出し側なら `Provided`、その型が無ければ `NotOffered`。
+- 持ち主は、`selection_owner(kind)` で読める（`None`、`Client`、`Provided`）。
+- data control のクライアントが読むときも、同じ道を通る（呼び出し側が持つ selection なら `ProvidedWanted`）。
+
 ## 相対的な動きと、ポインターの制約
 
 - 相対的な動き（`zwp_relative_pointer_v1.relative_motion`）は、`pointer_relative_motion` で送る。
@@ -225,8 +250,10 @@ text-input-v3（アプリ）、input-method-v2（IME）、virtual-keyboard-v1（
   入力メソッドのクライアントがいないときは、アプリの text-input に `enter` を送らない。
 - 入力メソッドは、seat に 1 つである。2 つ目の `zwp_input_method_v2` には、`unavailable` を送る。
 - **キーボードの grab。** IME が grab している間、`keyboard_key` で渡したキーは、IME に届き、アプリには届かない。
-  中核のキーの割り当て（緊急用のキー、スクリプトの `key`）は、`keyboard_key` を呼ぶ前に、中核が見る。
-  grab より先である。
+  中核のキーの割り当て（緊急用のキー、スクリプトの `key`）は、grab より先に、中核が見る。中核は、`keyboard_key` を 2 つに分けて呼ぶ:
+  `keyboard_key_input` で、seat の keymap の状態を進め（すべてのキー。キーの keysym と文字が返る）、中核が取らなかったキーだけを、
+  `keyboard_key_forward` で、grab かキーボードの focus に渡す。取ったキーで modifier が変わったときは、次に渡すキーの前に、
+  いまの modifier を送る（grab があるときは、キーと一緒に grab に渡す）。
 - **仮想キーボードのキー。** grab を持つ IME の仮想キーボードのキーは、grab を通さずに、キーボードの focus に届く
   （grab へ戻すと、IME との間で回り続ける）。キーの前に、いまの modifier を送る（grab の間、modifier の変化は、
   grab にだけ届いているため）。IME が仮想キーボードの `modifiers` で返す modifier も、focus に送る。
@@ -250,6 +277,20 @@ text-input-v3（アプリ）、input-method-v2（IME）、virtual-keyboard-v1（
 - 入力メソッドがキーボードを grab している間に、アプリが `xdg_popup.grab` で popup（メニュー）を開くと、
   キーボードの grab は IME に残し、キーボードの focus を popup に移す。focus は、popup が閉じるまで popup に留まる。
   キーは IME を通り、IME が使わなかったキーが、仮想キーボードで popup に届く。
+- **外の入力メソッド**（nested の親の入力メソッド）。呼び出す側が、外の入力メソッドがあると伝えている間
+  （`set_outside_input_method`）、入力メソッドのクライアントがいなければ、プロトコルの層が、seat の入力メソッドになる
+  （Smithay の `set_compositor_input_method`）。アプリは、text-input の `enter` を受け、有効にできる。
+  有効な text-input と、アプリがそれに commit した状態（surrounding text、change cause、content type、表面の座標のカーソルの矩形）は、
+  `outside_text_input` で読める。外の入力メソッドが送る文字（preedit、commit、delete surrounding text）は、
+  `outside_input_method_compose` で、有効な text-input に、`done` と一緒に送る（serial は、そのアプリの commit の数。
+  外の入力メソッドが古い状態に基づいていたときは、合わない serial で送る）。
+  入力メソッドのクライアントが bind すると、そちらが優先する（アプリは text-input の `leave` と `enter` を受け、有効にし直す）。
+  いなくなると、また外の入力メソッドに戻る。
+  - Smithay は、アプリが commit した状態を、入力メソッドのクライアントにだけ渡し、自分では持たない。プロトコルの層は、
+    keyboard の focus のあるクライアントの text-input の dispatcher（wayland-server の `ObjectData`）を、要求を読んでから Smithay のものに渡すものに置き換えて、
+    状態を写し取る。Smithay が要求を扱う間だけ、Smithay の dispatcher を戻す（Smithay は、それを通して、自分の user data を探す）。
+  - Smithay は、入力メソッドのクライアントがいないとき、focus を受けた後に作られた text-input に `enter` を送らない。
+    外の入力メソッドのための間は、プロトコルの層が送る。
 - text-input-v3 の version 2（`set_cursor_rectangle` を `wl_surface.commit` に合わせる）は、扱わない
   （固定した版の Smithay が、version 1 だけを公開する）。
 
