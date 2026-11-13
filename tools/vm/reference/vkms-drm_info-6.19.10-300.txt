@@ -1,0 +1,1054 @@
+Node: /dev/dri/card1
+├───Driver: vkms (Virtual Kernel Mode Setting) version 1.0.0
+│   ├───DRM_CLIENT_CAP_STEREO_3D supported
+│   ├───DRM_CLIENT_CAP_UNIVERSAL_PLANES supported
+│   ├───DRM_CLIENT_CAP_ATOMIC supported
+│   ├───DRM_CLIENT_CAP_ASPECT_RATIO supported
+│   ├───DRM_CLIENT_CAP_WRITEBACK_CONNECTORS supported
+│   ├───DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT not supported
+│   ├───DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE supported
+│   ├───DRM_CAP_DUMB_BUFFER = 1
+│   ├───DRM_CAP_VBLANK_HIGH_CRTC = 1
+│   ├───DRM_CAP_DUMB_PREFERRED_DEPTH = 0
+│   ├───DRM_CAP_DUMB_PREFER_SHADOW = 0
+│   ├───DRM_CAP_PRIME = 3
+│   ├───DRM_CAP_TIMESTAMP_MONOTONIC = 1
+│   ├───DRM_CAP_ASYNC_PAGE_FLIP = 0
+│   ├───DRM_CAP_CURSOR_WIDTH = 512
+│   ├───DRM_CAP_CURSOR_HEIGHT = 512
+│   ├───DRM_CAP_ADDFB2_MODIFIERS = 1
+│   ├───DRM_CAP_PAGE_FLIP_TARGET = 0
+│   ├───DRM_CAP_CRTC_IN_VBLANK_EVENT = 1
+│   ├───DRM_CAP_SYNCOBJ = 0
+│   ├───DRM_CAP_SYNCOBJ_TIMELINE = 0
+│   └───DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP = 0
+├───Device: faux
+│   ├───Bus: vkms
+│   └───Available nodes: primary
+├───Framebuffer size
+│   ├───Width: [10, 8192]
+│   └───Height: [10, 8192]
+├───Connectors
+│   ├───Connector 0
+│   │   ├───Object ID: 85
+│   │   ├───Type: writeback
+│   │   ├───Status: connected
+│   │   ├───Physical size: 0×0 mm
+│   │   ├───Subpixel: unknown
+│   │   ├───Encoders: {0}
+│   │   ├───Modes
+│   │   │   ├───4096×2160@60.00 driver phsync nvsync 
+│   │   │   ├───4096×2160@59.94 driver phsync nvsync 
+│   │   │   ├───2560×1600@59.99 driver nhsync pvsync 
+│   │   │   ├───2560×1600@59.97 driver phsync nvsync 
+│   │   │   ├───1920×1440@60.00 driver nhsync pvsync 
+│   │   │   ├───1856×1392@59.99 driver nhsync pvsync 
+│   │   │   ├───1792×1344@60.00 driver nhsync pvsync 
+│   │   │   ├───2048×1152@60.00 driver phsync pvsync 
+│   │   │   ├───1920×1200@59.88 driver nhsync pvsync 
+│   │   │   ├───1920×1200@59.95 driver phsync nvsync 
+│   │   │   ├───1920×1080@60.00 driver nhsync nvsync 
+│   │   │   ├───1600×1200@60.00 driver phsync pvsync 
+│   │   │   ├───1680×1050@59.95 driver nhsync pvsync 
+│   │   │   ├───1680×1050@59.88 driver phsync nvsync 
+│   │   │   ├───1400×1050@59.98 driver nhsync pvsync 
+│   │   │   ├───1400×1050@59.95 driver phsync nvsync 
+│   │   │   ├───1600×900@60.00 driver phsync pvsync 
+│   │   │   ├───1280×1024@60.02 driver phsync pvsync 
+│   │   │   ├───1440×900@59.89 driver nhsync pvsync 
+│   │   │   ├───1440×900@59.90 driver phsync nvsync 
+│   │   │   ├───1280×960@60.00 driver phsync pvsync 
+│   │   │   ├───1366×768@59.79 driver phsync pvsync 
+│   │   │   ├───1366×768@60.00 driver phsync pvsync 
+│   │   │   ├───1360×768@60.02 driver phsync pvsync 
+│   │   │   ├───1280×800@59.81 driver nhsync pvsync 
+│   │   │   ├───1280×800@59.91 driver phsync nvsync 
+│   │   │   ├───1280×768@59.87 driver nhsync pvsync 
+│   │   │   ├───1280×768@59.99 driver phsync nvsync 
+│   │   │   ├───1280×720@60.00 driver phsync pvsync 
+│   │   │   ├───1024×768@60.00 driver nhsync nvsync 
+│   │   │   ├───800×600@60.32 driver phsync pvsync 
+│   │   │   ├───800×600@56.25 driver phsync pvsync 
+│   │   │   ├───848×480@60.00 driver phsync pvsync 
+│   │   │   └───640×480@59.94 driver nhsync nvsync 
+│   │   └───Properties
+│   │       ├───"DPMS": enum {On, Standby, Suspend, Off} = Off
+│   │       ├───"link-status": enum {Good, Bad} = Good
+│   │       ├───"non-desktop" (immutable): range [0, 1] = 0
+│   │       ├───"TILE" (immutable): blob = 0
+│   │       ├───"CRTC_ID" (atomic): object CRTC = 0
+│   │       ├───"WRITEBACK_OUT_FENCE_PTR" (atomic): range [0, UINT64_MAX] = 0
+│   │       ├───"WRITEBACK_FB_ID" (atomic): object framebuffer = 0
+│   │       └───"WRITEBACK_PIXEL_FORMATS" (atomic, immutable): blob = 89
+│   │           ├───ARGB8888 (0x34325241)
+│   │           ├───XRGB8888 (0x34325258)
+│   │           ├───ABGR8888 (0x34324241)
+│   │           ├───XRGB16161616 (0x38345258)
+│   │           ├───ARGB16161616 (0x38345241)
+│   │           └───RGB565 (0x36314752)
+│   └───Connector 1
+│       ├───Object ID: 91
+│       ├───Type: virtual
+│       ├───Status: connected
+│       ├───Physical size: 0×0 mm
+│       ├───Subpixel: unknown
+│       ├───Encoders: {1}
+│       ├───Modes
+│       │   ├───1024×768@60.00 preferred driver nhsync nvsync 
+│       │   ├───4096×2160@60.00 driver phsync nvsync 
+│       │   ├───4096×2160@59.94 driver phsync nvsync 
+│       │   ├───2560×1600@59.99 driver nhsync pvsync 
+│       │   ├───2560×1600@59.97 driver phsync nvsync 
+│       │   ├───1920×1440@60.00 driver nhsync pvsync 
+│       │   ├───1856×1392@59.99 driver nhsync pvsync 
+│       │   ├───1792×1344@60.00 driver nhsync pvsync 
+│       │   ├───2048×1152@60.00 driver phsync pvsync 
+│       │   ├───1920×1200@59.88 driver nhsync pvsync 
+│       │   ├───1920×1200@59.95 driver phsync nvsync 
+│       │   ├───1920×1080@60.00 driver nhsync nvsync 
+│       │   ├───1600×1200@60.00 driver phsync pvsync 
+│       │   ├───1680×1050@59.95 driver nhsync pvsync 
+│       │   ├───1680×1050@59.88 driver phsync nvsync 
+│       │   ├───1400×1050@59.98 driver nhsync pvsync 
+│       │   ├───1400×1050@59.95 driver phsync nvsync 
+│       │   ├───1600×900@60.00 driver phsync pvsync 
+│       │   ├───1280×1024@60.02 driver phsync pvsync 
+│       │   ├───1440×900@59.89 driver nhsync pvsync 
+│       │   ├───1440×900@59.90 driver phsync nvsync 
+│       │   ├───1280×960@60.00 driver phsync pvsync 
+│       │   ├───1366×768@59.79 driver phsync pvsync 
+│       │   ├───1366×768@60.00 driver phsync pvsync 
+│       │   ├───1360×768@60.02 driver phsync pvsync 
+│       │   ├───1280×800@59.81 driver nhsync pvsync 
+│       │   ├───1280×800@59.91 driver phsync nvsync 
+│       │   ├───1280×768@59.87 driver nhsync pvsync 
+│       │   ├───1280×768@59.99 driver phsync nvsync 
+│       │   ├───1280×720@60.00 driver phsync pvsync 
+│       │   ├───800×600@60.32 driver phsync pvsync 
+│       │   ├───800×600@56.25 driver phsync pvsync 
+│       │   ├───848×480@60.00 driver phsync pvsync 
+│       │   └───640×480@59.94 driver nhsync nvsync 
+│       └───Properties
+│           ├───"DPMS": enum {On, Standby, Suspend, Off} = On
+│           ├───"link-status": enum {Good, Bad} = Good
+│           ├───"non-desktop" (immutable): range [0, 1] = 0
+│           ├───"TILE" (immutable): blob = 0
+│           └───"CRTC_ID" (atomic): object CRTC = 83
+├───Encoders
+│   ├───Encoder 0
+│   │   ├───Object ID: 84
+│   │   ├───Type: virtual
+│   │   ├───CRTCS: {0}
+│   │   └───Clones: {0, 1}
+│   └───Encoder 1
+│       ├───Object ID: 90
+│       ├───Type: virtual
+│       ├───CRTCS: {0}
+│       └───Clones: {0, 1}
+├───CRTCs
+│   └───CRTC 0
+│       ├───Object ID: 83
+│       ├───Legacy info
+│       │   ├───Mode: 1024×768@60.00 preferred driver nhsync nvsync 
+│       │   └───Gamma size: 256
+│       └───Properties
+│           ├───"ACTIVE" (atomic): range [0, 1] = 1
+│           ├───"MODE_ID" (atomic): blob = 93
+│           │   └───1024×768@60.00 preferred driver nhsync nvsync 
+│           ├───"OUT_FENCE_PTR" (atomic): range [0, UINT64_MAX] = 0
+│           ├───"VRR_ENABLED": range [0, 1] = 0
+│           ├───"GAMMA_LUT": blob = 0
+│           └───"GAMMA_LUT_SIZE" (immutable): range [0, UINT32_MAX] = 256
+└───Planes
+    ├───Plane 0
+    │   ├───Object ID: 33
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 92
+    │   │   │   ├───Object ID: 92
+    │   │   │   ├───Size: 1024×768
+    │   │   │   ├───Format: XRGB8888 (0x34325258)
+    │   │   │   ├───Modifier: DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │   │   │   └───Planes:
+    │   │   │       └───Plane 0: offset = 0, pitch = 4096 bytes
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Primary
+    │       ├───"FB_ID" (atomic): object framebuffer = 92
+    │       │   ├───Object ID: 92
+    │       │   ├───Size: 1024×768
+    │       │   ├───Format: XRGB8888 (0x34325258)
+    │       │   ├───Modifier: DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │   └───Planes:
+    │       │       └───Plane 0: offset = 0, pitch = 4096 bytes
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 83
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 1024
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 768
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 1024
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 768
+    │       ├───"IN_FORMATS" (immutable): blob = 34
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 1
+    │   ├───Object ID: 38
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 39
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 2
+    │   ├───Object ID: 43
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 44
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 3
+    │   ├───Object ID: 48
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 49
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 4
+    │   ├───Object ID: 53
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 54
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 5
+    │   ├───Object ID: 58
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 59
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 6
+    │   ├───Object ID: 63
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 64
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 7
+    │   ├───Object ID: 68
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 69
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    ├───Plane 8
+    │   ├───Object ID: 73
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 0
+    │   │   └───Formats:
+    │   │       ├───ARGB8888 (0x34325241)
+    │   │       ├───ABGR8888 (0x34324241)
+    │   │       ├───BGRA8888 (0x34324142)
+    │   │       ├───RGBA8888 (0x34324152)
+    │   │       ├───XRGB8888 (0x34325258)
+    │   │       ├───XBGR8888 (0x34324258)
+    │   │       ├───RGB888 (0x34324752)
+    │   │       ├───BGR888 (0x34324742)
+    │   │       ├───XRGB16161616 (0x38345258)
+    │   │       ├───XBGR16161616 (0x38344258)
+    │   │       ├───ARGB16161616 (0x38345241)
+    │   │       ├───ABGR16161616 (0x38344241)
+    │   │       ├───RGB565 (0x36314752)
+    │   │       ├───BGR565 (0x36314742)
+    │   │       ├───NV12 (0x3231564e)
+    │   │       ├───NV16 (0x3631564e)
+    │   │       ├───NV24 (0x3432564e)
+    │   │       ├───NV21 (0x3132564e)
+    │   │       ├───NV61 (0x3136564e)
+    │   │       ├───NV42 (0x3234564e)
+    │   │       ├───YUV420 (0x32315559)
+    │   │       ├───YUV422 (0x36315559)
+    │   │       ├───YUV444 (0x34325559)
+    │   │       ├───YVU420 (0x32315659)
+    │   │       ├───YVU422 (0x36315659)
+    │   │       ├───YVU444 (0x34325659)
+    │   │       ├───P010 (0x30313050)
+    │   │       ├───P012 (0x32313050)
+    │   │       ├───P016 (0x36313050)
+    │   │       ├───R1 (0x20203152)
+    │   │       ├───R2 (0x20203252)
+    │   │       ├───R4 (0x20203452)
+    │   │       └───R8 (0x20203852)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Overlay
+    │       ├───"FB_ID" (atomic): object framebuffer = 0
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 0
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"IN_FORMATS" (immutable): blob = 74
+    │       │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+    │       │       ├───ARGB8888 (0x34325241)
+    │       │       ├───ABGR8888 (0x34324241)
+    │       │       ├───BGRA8888 (0x34324142)
+    │       │       ├───RGBA8888 (0x34324152)
+    │       │       ├───XRGB8888 (0x34325258)
+    │       │       ├───XBGR8888 (0x34324258)
+    │       │       ├───RGB888 (0x34324752)
+    │       │       ├───BGR888 (0x34324742)
+    │       │       ├───XRGB16161616 (0x38345258)
+    │       │       ├───XBGR16161616 (0x38344258)
+    │       │       ├───ARGB16161616 (0x38345241)
+    │       │       ├───ABGR16161616 (0x38344241)
+    │       │       ├───RGB565 (0x36314752)
+    │       │       ├───BGR565 (0x36314742)
+    │       │       ├───NV12 (0x3231564e)
+    │       │       ├───NV16 (0x3631564e)
+    │       │       ├───NV24 (0x3432564e)
+    │       │       ├───NV21 (0x3132564e)
+    │       │       ├───NV61 (0x3136564e)
+    │       │       ├───NV42 (0x3234564e)
+    │       │       ├───YUV420 (0x32315559)
+    │       │       ├───YUV422 (0x36315559)
+    │       │       ├───YUV444 (0x34325559)
+    │       │       ├───YVU420 (0x32315659)
+    │       │       ├───YVU422 (0x36315659)
+    │       │       ├───YVU444 (0x34325659)
+    │       │       ├───P010 (0x30313050)
+    │       │       ├───P012 (0x32313050)
+    │       │       ├───P016 (0x36313050)
+    │       │       ├───R1 (0x20203152)
+    │       │       ├───R2 (0x20203252)
+    │       │       ├───R4 (0x20203452)
+    │       │       └───R8 (0x20203852)
+    │       └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)
+    └───Plane 9
+        ├───Object ID: 78
+        ├───CRTCs: {0}
+        ├───Legacy info
+        │   ├───FB ID: 0
+        │   └───Formats:
+        │       ├───ARGB8888 (0x34325241)
+        │       ├───ABGR8888 (0x34324241)
+        │       ├───BGRA8888 (0x34324142)
+        │       ├───RGBA8888 (0x34324152)
+        │       ├───XRGB8888 (0x34325258)
+        │       ├───XBGR8888 (0x34324258)
+        │       ├───RGB888 (0x34324752)
+        │       ├───BGR888 (0x34324742)
+        │       ├───XRGB16161616 (0x38345258)
+        │       ├───XBGR16161616 (0x38344258)
+        │       ├───ARGB16161616 (0x38345241)
+        │       ├───ABGR16161616 (0x38344241)
+        │       ├───RGB565 (0x36314752)
+        │       ├───BGR565 (0x36314742)
+        │       ├───NV12 (0x3231564e)
+        │       ├───NV16 (0x3631564e)
+        │       ├───NV24 (0x3432564e)
+        │       ├───NV21 (0x3132564e)
+        │       ├───NV61 (0x3136564e)
+        │       ├───NV42 (0x3234564e)
+        │       ├───YUV420 (0x32315559)
+        │       ├───YUV422 (0x36315559)
+        │       ├───YUV444 (0x34325559)
+        │       ├───YVU420 (0x32315659)
+        │       ├───YVU422 (0x36315659)
+        │       ├───YVU444 (0x34325659)
+        │       ├───P010 (0x30313050)
+        │       ├───P012 (0x32313050)
+        │       ├───P016 (0x36313050)
+        │       ├───R1 (0x20203152)
+        │       ├───R2 (0x20203252)
+        │       ├───R4 (0x20203452)
+        │       └───R8 (0x20203852)
+        └───Properties
+            ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Cursor
+            ├───"FB_ID" (atomic): object framebuffer = 0
+            ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+            ├───"CRTC_ID" (atomic): object CRTC = 0
+            ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+            ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+            ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+            ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+            ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+            ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+            ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+            ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+            ├───"IN_FORMATS" (immutable): blob = 79
+            │   └───DRM_FORMAT_MOD_LINEAR (0x0000000000000000)
+            │       ├───ARGB8888 (0x34325241)
+            │       ├───ABGR8888 (0x34324241)
+            │       ├───BGRA8888 (0x34324142)
+            │       ├───RGBA8888 (0x34324152)
+            │       ├───XRGB8888 (0x34325258)
+            │       ├───XBGR8888 (0x34324258)
+            │       ├───RGB888 (0x34324752)
+            │       ├───BGR888 (0x34324742)
+            │       ├───XRGB16161616 (0x38345258)
+            │       ├───XBGR16161616 (0x38344258)
+            │       ├───ARGB16161616 (0x38345241)
+            │       ├───ABGR16161616 (0x38344241)
+            │       ├───RGB565 (0x36314752)
+            │       ├───BGR565 (0x36314742)
+            │       ├───NV12 (0x3231564e)
+            │       ├───NV16 (0x3631564e)
+            │       ├───NV24 (0x3432564e)
+            │       ├───NV21 (0x3132564e)
+            │       ├───NV61 (0x3136564e)
+            │       ├───NV42 (0x3234564e)
+            │       ├───YUV420 (0x32315559)
+            │       ├───YUV422 (0x36315559)
+            │       ├───YUV444 (0x34325559)
+            │       ├───YVU420 (0x32315659)
+            │       ├───YVU422 (0x36315659)
+            │       ├───YVU444 (0x34325659)
+            │       ├───P010 (0x30313050)
+            │       ├───P012 (0x32313050)
+            │       ├───P016 (0x36313050)
+            │       ├───R1 (0x20203152)
+            │       ├───R2 (0x20203252)
+            │       ├───R4 (0x20203452)
+            │       └───R8 (0x20203852)
+            └───"rotation": bitmask {rotate-0, rotate-90, rotate-180, rotate-270, reflect-x, reflect-y} = (rotate-0)

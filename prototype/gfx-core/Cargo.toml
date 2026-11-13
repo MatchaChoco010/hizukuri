@@ -1,0 +1,22 @@
+[package]
+name = "proto-gfx-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vulkan.workspace = true
+vulkan-alloc.workspace = true
+spirv-tools.workspace = true
+rspirv.workspace = true
+rustix = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+# Writes the SPIR-V of the short shaders the tests give as WGSL.
+naga.workspace = true
+half.workspace = true
+# The tests of the 3D features write their shaders in Slang.
+proto-slangc.workspace = true
+rustix = { version = "1", features = ["fs"] }
