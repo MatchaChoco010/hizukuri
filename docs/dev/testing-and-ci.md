@@ -201,7 +201,7 @@ nix develop .#ci --command tools/vm/vm test tools/vm-check.py
 - ゲストは、`flake.lock` の nixpkgs で作る NixOS である（`tools/vm/guest.nix`）。kernel、Mesa、アプリ、QEMU の版は、`flake.lock` で決まる。
   ディスクは無く、起動するたびに、同じ状態から始まる。`/nix/store` を共有するので、devShell でビルドしたバイナリが、ゲストでそのまま動く。
 - `vm test` は、ゲストをビルドし、VM を起動し、試験を走らせ、VM を止める。
-- 既定で回るのは、GPU の要らない部である（`lavapipe`、`script`、`animation`、`vkms`、`safety`、`outputs`、`ime`、`x11`）。
+- 既定で回るのは、GPU の要らない部である（`lavapipe`、`script`、`animation`、`projects`、`vkms`、`safety`、`outputs`、`ime`、`x11`）。
   VM の起動のしかたが違う部（`real-hardware`）は、`--only` で、別に回す。構成が合わない VM に頼むと、失敗になる。
 
 VM の作りと、試験の部の一覧は、[検証用の VM](vm-environment.md)にある。
@@ -425,4 +425,3 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 
 - 基準画像（PNG）との比較。いまのテストは、画素の値を、計算した期待値と比べている。
 - 回数の多い proptest などを回す、夜間の検査。
-- nested のバックエンドと、そのテスト。
