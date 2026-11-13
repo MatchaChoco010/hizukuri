@@ -174,7 +174,8 @@ struct ColorProgress {
 
 fn run() -> Result<(), String> {
     if std::env::args().nth(1).as_deref() == Some("--as-xwayland-satellite") {
-        return stand_in_for_satellite(std::env::args().skip(2).collect());
+        let Err(message) = stand_in_for_satellite(std::env::args().skip(2).collect());
+        return Err(message);
     }
     let mut options = ClientOptions::default();
     let mut socket: Option<PathBuf> = None;
@@ -499,8 +500,9 @@ fn report(value: serde_json::Value) -> Result<(), String> {
     out.flush().map_err(|e| e.to_string())
 }
 
-/// See the module documentation.
-fn stand_in_for_satellite(args: Vec<String>) -> Result<(), String> {
+/// See the module documentation. Runs until it is stopped or told to exit,
+/// so it returns only an error.
+fn stand_in_for_satellite(args: Vec<String>) -> Result<!, String> {
     use std::io::{BufRead, BufReader};
     use std::os::fd::FromRawFd;
     use std::os::linux::net::SocketAddrExt;

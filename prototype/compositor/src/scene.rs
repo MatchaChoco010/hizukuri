@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(pixels[..4], [0, 0, 0, 255]);
         assert_eq!(pixels[pixels.len() - 4..], [0, 0, 0, 0]);
         // There is a white inside.
-        assert!(pixels.chunks_exact(4).any(|p| p == [255, 255, 255, 255]));
+        assert!(pixels.as_chunks::<4>().0.contains(&[255, 255, 255, 255]));
     }
 
     fn view(window: u64, surfaces: &[(u64, (i32, i32))]) -> WindowView {

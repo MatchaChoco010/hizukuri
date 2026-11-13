@@ -37,6 +37,7 @@
 mod common;
 
 use std::collections::VecDeque;
+use std::mem::DropGuard;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -751,11 +752,15 @@ fn shake(device: Device) {
         .flatten();
     // Declared before the sessions, so dropped after them.
     let stand_in = terminal_stand_ins(real_foot.as_deref());
-    let _stand_ins = RemoveOnDrop(
+    // Removed when dropped, also when the test fails.
+    let _stand_ins = DropGuard::new(
         stand_in
             .parent()
             .expect("the stand-in directory")
             .to_path_buf(),
+        |dir| {
+            let _ = std::fs::remove_dir_all(dir);
+        },
     );
     let allow_dmabuf = common::udmabuf_wanted();
 
@@ -964,15 +969,6 @@ fn shake(device: Device) {
     session.quit();
     if let Some(parent) = parent {
         parent.quit();
-    }
-}
-
-/// Removes a directory when dropped, also when the test fails.
-struct RemoveOnDrop(PathBuf);
-
-impl Drop for RemoveOnDrop {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

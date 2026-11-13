@@ -151,16 +151,14 @@ impl SnapshotBuilder {
             max: i32::MAX as i64,
         };
 
-        let crtcs: Vec<Crtc> = (0..self.crtcs)
-            .map(|_| Crtc {
-                id: self.id(),
-                properties: vec![
-                    prop("ACTIVE", 0, range(1), false),
-                    prop("MODE_ID", 0, PropertyKind::Blob { data: None }, false),
-                    prop("VRR_ENABLED", 0, range(1), false),
-                ],
-            })
-            .collect();
+        let crtcs: Vec<Crtc> = Vec::from_fn(self.crtcs, |_| Crtc {
+            id: self.id(),
+            properties: vec![
+                prop("ACTIVE", 0, range(1), false),
+                prop("MODE_ID", 0, PropertyKind::Blob { data: None }, false),
+                prop("VRR_ENABLED", 0, range(1), false),
+            ],
+        });
         let all_crtcs = (1u32 << self.crtcs) - 1;
         let encoder = Encoder {
             id: self.id(),

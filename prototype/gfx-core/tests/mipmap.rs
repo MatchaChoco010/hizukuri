@@ -332,7 +332,9 @@ fn a_level_is_rendered_from_the_level_above() {
             .unwrap();
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| p[0].abs_diff(expected) <= 1 && p[1] == 0 && p[2] == 0),
             "level {mip}: {:?}",
             &pixels[..4]

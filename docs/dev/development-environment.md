@@ -22,7 +22,7 @@ GPU も、画面も、要らない。検査は、画面なし（headless）と�
 
 ## Rust
 
-- 版は、`rust-toolchain.toml` で固定している（1.96.0。`rustfmt` と `clippy` を含む）。
+- 版は、`rust-toolchain.toml` で固定している（1.100.0。`rustfmt` と `clippy` を含む）。
   rustup も、Nix の devShell も、このファイルを読む。版を決める場所は、ここだけである。
 - 版を上げるときは、`rust-toolchain.toml` を書き換える。`Cargo.toml` の `rust-version` も合わせる。
 

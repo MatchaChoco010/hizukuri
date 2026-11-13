@@ -187,8 +187,10 @@ pub(crate) fn read_png(bytes: &[u8]) -> Result<Decoded, String> {
         png::BitDepth::Eight => Pixels::Rgba8(expand(&buffer, channels, u8::MAX)),
         png::BitDepth::Sixteen => {
             let samples: Vec<u16> = buffer
-                .chunks_exact(2)
-                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_be_bytes(*c))
                 .collect();
             Pixels::Rgba16(expand(&samples, channels, u16::MAX))
         }
@@ -395,8 +397,10 @@ pub(crate) fn read_raw(
         pixels: Pixels::Float {
             channels,
             values: bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
                 .collect(),
         },
         description: None,
@@ -459,7 +463,9 @@ pub(crate) fn to_working(
     Ok(match pixels {
         Pixels::Rgba8(v) if transform.ootf.is_none() => {
             let table = table(255);
-            v.chunks_exact(4)
+            v.as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|p| {
                     finish(
                         [
@@ -474,7 +480,9 @@ pub(crate) fn to_working(
         }
         Pixels::Rgba16(v) if transform.ootf.is_none() => {
             let table = table(65535);
-            v.chunks_exact(4)
+            v.as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|p| {
                     finish(
                         [
@@ -488,8 +496,10 @@ pub(crate) fn to_working(
                 .collect()
         }
         other => to_floats(other)
-            .chunks_exact(4)
-            .flat_map(|p| transform.apply([p[0], p[1], p[2], p[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| transform.apply(*p))
             .collect(),
     })
 }
@@ -497,7 +507,7 @@ pub(crate) fn to_working(
 /// Four floats per pixel as the bytes of `format`.
 pub(crate) fn pack(rgba: &[f32], format: Format) -> Result<Vec<u8>, String> {
     let unorm = |v: f32, max: f32| (v.clamp(0.0, 1.0) * max + 0.5).floor();
-    let pixels = rgba.chunks_exact(4);
+    let pixels = rgba.as_chunks::<4>().0.iter();
     Ok(match format {
         Format::Rgba32Float => rgba.iter().flat_map(|v| v.to_ne_bytes()).collect(),
         Format::Rgba16Float => rgba
@@ -714,7 +724,7 @@ fn upload(
     mipmaps: bool,
 ) -> Result<(Handle, Handle, u32), proto_gfx_core::GfxError> {
     let mip_levels = if mipmaps {
-        u32::BITS - width.max(height).leading_zeros()
+        width.max(height).bit_width()
     } else {
         1
     };

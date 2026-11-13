@@ -624,9 +624,7 @@ impl Dispatch<zwp_input_method_keyboard_grab_v2::ZwpInputMethodKeyboardGrabV2, (
                 let read = std::fs::File::from(fd).read_exact_at(&mut contents, 0);
                 if read.is_ok() {
                     // The file ends with a NUL that xkb does not want.
-                    let text =
-                        String::from_utf8_lossy(contents.strip_suffix(&[0]).unwrap_or(&contents))
-                            .into_owned();
+                    let text = String::from_utf8_lossy(contents.trim_suffix(&[0])).into_owned();
                     state.ime.xkb = xkb::Keymap::new_from_string(
                         &state.keyboard.context,
                         text,

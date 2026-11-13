@@ -150,7 +150,9 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for St
                 let mut bytes = vec![0u8; size as usize];
                 if file.read_exact_at(&mut bytes, 0).is_ok() {
                     feedback.table = bytes
-                        .chunks_exact(16)
+                        .as_chunks::<16>()
+                        .0
+                        .iter()
                         .map(|entry| {
                             [
                                 u64::from(u32::from_ne_bytes(entry[0..4].try_into().unwrap())),
@@ -161,8 +163,8 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for St
                 }
             }
             Event::TrancheFormats { indices } => {
-                for index in indices.chunks_exact(2) {
-                    let index = u16::from_ne_bytes([index[0], index[1]]) as usize;
+                for index in indices.as_chunks::<2>().0 {
+                    let index = u16::from_ne_bytes(*index) as usize;
                     if let Some(entry) = feedback.table.get(index) {
                         feedback.formats.push(*entry);
                     }

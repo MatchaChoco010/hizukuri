@@ -95,7 +95,9 @@ impl EncodedImage {
                 // drawing may write the compositing alpha there.
                 let rgba: Vec<u8> = self
                     .data
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .flat_map(|p| [p[2], p[1], p[0], p[3]])
                     .collect();
                 writer.write_image_data(&rgba)?;
@@ -107,8 +109,10 @@ impl EncodedImage {
                 // PNG stores 16 bit samples big endian.
                 let big_endian: Vec<u8> = self
                     .data
-                    .chunks_exact(2)
-                    .flat_map(|c| u16::from_ne_bytes([c[0], c[1]]).to_be_bytes())
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .flat_map(|c| u16::from_ne_bytes(*c).to_be_bytes())
                     .collect();
                 writer.write_image_data(&big_endian)?;
                 writer.finish()?;
@@ -142,8 +146,10 @@ impl EncodedImage {
             png::BitDepth::Sixteen => (
                 OutputFormat::Rgba16Unorm,
                 buffer
-                    .chunks_exact(2)
-                    .flat_map(|c| u16::from_be_bytes([c[0], c[1]]).to_ne_bytes())
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .flat_map(|c| u16::from_be_bytes(*c).to_ne_bytes())
                     .collect(),
             ),
             other => {

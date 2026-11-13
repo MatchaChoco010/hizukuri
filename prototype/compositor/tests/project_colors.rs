@@ -240,8 +240,7 @@ fn each_four(
     title: &str,
     mut look: impl FnMut(&mut Session, &EncodedImage, &CompositeImage, [[u8; 4]; 4]),
 ) {
-    for (i, four) in COLORS.chunks_exact(4).enumerate() {
-        let four: [[u8; 4]; 4] = four.try_into().unwrap();
+    for (i, &four) in COLORS.as_chunks::<4>().0.iter().enumerate() {
         session.redraw(client, title, |o| o.pattern = Pattern::Quadrants(four));
         let (encoded, composite) = session.screenshot(&format!("colors-{i}"));
         look(session, &encoded, &composite, four);

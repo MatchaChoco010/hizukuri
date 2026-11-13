@@ -237,7 +237,9 @@ fn modules_the_api_cannot_vouch_for_are_refused() {
     gpu.create_shader_spirv(ShaderStage::Fragment, "main", &valid)
         .unwrap();
     let swapped: Vec<u8> = valid
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|w| [w[3], w[2], w[1], w[0]])
         .collect();
     let cases: Vec<(&str, Vec<u8>, &str)> = vec![
@@ -351,8 +353,10 @@ fn modules_the_api_cannot_vouch_for_are_refused() {
 fn mutate(source: &str, values: fn(u32) -> Vec<u32>) {
     let fs = wgsl_spirv(ShaderStage::Fragment, source, "main");
     let words: Vec<u32> = fs
-        .chunks_exact(4)
-        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|w| u32::from_le_bytes(*w))
         .collect();
     let mut gpu = Gpu::new(GpuConfig::for_tests()).unwrap();
     let vs = gpu

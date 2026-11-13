@@ -92,8 +92,10 @@ fn draw(gpu: &mut Gpu, pipeline: Handle, texture: Handle, sampler: Handle) -> Re
     drawn?;
     let pixel = gpu.read_image(target).unwrap();
     let v: Vec<f32> = pixel
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     Ok([v[0], v[1], v[2], v[3]])
 }
