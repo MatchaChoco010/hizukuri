@@ -251,6 +251,9 @@ function M.describe()
         results = ids,
         names = names,
         count = #menu.apps,
+        -- Whether the lines are written with the session's font (or else
+        -- in dots).
+        font = M.has_font(),
     }
 end
 
@@ -259,6 +262,12 @@ end
 local pipeline, sampler, blank_slot, blank_image, blank_written
 local push = buffer.create(96)
 local font = nil
+
+-- Whether the session gave a font.
+function M.has_font()
+    return font ~= nil
+end
+
 -- What has been made into textures: key -> { texture, image, width,
 -- height, used }.
 local textures = {}

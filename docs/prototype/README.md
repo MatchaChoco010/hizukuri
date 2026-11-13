@@ -301,7 +301,7 @@ target/debug/proto-compositor --backend nested --socket hizukuri-nested --script
 | `--script-retry-ms` | `1000` | `--script-on-error hold` のとき、試し直すまでの時間 |
 | `--script-wait-gpu` | off | スクリプトの描画で、フレームごとに GPU の完了を待つ（計測用） |
 | `--working-space` | `acescg` | 合成の作業用の色空間の原色。`acescg`、`bt2020`、`srgb`、`display-p3`、`adobe-rgb` |
-| `--font` | なし | スクリプトが `hz.load_font()` で受け取る、フォントのファイル。無ければ、環境変数 `HIZUKURI_FONT`、それも無ければ、システムのフォントの場所から、決まった名前のものを探す（[スクリプトの層](script-layer.md#文字)） |
+| `--font` | なし | スクリプトが `hz.load_font()` で受け取る、フォントのファイル。無ければ、環境変数 `HIZUKURI_FONT`、それも無ければ、fontconfig が `sans-serif` に選ぶもの、fontconfig が無ければ、システムのフォントの場所から、決まった名前のもの（[スクリプトの層](script-layer.md#文字)） |
 | `--color-format` | `auto` | 色を描くバッファの既定の形式（`hz.color_format()`）。`auto`（`rgba32float` を、描けて、blend できて、linear で補間できる device なら `rgba32float`、できなければ `rgba16float`）、`rgba32float`、`rgba16float` |
 | `--dmabuf` | `off` | クライアントから dmabuf を受け取るか（[プロトコルの層](protocol-layer.md#dmabuf)）。`off`、`cpu`（linear の 8 bit の RGB を、`wl_shm` と同じように複写する。プロトコルを試すため）、`gpu`（スクリプトの描画のデバイスが取り込めるものを、複写せずに使う） |
 | `--exit-after` | なし | 指定した秒数で終了する |
