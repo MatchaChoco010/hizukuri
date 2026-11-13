@@ -408,9 +408,11 @@ hz.spawn(app.exec, { cwd = app.working_dir })
        （untyped pointer など）があるので、2 の結果を信頼しない。
        1 の validator が通し、ドライバーが受け付けない形も、ここで拒む: 大きさ 0 の stride と、またぐものより小さい stride、
        sampled の image に付いた format、演算の結果でないものに付いた `NoContraction`、image の読み出しの `SignExtend` と
-       `ZeroExtend`、大きさの違う型の間の `OpBitcast`。
+       `ZeroExtend`、大きさの違う型の間の `OpBitcast`、capability を宣言せずに使う built-in（`CullDistance` を、
+       capability の `CullDistance` を宣言せずに使う、など。validator は、`BuiltIn` の decoration の capability を確かめない）。
   - 壊した module を、検査とドライバーに通す試験が、`prototype/gfx-core/tests/spirv_input.rs`（naga が書いた module）と
-    `tests/mutate_3d.rs`（Slang が書いた、3D の機能を使う module）にある。
+    `tests/mutate_3d.rs`（Slang が書いた、3D の機能を使う module）にある。`mutate_3d` は、途中で失敗すると、
+    直前に描いた 3 つの変異体（語の位置と、置き換えた値）を出す。
   - SPIRV-Tools は C++ で、同じプロセスの中で動く。その中で落ちると、プロセスごと落ちる。
 - コアの shader（fallback の `prototype/compositor/shaders/fallback.slang`、KMS の自己診断の `selftest.slang`）と、
   組み込みの project の shader（`prototype/compositor/scripts/shaders/`）は、Slang で書く。`proto-compositor` の `build.rs` が、

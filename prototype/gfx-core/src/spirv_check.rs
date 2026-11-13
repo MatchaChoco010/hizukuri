@@ -521,6 +521,7 @@ pub(crate) fn reflect_spirv_with(
             ));
         }
     }
+    check_built_in_capabilities(&module)?;
     let memory_model = module.memory_model.as_ref().ok_or("no OpMemoryModel")?;
     if memory_model.operands[0] != Operand::AddressingModel(spirv::AddressingModel::Logical) {
         return Err("only the Logical addressing model is accepted".into());
@@ -811,6 +812,54 @@ fn check_instruction(ctx: &Ctx<'_>, inst: &Instruction) -> Result<(), String> {
         let to = inst.result_type.and_then(|ty| ctx.value_bits(ty));
         if from.is_none() || from != to {
             return Err("OpBitcast between types of different sizes is not accepted".into());
+        }
+    }
+    Ok(())
+}
+
+/// Every built-in that a variable or a block member is decorated with needs
+/// one of the capabilities SPIR-V lists for it, declared by the module
+/// (directly, or implicitly through a capability it declares). SPIRV-Tools'
+/// validator does not check this for `BuiltIn` decorations, so without this
+/// a module could use a built-in that needs a capability the API does not
+/// allow (`CullDistance`), or one whose device feature is enabled only on
+/// some devices, by not declaring the capability.
+fn check_built_in_capabilities(module: &Module) -> Result<(), String> {
+    let mut declared: HashSet<Capability> = module
+        .capabilities
+        .iter()
+        .filter_map(|inst| match inst.operands.first() {
+            Some(Operand::Capability(cap)) => Some(*cap),
+            _ => None,
+        })
+        .collect();
+    loop {
+        let implied: Vec<Capability> = declared
+            .iter()
+            .flat_map(|cap| Operand::Capability(*cap).required_capabilities())
+            .filter(|cap| !declared.contains(cap))
+            .collect();
+        if implied.is_empty() {
+            break;
+        }
+        declared.extend(implied);
+    }
+    for inst in &module.annotations {
+        for operand in &inst.operands {
+            let Operand::BuiltIn(built_in) = operand else {
+                continue;
+            };
+            let needs = operand.required_capabilities();
+            if !needs.is_empty() && !needs.iter().any(|cap| declared.contains(cap)) {
+                return Err(format!(
+                    "built-in {built_in:?} needs capability {}, which the shader does not declare",
+                    needs
+                        .iter()
+                        .map(|cap| format!("{cap:?}"))
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                ));
+            }
         }
     }
     Ok(())
@@ -1309,6 +1358,36 @@ mod tests {
         words.extend(capability(0x7fff_0000));
         let e = reflect_spirv(&words, ShaderStage::Fragment, "main").unwrap_err();
         assert!(e.contains("2147418112"), "{e}");
+    }
+
+    /// A built-in needs its capability declared: a module that decorates its
+    /// position with `ClipDistance` or `CullDistance` and declares neither
+    /// capability is refused, though SPIRV-Tools' validator lets it through.
+    #[test]
+    fn built_ins_need_their_capabilities() {
+        let words = naga_words(
+            ShaderStage::Vertex,
+            "@vertex fn main() -> @builtin(position) vec4<f32> { return vec4(0.0); }",
+        );
+        reflect_spirv(&words, ShaderStage::Vertex, "main").unwrap();
+        let decorate = (4 << 16) | Op::Decorate as u32;
+        let position = words
+            .windows(4)
+            .position(|w| {
+                w[0] == decorate
+                    && w[2] == Decoration::BuiltIn as u32
+                    && w[3] == spirv::BuiltIn::Position as u32
+            })
+            .expect("the position's BuiltIn decoration");
+        for built_in in [spirv::BuiltIn::ClipDistance, spirv::BuiltIn::CullDistance] {
+            let mut mutant = words.clone();
+            mutant[position + 3] = built_in as u32;
+            let e = reflect_spirv(&mutant, ShaderStage::Vertex, "main").unwrap_err();
+            assert!(
+                e.contains(&format!("{built_in:?}")) && e.contains("does not declare"),
+                "{e}"
+            );
+        }
     }
 
     /// The push block's size is rounded up to its alignment, as naga counts
