@@ -349,16 +349,32 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 必須の検査ではない。
 
 - 契機は、3 つある。
-  - 毎晩（UTC の 18:47）。既定の branch で走る。
+  - 毎晩（UTC の 18:47）。既定の branch で走る。7 日以内に、同じ commit で通っていれば、飛ばす（下の「毎晩の実行を飛ばす条件」）。
   - `release-candidate/**` への push。`release-candidate/**` は、`release` に取り込む commit で、`develop` から切る branch である。
     `release` に merge する前に、そこで、この検査を回す。
   - 手動（`workflow_dispatch`）。どの branch でも選べる。
 - runner は、[RunsOn](https://runs-on.com) が、ジョブごとに起動して、終わると消す、AWS のインスタンスである。
   ジョブの `runs-on` のラベルで、インスタンスの種類、image、ディスクの大きさを指定している。秘密の値は、使わない。
-- ジョブは、`nvidia` の 1 つである。インスタンスは `g4dn.xlarge`（NVIDIA T4）、image は `ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている）。
-  ジョブは、このリポジトリ（`MatchaChoco010/hizukuri`）でだけ走る。
-- キャッシュは、使わない。何も無い状態から始めても、実行は短く、起動するのは一晩に 1 回だからである。
+- ジョブは、`decide` と `nvidia` の 2 つである。
+  - `decide` は、GitHub の標準の runner（`ubuntu-24.04`）で、`nvidia` を走らせるかどうかを決める（下の「毎晩の実行を飛ばす条件」）。
+  - `nvidia` は、検査の本体である。インスタンスは `g4dn.xlarge`（NVIDIA T4）、image は `ubuntu24-gpu-x64`（NVIDIA のドライバーが入っている）。
+    このリポジトリ（`MatchaChoco010/hizukuri`）でだけ走り、`decide` が走らせると決めたときだけ走る。
+- cargo の依存とビルドの結果を、RunsOn のキャッシュに残す（下の「キャッシュ」）。
 - 同じ ref の実行は、重ねない。走っている実行は、取り消さない。
+
+**毎晩の実行を飛ばす条件。** 毎晩の実行（`schedule`）は、同じ commit（`github.sha`）について、次のすべてを満たす、この workflow の実行があれば、`nvidia` を飛ばす。
+
+- 成功で終わった。
+- 7 日以内に作られた。
+- その中で、`nvidia` のジョブそのものが、成功した（飛ばされたのではない）。`decide` が飛ばした実行は、通った証拠にしない。
+
+7 日で区切るのは、リポジトリが変わらなくても、インスタンスの image、kernel、ドライバーのパッケージが変わるからである。
+`decide` は、GitHub の API（workflow の実行の一覧を `head_sha` と `status=success` で絞ったものと、実行のジョブの一覧）を、`gh api` で読む。
+権限は、このジョブだけに `actions: read` を与える。API を読めなかったときは、飛ばさずに走らせ、そのことをログに出す。
+決めたことと、その理由は、`decide` のジョブの要約に出る。飛ばしたときは、すでに通った実行の URL を書く。
+
+**`release-candidate/**` への push と、手動の起動では、必ず走らせる。** リリースの手順は、候補のブランチの結果を、`tools/ci-status.sh` で読む。
+`tools/ci-status.sh` は、ジョブが飛ばされた実行を `incomplete` とする（上の「候補のブランチの検査の結果を確かめる」）。
 
 **ドライバー。** image に入っている NVIDIA のドライバーは、`VK_EXT_descriptor_heap` を持たない。
 そこで、workflow の環境変数 `NVIDIA_DRIVER` に書いた版（`595.104.02`）を、`download.nvidia.com` の installer で入れ直す。
@@ -377,8 +393,11 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 - devShell は、起動するときに、`LD_LIBRARY_PATH` を外し、`VK_DRIVER_FILES` を設定する。
   そこで、この 2 つを設定する行を、ファイル（`$RUNNER_TEMP/nvidia/settings.sh`）に書き、devShell の中の step が、それを読み込む。
 
+`nvidia` の step は、次のとおりである。
+
 | step | 内容 |
 | --- | --- |
+| `runs-on/action` | RunsOn のキャッシュを使えるようにする（下の「キャッシュ」）。最初の step である |
 | Replace the NVIDIA driver | image のドライバーのパッケージと、kernel の module を外し、NVIDIA の installer（`--silent -M=open`）で、上の版を入れる。installer のログを残し、失敗したときは、その終わりを出す。入れた後の `/proc/driver/nvidia/version` と `nvidia-smi` を出す |
 | Load vkms | 仮想の KMS のドライバー（vkms）を読み込む |
 | Make the DRM nodes usable | `/dev/dri/` のノードを、だれでも開けるようにし、vkms の card を探す。見つからなければ、失敗する |
@@ -389,9 +408,12 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 | Make /dev/udmabuf usable, or leave its tests out | `ci.yml` と同じ。`/dev/udmabuf` を開けるようにし、できなければ、それが要るテストを外す |
 | Let the checks inspect stuck and crashed tests | `ci.yml` と同じ。`kernel.yama.ptrace_scope` と `kernel.core_pattern` を変え、`HIZUKURI_TEST_CORE_DIR` と `HIZUKURI_TEST_INSPECT_AS_ROOT=1` を設定する |
 | Check that stuck and crashed tests are reported | `tools/ci-watch.sh --self-test`。失敗しても、後の step は走る（`continue-on-error`） |
+| `actions/cache/restore` | cargo のキャッシュを読む |
+| Leave out the test outputs of the cached run | 読んだキャッシュに入っている、前の実行の `target/*/test-output/` を消す。この実行の artifact に、前の実行の画像とログが混ざらないようにする |
 | Build the compositor | テストのプロファイルで、`proto-compositor` をビルドする。後のテストは、これを使い回す |
 | Self test on vkms | GPU で描いて、vkms に出す `proto-compositor kms-selftest`（`--vulkan-device gpu --scanout cpu`）。テストパターンは、`proto-gfx-core` で、GPU の上で描く。フレームを読み戻して、dumb buffer に写す。seat は、libseat の `noop` を使う。報告の `summary.txt` の 1 行目が `proto-compositor kms-selftest: PASSED` でなければ、失敗する |
 | Run the tests on the GPU | `HIZUKURI_TEST_DEVICES=gpu` で、`tools/ci.sh test`。必須の CI と同じスクリプトを、ハードウェアのデバイスで走らせる（テストのプロセスの中で device を作る 3 つの crate は、1 つずつ。上の「検査を回す」）。自己診断だけが失敗したときも、走る |
+| `actions/cache/save` | cargo のキャッシュを保存する。鍵が完全には一致しなかったときに、保存する。ビルドやテストが失敗したときも保存する。実行が取り消されたときと、キャッシュを読む step が走らなかったときは、保存しない |
 | Summary | ジョブの要約に、ドライバーの版、`tools/gpu-report.sh` の Vulkan の報告（`vulkan-summary.md`）、自己診断の `summary.txt`（無ければ、ログの終わり）を書く |
 
 - `--scanout dmabuf`（GPU の image を、dma-buf のまま vkms に渡す）は、確かめない。描くデバイスと、出すデバイスが違うので、自己診断が、意図して断る。
@@ -407,8 +429,10 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 ### キャッシュ
 
 `ci.yml` と `vm.yml` は、GitHub の cache を使う。保存するのは、branch への push のときだけである。PR は、読むだけである。
-`gpu.yml` は、キャッシュを使わない。
+`gpu.yml` は、GitHub の cache ではなく、RunsOn のキャッシュを使う（下の表の後）。
 どのキャッシュの中身も、公開の場所から取り直すか、ビルドし直せる。無くても、時間がかかるだけである。
+
+GitHub の cache は、次のとおりである。
 
 | キャッシュ | 鍵 | 中身 | 保存する workflow |
 | --- | --- | --- | --- |
@@ -420,6 +444,21 @@ tools/ci-status.sh --wait release-candidate/<名前>   # すべての run が終
 - cargo のキャッシュは、`Cargo.lock` だけが違うときは、同じ種類の、近いものを読む。
 - 3 つの cargo のキャッシュは、ビルドするもの（clippy、テストのプロファイル、dev のプロファイル）が違うので、別に持つ。
 - **鍵の名前は、`ci.yml` と `vm.yml` で対になっている。** 片方の鍵の作り方を変えるときは、もう片方も見る。
+
+`gpu.yml` の `nvidia` は、RunsOn の [Magic Cache](https://runs-on.com/docs/performance/caching/actions/) を使う。
+`runs-on` のラベルの `extras=s3-cache` と、最初の step の `runs-on/action` で、`actions/cache` の読み書きが、GitHub の cache ではなく、
+runner の stack の S3 の bucket に向く。GitHub の cache とは、別の場所である。`ci.yml` と `vm.yml` のキャッシュは、ここからは読めない。
+
+| キャッシュ | 鍵 | 中身 | 保存する workflow |
+| --- | --- | --- | --- |
+| cargo（GPU） | `cargo-gpu-`。`flake.lock`、`rust-toolchain.toml`、`Cargo.lock` の hash | registry、git の依存、`target/`（テストのプロファイルのビルド） | `gpu.yml`（`nvidia`） |
+
+- `Cargo.lock` だけが違うときは、`cargo-gpu-` の、近いものを読む。
+- `gpu.yml` には PR の契機が無いので、どの契機の実行でも保存する。ビルドやテストが失敗したときも保存する。
+- 読める範囲は、GitHub の cache と同じ決まりに従う。実行は、自分の branch のものと、既定の branch のものを読む。
+  毎晩の実行は既定の branch で走り、`release-candidate/**` の実行は、そこで保存されたものを読める。
+- 中身は、stack に設定した日数で消える。読んでも、期限は延びない。
+- Nix の store は、キャッシュしない。devShell の取得は、インスタンスの上では短い。
 
 ## 未実装のもの
 

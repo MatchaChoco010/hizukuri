@@ -10,10 +10,16 @@
 #
 # It runs every night, on a push to a release-candidate/** branch, and when
 # started by hand. It is never started for pull requests, so that a pull
-# request from a fork cannot start a GPU instance. It takes no secret.
+# request from a fork cannot start a GPU instance. It takes no secret. The
+# first job, `decide`, skips the nightly check for a commit that already
+# passed it within 7 days; a release candidate and a run started by hand are
+# always checked.
 #
-# Nothing is cached: a run that starts from nothing is short, and the
-# workflow starts once a night.
+# The cargo registry, the git dependencies and the build results are kept
+# between runs in the cache that RunsOn provides (`extras=s3-cache`): the
+# cache of actions/cache, stored in the S3 bucket of the runner's stack
+# rather than in GitHub's. The Nix store is not cached; the dev shell is
+# fetched quickly on the instance.
 #
 # Every action is pinned to a commit; the comment after it names the release.
 name: GPU
@@ -56,20 +62,104 @@ env:
   OUT: artifacts/gpu
 
 jobs:
+  # Whether the GPU job runs. Every event but the nightly one runs it: the
+  # release procedure reads the result on the candidate branch with
+  # tools/ci-status.sh, which takes a skipped job for an incomplete check.
+  # The nightly run is skipped when a run of this workflow for the same
+  # commit, created within 7 days, succeeded with the GPU job itself
+  # succeeding (a run that this job skipped proves nothing). The 7 days are
+  # there because the instance's image, kernel and driver packages change
+  # even when the repository does not. When GitHub's API cannot be read,
+  # the check runs.
+  decide:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          decide() { # true or false, the reason
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "run=$1: $2"
+            {
+              if [ "$1" = true ]; then
+                echo "### The GPU check runs"
+              else
+                echo "### The GPU check is skipped"
+              fi
+              echo
+              echo "$2"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [ "$GITHUB_EVENT_NAME" != schedule ]; then
+            decide true "This run was started by \`$GITHUB_EVENT_NAME\`, which always runs the check."
+            exit 0
+          fi
+
+          # The workflow's file, from owner/repo/.github/workflows/<file>@<ref>.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          workflow="${workflow##*/}"
+          since="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          echo "looking for a run of $workflow for $GITHUB_SHA that passed since $since"
+
+          # Newest first. created_at is checked here too, in case the API
+          # does not apply the filter.
+          if ! response="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs" \
+            -f head_sha="$GITHUB_SHA" -f status=success -f created=">=$since" \
+            -F exclude_pull_requests=true -F per_page=100)" \
+            || ! candidates="$(jq -r --arg since "$since" --arg self "$GITHUB_RUN_ID" \
+              '.workflow_runs[]
+                | select(.conclusion == "success" and .created_at >= $since and (.id | tostring) != $self)
+                | [.id, .html_url] | @tsv' <<< "$response")"; then
+            echo "::warning title=Runs not read::The runs of $workflow could not be read; the check runs."
+            decide true "The earlier runs of this workflow could not be read from GitHub's API, so the check runs."
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r id url; do
+            [ -n "$id" ] || continue
+            # The jobs of the run's latest attempt; nvidia is the GPU job.
+            if ! conclusion="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" \
+              -f filter=latest -F per_page=100 \
+              --jq '[.jobs[] | select(.name == "nvidia") | .conclusion][0] // "none"')"; then
+              echo "::warning title=Jobs not read::The jobs of $url could not be read; the check runs."
+              decide true "The jobs of $url could not be read from GitHub's API, so the check runs."
+              exit 0
+            fi
+            echo "$url: the GPU job: $conclusion"
+            if [ "$conclusion" = success ]; then
+              decide false "The commit $GITHUB_SHA already passed this check within 7 days, in $url."
+              exit 0
+            fi
+          done <<< "$candidates"
+          decide true "No run of this workflow for $GITHUB_SHA passed the GPU job within 7 days."
+
   # NVIDIA T4. The image carries an NVIDIA driver; the dev shell does not.
   nvidia:
     # The runner exists for this repository only; in a fork the job would
     # stay queued.
-    if: github.repository == 'MatchaChoco010/hizukuri'
+    needs: decide
+    if: github.repository == 'MatchaChoco010/hizukuri' && needs.decide.outputs.run == 'true'
     # Spot is the default; RunsOn falls back to on-demand without capacity.
     # The image leaves too little of its own disk free for a build.
-    runs-on: runs-on=${{ github.run_id }}/family=g4dn.xlarge/image=ubuntu24-gpu-x64/volume=80gb
-    # Nothing is cached: the dependencies are built from scratch, twice
-    # (the crates whose tests run one at a time are built on their own).
+    # extras=s3-cache, with runs-on/action as the first step, sends
+    # actions/cache to the S3 bucket of the runner's stack.
+    runs-on: runs-on=${{ github.run_id }}/family=g4dn.xlarge/image=ubuntu24-gpu-x64/volume=80gb/extras=s3-cache
+    # Without a cache to start from, the dependencies are built from
+    # scratch, twice (the crates whose tests run one at a time are built on
+    # their own).
     # The limit leaves room for a run that passes and for one stuck test to
     # be reported by tools/ci-watch.sh (HIZUKURI_TEST_STALL_SECONDS).
     timeout-minutes: 40
     steps:
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670 # v2.7.1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -322,6 +412,29 @@ jobs:
         continue-on-error: true
         run: nix develop .#ci --command tools/ci-watch.sh --self-test
 
+      # The cargo registry, the git dependencies and the build results, as
+      # the CI workflow keeps them. The cache of this runner is not GitHub's,
+      # where those of the CI workflow are, so this workflow keeps one of its
+      # own, named the same way (cargo-gpu-...). The target directory is
+      # named after the libraries of the dev shell, so flake.lock is part of
+      # the key.
+      - id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-gpu-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-gpu-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}-
+
+      # The cache holds the screenshots and logs of the run that saved it;
+      # the artifact of this run carries this run's only.
+      - name: Leave out the test outputs of the cached run
+        run: rm -rf target/*/test-output
+
       # With the profile of the tests, so that the tests below reuse what is
       # built here.
       - name: Build the compositor
@@ -365,6 +478,19 @@ jobs:
         run: |
           source "$RUNNER_TEMP/nvidia/settings.sh"
           tools/ci.sh test
+
+      # Also when the build or the tests failed, so that the next run starts
+      # from what was built; not when the run was cancelled or the cache was
+      # never read.
+      - if: always() && !cancelled() && steps.cargo-cache.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       - name: Summary
         if: always()
