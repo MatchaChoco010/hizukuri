@@ -338,6 +338,7 @@ hz_ctl quit >/dev/null
 | `hz_client [指定...]` | 検証用のクライアント（`proto-test-client`）を出す |
 | `hz_app CMD...` | 実際のアプリを、その中で起動する |
 | `hz_script NAME` | 標準入力を、実行できるファイルにして、パスを返す（端末の中の shell の代わりに使う） |
+| `hz_desktop_entry NAME` | 標準入力を、desktop entry（`NAME.desktop`）にして、compositor が読む `applications` のディレクトリに置く。`hz_start` の後に呼ぶ |
 | `hz_wait_windows N`、`hz_settle [秒]` | ウィンドウが N 個になるまで待つ。描く予定のフレームが無くなるまで待つ |
 | `hz_ctl ...` | `proto-ctl`。入力の注入、ウィンドウの移動、スクリプトの呼び出しなど |
 | `hz_window_id PATTERN` | 題名か app id に PATTERN を含むウィンドウの id |
@@ -346,10 +347,51 @@ hz_ctl quit >/dev/null
 - **出力は、`--output-size 1920x1080 --output-scale 2` にする。** 論理的には 960x540 で、スライドの上で文字が読める大きさになり、
   拡大しても、粗くならない。
 - **端末の中で、本物の shell を動かさない。** プロンプトに、ユーザー名と機械の名前が出る。`hz_script` で、決まった文字を出すスクリプトを作って、渡す。
-- アプリの文字は、スライドと同じフォントで描かれる（`run-scene.sh` が、fontconfig を、`slides` の devShell のフォントだけに向ける）。
+- 文字は、どの機械でも、`slides` の devShell のフォントで描かれる。
+  - アプリと、compositor が起動するものは、`slides` の devShell のフォントだけを知る fontconfig の設定で動く（`FONTCONFIG_FILE`）。
+  - compositor が自分で描く文字（`hz.load_font()`。project のランチャーなど）は、JetBrains Mono で描かれる（`HIZUKURI_FONT`）。
+    compositor が session のフォントにするのは、1 つの書体だけのファイル（`.ttf`、`.otf`）で（`docs/prototype/script-layer.md` の「文字」）、
+    Noto Sans CJK JP は、複数の書体を収めたファイル（`.ttc`）だからである。JetBrains Mono には、日本語の文字が無い。`hz_start --font FILE` で、別のファイルにできる。
+- **compositor のランチャーに並ぶのは、場面が `hz_desktop_entry` で置いた desktop entry だけである。** compositor の `XDG_DATA_DIRS` は、
+  作業用のディレクトリの中の 1 つだけになる。何も置かなければ、ランチャーは空になる。機械に入っているアプリの名前は、写らない。
+  - ランチャーを撮る場面では、名前を決めた desktop entry を置いてから、ランチャーを開く（下の例）。
+  - desktop entry には、`Name` を書き、`Name[ja]` のような locale ごとの名前と、`OnlyShowIn`、`NotShowIn` を書かない。
+    compositor の locale（`LANG` など）と `XDG_CURRENT_DESKTOP` は、呼び出した側のままなので、それらを書くと、機械によって、並ぶものと名前が変わる。
+  - `hz_app` で起動するアプリは、devShell の `XDG_DATA_DIRS` のまま動く。GTK の schema、アイコン、テーマを、そこから探すからである。
+  - compositor が起動するアプリ（ランチャーから選んだもの、キーに割り当てた端末）は、compositor の環境を受け継ぐ。`XDG_DATA_DIRS` が
+    場面のディレクトリだけなので、そこにデータを探すアプリは、動かないことがある。そういうアプリは、`hz_app` で出す。
 - 画面と一緒に、制御口の `state` を保存しておくと、キャプションと本文に書く値（位置、変換の列、モード）を、そこから取れる。
-- compositor もアプリも、専用の `XDG_RUNTIME_DIR` の中だけで動く。動いているデスクトップには、つながらない。ウィンドウも出ない。
-  起動したプロセスは、起動したときの id で止める。終わると、作業用のディレクトリを消す。
+- compositor もアプリも、専用の `XDG_RUNTIME_DIR` と、空の home（`HOME`、`XDG_CONFIG_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME`、`XDG_STATE_HOME`）の中だけで動く。
+  動いているデスクトップには、つながらない。ウィンドウも出ない。起動したプロセスは、起動したときの id で止める。終わると、作業用のディレクトリを消す。
+
+ランチャーを撮る場面の例（project `fancy` の、logo+D で開くランチャー）:
+
+```sh
+# scenes/launcher.sh
+source "$HZ_LIB"
+project=prototype/compositor/projects/fancy        # scene は、リポジトリの root で動く
+"$HZ_BIN/proto-compositor" build-shaders "$project" # project の shader を SPIR-V にする
+hz_start --output-size 1920x1080 --output-scale 2 --script "$project"
+hz_desktop_entry org.example.Editor <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Editor
+Exec=editor %F
+EOF
+hz_desktop_entry org.example.Terminal <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Exec=foot
+EOF
+hz_settle 1
+hz_ctl key 125 press && hz_ctl key 32 press        # logo+D
+hz_ctl key 32 release && hz_ctl key 125 release
+hz_settle 2
+hz_shot launcher                                   # img/launcher.png
+hz_ctl script-call fancy_launcher > "$HZ_OUT/launcher.json"
+hz_ctl quit >/dev/null
+```
 
 ### VM
 

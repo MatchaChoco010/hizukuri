@@ -11,14 +11,35 @@
 #   hz_window_id PATTERN          id of the first window whose title or app id
 #                                 contains PATTERN
 #   hz_shot NAME                  write $HZ_OUT/NAME.png
+#   hz_desktop_entry NAME         write a desktop entry (standard input) the
+#                                 launcher lists
+#   hz_script NAME                write an executable file (standard input)
 #   hz_stop                       stop everything that was started here
 #
 # Nothing started here can reach a session that is already running on the
 # machine, or the files of the user who runs it: the compositor and its
-# clients get their own runtime directory, home and font configuration, and
-# every variable that names a display or a socket of the surrounding session
-# is removed. Processes are stopped by the ids they were started with, never
-# by name. The runtime directory is removed at the end.
+# clients get their own runtime directory and home (HOME and the XDG
+# directories under it), and every variable that names a display or a
+# socket of the surrounding session is removed. Processes are stopped by
+# the ids they were started with, never by name. The runtime directory is
+# removed at the end.
+#
+# What the scene shows does not depend on the machine either:
+# - Text is set in the fonts of the `slides` shell (HZ_FONT_PATHS). The
+#   applications and whatever the compositor starts get a fontconfig
+#   configuration that knows those fonts only. The compositor draws its own
+#   text (hz.load_font()) with JetBrains Mono, given as HIZUKURI_FONT: its
+#   session's font is a file of one face (docs/prototype/script-layer.md),
+#   and the CJK fonts of the shell are collections. `hz_start --font FILE`
+#   sets another one.
+# - The compositor's XDG_DATA_DIRS is a directory of the scene's, so the
+#   launcher lists the desktop entries the scene writes (hz_desktop_entry),
+#   and nothing when it writes none. The applications started with hz_app
+#   keep the XDG_DATA_DIRS of the development shell: they find their own
+#   data there (GTK its schemas, icons and themes), and do not start or look
+#   different without it. Applications the compositor starts (from the
+#   launcher, or a terminal bound to a key) have the compositor's
+#   environment.
 
 set -u
 
@@ -58,8 +79,9 @@ hz_stop() {
 }
 trap hz_stop EXIT
 
-# The applications draw their text with the fonts the slides are set in, on
-# every machine: fontconfig is pointed at those directories and nowhere else.
+# The applications (and what the compositor starts) draw their text with
+# the fonts the slides are set in, on every machine: fontconfig is pointed
+# at those directories and nowhere else.
 _hz_write_fontconfig() {
     local dir
     {
@@ -78,17 +100,39 @@ _hz_write_fontconfig() {
     } >"$HZ_RT/fonts.conf"
 }
 
+# The file the compositor draws its own text with: the one face of the
+# slides' fonts that it reads (see the top of this file).
+_hz_session_font() {
+    local dir file
+    IFS=':' read -r -a _hz_font_dirs <<<"${HZ_FONT_PATHS:-}"
+    for dir in "${_hz_font_dirs[@]}"; do
+        [ -n "$dir" ] || continue
+        file="$(find "$dir" -name JetBrainsMono-Regular.ttf -type f -print -quit)"
+        [ -n "$file" ] && { echo "$file"; return 0; }
+    done
+    echo "headless.sh: no JetBrainsMono-Regular.ttf in HZ_FONT_PATHS (run the scene through run-scene.sh)" >&2
+    return 1
+}
+
+# The home every process started here gets, instead of the user's.
+_hz_home=(HOME="$HZ_RT/home" XDG_CONFIG_HOME="$HZ_RT/home/.config"
+    XDG_CACHE_HOME="$HZ_RT/home/.cache" XDG_DATA_HOME="$HZ_RT/home/.local/share"
+    XDG_STATE_HOME="$HZ_RT/home/.local/state" FONTCONFIG_FILE="$HZ_RT/fonts.conf")
+
 hz_start() {
+    local font
     rm -rf "$HZ_RT"
     mkdir -m 700 "$HZ_RT"
-    mkdir -p "$HZ_RT/home/.config" "$HZ_RT/home/.cache" "$HZ_OUT"
+    mkdir -p "$HZ_RT/home/.config" "$HZ_RT/home/.cache" "$HZ_RT/home/.local/share" \
+        "$HZ_RT/home/.local/state" "$HZ_RT/share/applications" "$HZ_OUT"
     _hz_write_fontconfig
+    font="$(_hz_session_font)" || return 1
     # The compositor gets the empty home as well: what it keeps between runs
     # (the compiled OCIO shaders in $XDG_CACHE_HOME, for one) stays here and
-    # goes with the runtime directory, and what it reads from a home (the
-    # desktop entries of the launcher) is not the user's.
-    "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" HOME="$HZ_RT/home" \
-        XDG_CONFIG_HOME="$HZ_RT/home/.config" XDG_CACHE_HOME="$HZ_RT/home/.cache" \
+    # goes with the runtime directory. What it reads from the XDG data
+    # directories (the desktop entries of the launcher) is the scene's.
+    "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" "${_hz_home[@]}" \
+        XDG_DATA_DIRS="$HZ_RT/share" HIZUKURI_FONT="$font" \
         "$HZ_BIN/proto-compositor" \
         --backend headless --socket "$HZ_SOCKET" --exit-after "${HZ_SECONDS:-180}" \
         --vulkan-device cpu --vulkan-icd "$HIZUKURI_ICD_LAVAPIPE" \
@@ -116,9 +160,7 @@ hz_client() {
 
 hz_app() {
     "${_hz_isolated[@]}" XDG_RUNTIME_DIR="$HZ_RT" WAYLAND_DISPLAY="$HZ_SOCKET" \
-        HOME="$HZ_RT/home" XDG_CONFIG_HOME="$HZ_RT/home/.config" \
-        XDG_CACHE_HOME="$HZ_RT/home/.cache" FONTCONFIG_FILE="$HZ_RT/fonts.conf" \
-        "$@" >/dev/null 2>&1 &
+        "${_hz_home[@]}" "$@" >/dev/null 2>&1 &
     HZ_CLIENTS+=($!)
 }
 
@@ -171,4 +213,17 @@ hz_script() {
     cat >"$HZ_RT/$1"
     chmod +x "$HZ_RT/$1"
     echo "$HZ_RT/$1"
+}
+
+# Writes a desktop entry from standard input, as NAME.desktop in the one
+# applications directory the compositor reads. The launcher lists these
+# and nothing else. Call it after hz_start (which empties the directory).
+#   hz_desktop_entry org.example.Editor <<'EOF'
+#   [Desktop Entry]
+#   Type=Application
+#   Name=Editor
+#   Exec=editor %F
+#   EOF
+hz_desktop_entry() {
+    cat >"$HZ_RT/share/applications/$1.desktop"
 }
