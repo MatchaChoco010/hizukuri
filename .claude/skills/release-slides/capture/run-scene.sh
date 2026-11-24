@@ -6,7 +6,8 @@
 # Builds the compositor in the Nix development shell and runs each scene
 # there, with HZ_OUT set to OUT_DIR. A scene sources headless.sh (the
 # variable HZ_LIB holds its path) and uses the hz_* functions. The fonts the
-# applications in the scenes use are those of the `slides` shell.
+# compositor and the applications in the scenes use are those of the
+# `slides` shell.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
