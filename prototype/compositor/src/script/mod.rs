@@ -219,8 +219,9 @@ pub struct ScriptOptions {
     /// (`hz.color_format()`). `None`: the most exact one the device can
     /// draw to, blend in and filter.
     pub color_format: Option<Format>,
-    /// The font file `hz.load_font()` reads. `None`: the first well-known
-    /// font found where systems keep them, if any.
+    /// The font file `hz.load_font()` reads. `None`: the one fontconfig
+    /// picks for sans-serif, or else the first well-known font found where
+    /// systems keep them, if any.
     pub font: Option<PathBuf>,
 }
 

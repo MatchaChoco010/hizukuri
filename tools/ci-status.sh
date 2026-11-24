@@ -8,7 +8,7 @@
 #   --commit SHA         the commit to look at. Default: the head of the
 #                        branch on GitHub.
 #   --workflows "A B"    the workflow files, by file name. Default:
-#                        "ci.yml vm.yml gpu.yml".
+#                        "ci.yml vm.yml".
 #   --wait               wait until every run has finished.
 #   --interval SECONDS   time between two looks while waiting. Default: 30.
 #   --start-timeout SECONDS
@@ -33,7 +33,7 @@ usage() {
 }
 
 commit=""
-workflows="ci.yml vm.yml gpu.yml"
+workflows="ci.yml vm.yml"
 wait=false
 interval=30
 start_timeout=300

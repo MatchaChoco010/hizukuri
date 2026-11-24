@@ -37,6 +37,10 @@ The part `animation` runs the animation example
 (`prototype/compositor/projects/animation`): two windows are swapped with
 logo+shift+L and move to their new places over time.
 
+The part `projects` runs the two example projects (`projects/fancy`,
+`projects/room`) the way `hzk project` does, without a font given: each
+finds the session's font itself and logo+D opens its launcher.
+
 The part `vkms` runs the compositor and its self test on the virtual KMS
 driver over SSH alone, without a VT. `safety` covers the watchdog; `outputs`
 two outputs and hotplug; `ime` Japanese input with a real input method
@@ -66,6 +70,7 @@ failed is kept under the output directory (default
     x11/satellite.log                what xwayland-satellite and Xwayland printed
     x11/x11-client*.log              the events the X11 test client received
     script/hzk-script.log            what `hzk script` printed
+    projects/screen-*-launcher.png   the launcher of each example project, open
     animation/screen-*.png           the animation example (its moves slowed down) before,
                                      during and after a swap, with what the script drew
                                      at each (animation-*.json)
@@ -108,6 +113,9 @@ BTN_LEFT = 272
 DRAW_ONLY = "/home/hizukuri/hzk-draw-only"
 # Where the animation example goes in the guest.
 ANIMATION = "/home/hizukuri/hzk-animation"
+# Where the two example projects go in the guest.
+FANCY = "/home/hizukuri/hzk-fancy"
+ROOM = "/home/hizukuri/hzk-room"
 # Seconds a move of the example takes in the VM check: long enough for a
 # capture to see it.
 SLOW_MOVE = "3.0"
@@ -123,8 +131,8 @@ PATHS = {
 }
 
 # What runs on any machine, in this order, when nothing is asked for.
-DEFAULT_PARTS = ["lavapipe", "script", "animation", "vkms", "safety", "outputs", "ime",
-                 "x11"]
+DEFAULT_PARTS = ["lavapipe", "script", "animation", "projects", "vkms", "safety", "outputs",
+                 "ime", "x11"]
 
 
 def drawing(args, builtin=False):
@@ -2921,7 +2929,8 @@ def main():
     parser.add_argument("--out", help="directory for results and evidence")
     parser.add_argument("--only", default=",".join(DEFAULT_PARTS),
                         help="comma separated parts to check: lavapipe, script, animation, "
-                             "vkms, safety, outputs, ime, x11 (the default: all of these), "
+                             "projects, vkms, safety, outputs, ime, x11 (the default: all of "
+                             "these), "
                              "real-hardware (needs HIZUKURI_VM_CPU=host,-hypervisor)")
     parser.add_argument("--skip-build", action="store_true",
                         help="send the binaries that are already built")
@@ -2946,19 +2955,21 @@ def main():
     # with the project): the guest has no Slang compiler, and the compositor
     # reads only SPIR-V.
     for project in ("scripts", os.path.join("projects", "draw-only"),
-                    os.path.join("projects", "animation")):
+                    os.path.join("projects", "animation"), os.path.join("projects", "fancy"),
+                    os.path.join("projects", "room")):
         subprocess.run([binaries[0], "build-shaders",
                         os.path.join(ROOT, "prototype", "compositor", project)],
                        cwd=ROOT, check=True)
     results = []
     try:
-        guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR} && rm -rf {DRAW_ONLY} {ANIMATION} "
-              f"&& mkdir -p {DRAW_ONLY} {ANIMATION}")
+        projects = {DRAW_ONLY: "draw-only", ANIMATION: "animation", FANCY: "fancy",
+                    ROOM: "room"}
+        guest(f"mkdir -p {GUEST_BIN} {GUEST_DIR} && rm -rf {' '.join(projects)} "
+              f"&& mkdir -p {' '.join(projects)}")
         vm("push", *binaries, "bin/", timeout=300)
-        vm("push", os.path.join(ROOT, "prototype", "compositor", "projects", "draw-only") + "/",
-           f"{DRAW_ONLY}/")
-        vm("push", os.path.join(ROOT, "prototype", "compositor", "projects", "animation") + "/",
-           f"{ANIMATION}/")
+        for place, project in projects.items():
+            vm("push", os.path.join(ROOT, "prototype", "compositor", "projects", project) + "/",
+               f"{place}/")
         uid = int(guest("id -u").strip())
     except (Failed, ValueError) as error:
         print(f"FAIL setup: {error}")
@@ -3111,9 +3122,52 @@ def check_animation(out, uid, results):
         part.stop()
 
 
+def check_projects(out, uid, results):
+    """The two example projects as DRM/KMS sessions, started as `hzk
+    project` starts them: no --font and no HIZUKURI_FONT. Each loads the
+    session's font with `hz.load_font()` (which the guest's fontconfig
+    answers), so that its launcher writes names, not nothing (fancy) or
+    dots (room); logo+D opens the launcher, and the screen is kept. What the
+    text looks like is not compared: tests/launcher.rs and tests/room.rs
+    look at the launchers on a manual clock."""
+    part = Part("projects", out, uid, results)
+
+    def launcher(name, directory, describe):
+        def check():
+            part.start("--script", directory, "--exit-after", "120")
+            try:
+                script = part.ctl("state")["script"]
+                if script["mode"] != "running":
+                    raise Failed(f"the project does not run: {script}")
+                before = describe()
+                if not before.get("font"):
+                    raise Failed(f"the launcher has no font: {before}")
+                vm("key", "logo-d")
+                shown = wait_for("the launcher to open", lambda: (lambda d: d if d.get("open")
+                                 else None)(describe()), seconds=10)
+                # Long enough for it to have grown to its full size.
+                time.sleep(2)
+                vm("screendump", os.path.join(part.out, f"screen-{name}-launcher.png"),
+                   check=False)
+                script = part.ctl("state")["script"]
+                if script["failures"]:
+                    raise Failed(f"the script failed: {script['last_failures']}")
+                return (f"the session's font is loaded without --font or HIZUKURI_FONT; logo+D "
+                        f"opened the launcher with {shown.get('count')} applications")
+            finally:
+                part.stop()
+        return check
+
+    part.item("fancy-launcher-text", launcher(
+        "fancy", FANCY, lambda: part.ctl("script-call", "fancy_launcher")["result"]))
+    part.item("room-launcher-text", launcher(
+        "room", ROOM, lambda: part.ctl("script-call", "room_state")["result"]["launcher"]))
+
+
 PARTS = {
     "script": check_script,
     "animation": check_animation,
+    "projects": check_projects,
     "vkms": check_vkms,
     "safety": check_safety,
     "outputs": check_outputs,

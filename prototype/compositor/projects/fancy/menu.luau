@@ -507,6 +507,8 @@ function M.describe()
         rows = list,
         drawn = drawn,
         show = show and (spring.at(show, clock)) or 0,
+        -- Whether the names are written with the session's font.
+        font = font ~= nil,
     }
 end
 

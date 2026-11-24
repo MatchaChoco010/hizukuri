@@ -180,13 +180,15 @@ let
       environment.sessionVariables.VK_DRIVER_FILES =
         "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json";
 
-      # Japanese text: what the input method composes, in the terminal and
-      # in the candidate window.
+      # DejaVu for the terminals and for the compositor's own text (it asks
+      # fontconfig for sans-serif); IPAex for Japanese: what the input method
+      # composes, in the terminal and in the candidate window.
       fonts.packages = [
         pkgs.dejavu_fonts
         pkgs.ipaexfont
       ];
       fonts.fontconfig.defaultFonts.monospace = [ "DejaVu Sans Mono" ];
+      fonts.fontconfig.defaultFonts.sansSerif = [ "DejaVu Sans" ];
 
       environment.systemPackages = [
         guestTools

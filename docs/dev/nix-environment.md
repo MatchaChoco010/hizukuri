@@ -92,7 +92,7 @@ HIZUKURI_TEST_DEVICES=gpu,lavapipe tools/ci.sh
 | 用途 | ふだんの開発 | CI |
 | Rust | `rust-toolchain.toml` の版と component に、`rust-src`、`rust-analyzer` を足したもの | `rust-toolchain.toml` の版と component |
 | ビルドの道具 | `pkg-config`、gcc、`cargo-nextest`、Slang のコンパイラー（`shader-slang` 2026.21。`slangc`） | 同じ |
-| ライブラリ | wayland、libxkbcommon、libinput、libseat、libudev、libdrm、libgbm、libdisplay-info 0.3、vulkan-loader | 同じ |
+| ライブラリ | wayland、libxkbcommon、libinput、libseat、libudev、libdrm、libgbm、libdisplay-info 0.3、vulkan-loader、OpenColorIO（`prototype/ocio` が、共有ライブラリとしてリンクする） | 同じ |
 | Vulkan | Mesa、validation layer、`vulkaninfo`、`vkcube` | 同じ |
 | 検査の道具 | `gdb`（`tools/ci-watch.sh` が、止まったテストと、落ちたプロセスの backtrace を取る） | 同じ |
 | テストが既定で使うアプリ | weston（`weston-terminal`）、wl-clipboard、foot | 同じ |
