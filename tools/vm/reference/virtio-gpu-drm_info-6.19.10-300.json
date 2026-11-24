@@ -1,0 +1,1170 @@
+{
+  "\/dev\/dri\/card0": {
+    "driver": {
+      "name": "virtio_gpu",
+      "desc": "virtio GPU",
+      "version": {
+        "major": 0,
+        "minor": 1,
+        "patch": 0,
+        "date": "0"
+      },
+      "kernel": {
+        "sysname": "Linux",
+        "release": "6.19.10-300.fc44.x86_64",
+        "version": "#1 SMP PREEMPT_DYNAMIC Wed Mar 25 18:23:49 UTC 2026",
+        "tainted": 0
+      },
+      "client_caps": {
+        "STEREO_3D": true,
+        "UNIVERSAL_PLANES": true,
+        "ATOMIC": true,
+        "ASPECT_RATIO": true,
+        "WRITEBACK_CONNECTORS": true,
+        "CURSOR_PLANE_HOTSPOT": true,
+        "PLANE_COLOR_PIPELINE": true
+      },
+      "caps": {
+        "DUMB_BUFFER": 1,
+        "VBLANK_HIGH_CRTC": 1,
+        "DUMB_PREFERRED_DEPTH": 0,
+        "DUMB_PREFER_SHADOW": 0,
+        "PRIME": 3,
+        "TIMESTAMP_MONOTONIC": 1,
+        "ASYNC_PAGE_FLIP": 0,
+        "CURSOR_WIDTH": 64,
+        "CURSOR_HEIGHT": 64,
+        "ADDFB2_MODIFIERS": 0,
+        "PAGE_FLIP_TARGET": 0,
+        "CRTC_IN_VBLANK_EVENT": 1,
+        "SYNCOBJ": 1,
+        "SYNCOBJ_TIMELINE": 1,
+        "ATOMIC_ASYNC_PAGE_FLIP": 0
+      }
+    },
+    "device": {
+      "available_nodes": 5,
+      "bus_type": 0,
+      "device_data": {
+        "vendor": 6900,
+        "device": 4176,
+        "subsystem_vendor": 6900,
+        "subsystem_device": 4352
+      },
+      "bus_data": {
+        "domain": 0,
+        "bus": 0,
+        "slot": 4,
+        "function": 0
+      }
+    },
+    "fb_size": {
+      "min_width": 32,
+      "max_width": 8192,
+      "min_height": 32,
+      "max_height": 8192
+    },
+    "connectors": [
+      {
+        "id": 38,
+        "type": 15,
+        "status": 1,
+        "phy_width": 320,
+        "phy_height": 200,
+        "subpixel": 1,
+        "encoder_id": 39,
+        "encoders": [
+          39
+        ],
+        "modes": [
+          {
+            "clock": 107300,
+            "hdisplay": 1280,
+            "hsync_start": 1600,
+            "hsync_end": 1638,
+            "htotal": 1728,
+            "hskew": 0,
+            "vdisplay": 800,
+            "vsync_start": 804,
+            "vsync_end": 808,
+            "vtotal": 828,
+            "vscan": 0,
+            "vrefresh": 75,
+            "flags": 10,
+            "type": 72,
+            "name": "1280x800"
+          },
+          {
+            "clock": 742500,
+            "hdisplay": 5120,
+            "hsync_start": 6216,
+            "hsync_end": 6304,
+            "htotal": 6600,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2168,
+            "vsync_end": 2178,
+            "vtotal": 2250,
+            "vscan": 0,
+            "vrefresh": 50,
+            "flags": 1572869,
+            "type": 64,
+            "name": "5120x2160"
+          },
+          {
+            "clock": 594000,
+            "hdisplay": 4096,
+            "hsync_start": 5064,
+            "hsync_end": 5152,
+            "htotal": 5280,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2168,
+            "vsync_end": 2178,
+            "vtotal": 2250,
+            "vscan": 0,
+            "vrefresh": 50,
+            "flags": 2097157,
+            "type": 64,
+            "name": "4096x2160"
+          },
+          {
+            "clock": 594000,
+            "hdisplay": 3840,
+            "hsync_start": 4016,
+            "hsync_end": 4104,
+            "htotal": 4400,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2168,
+            "vsync_end": 2178,
+            "vtotal": 2250,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 1048581,
+            "type": 64,
+            "name": "3840x2160"
+          },
+          {
+            "clock": 593407,
+            "hdisplay": 3840,
+            "hsync_start": 4016,
+            "hsync_end": 4104,
+            "htotal": 4400,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2168,
+            "vsync_end": 2178,
+            "vtotal": 2250,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 1048581,
+            "type": 64,
+            "name": "3840x2160"
+          },
+          {
+            "clock": 594000,
+            "hdisplay": 3840,
+            "hsync_start": 4896,
+            "hsync_end": 4984,
+            "htotal": 5280,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2168,
+            "vsync_end": 2178,
+            "vtotal": 2250,
+            "vscan": 0,
+            "vrefresh": 50,
+            "flags": 1048581,
+            "type": 64,
+            "name": "3840x2160"
+          },
+          {
+            "clock": 234000,
+            "hdisplay": 1920,
+            "hsync_start": 2048,
+            "hsync_end": 2256,
+            "htotal": 2600,
+            "hskew": 0,
+            "vdisplay": 1440,
+            "vsync_start": 1441,
+            "vsync_end": 1444,
+            "vtotal": 1500,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1920x1440"
+          },
+          {
+            "clock": 185625,
+            "hdisplay": 2560,
+            "hsync_start": 3108,
+            "hsync_end": 3152,
+            "htotal": 3300,
+            "hskew": 0,
+            "vdisplay": 1080,
+            "vsync_start": 1084,
+            "vsync_end": 1089,
+            "vtotal": 1125,
+            "vscan": 0,
+            "vrefresh": 50,
+            "flags": 1572869,
+            "type": 64,
+            "name": "2560x1080"
+          },
+          {
+            "clock": 218250,
+            "hdisplay": 1856,
+            "hsync_start": 1952,
+            "hsync_end": 2176,
+            "htotal": 2528,
+            "hskew": 0,
+            "vdisplay": 1392,
+            "vsync_start": 1393,
+            "vsync_end": 1396,
+            "vtotal": 1439,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1856x1392"
+          },
+          {
+            "clock": 204750,
+            "hdisplay": 1792,
+            "hsync_start": 1920,
+            "hsync_end": 2120,
+            "htotal": 2448,
+            "hskew": 0,
+            "vdisplay": 1344,
+            "vsync_start": 1345,
+            "vsync_end": 1348,
+            "vtotal": 1394,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1792x1344"
+          },
+          {
+            "clock": 162000,
+            "hdisplay": 2048,
+            "hsync_start": 2074,
+            "hsync_end": 2154,
+            "htotal": 2250,
+            "hskew": 0,
+            "vdisplay": 1152,
+            "vsync_start": 1153,
+            "vsync_end": 1156,
+            "vtotal": 1200,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "2048x1152"
+          },
+          {
+            "clock": 193250,
+            "hdisplay": 1920,
+            "hsync_start": 2056,
+            "hsync_end": 2256,
+            "htotal": 2592,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1203,
+            "vsync_end": 1209,
+            "vtotal": 1245,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1920x1200"
+          },
+          {
+            "clock": 148500,
+            "hdisplay": 1920,
+            "hsync_start": 2008,
+            "hsync_end": 2052,
+            "htotal": 2200,
+            "hskew": 0,
+            "vdisplay": 1080,
+            "vsync_start": 1084,
+            "vsync_end": 1089,
+            "vtotal": 1125,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "1920x1080"
+          },
+          {
+            "clock": 148500,
+            "hdisplay": 1920,
+            "hsync_start": 2448,
+            "hsync_end": 2492,
+            "htotal": 2640,
+            "hskew": 0,
+            "vdisplay": 1080,
+            "vsync_start": 1084,
+            "vsync_end": 1089,
+            "vtotal": 1125,
+            "vscan": 0,
+            "vrefresh": 50,
+            "flags": 1048581,
+            "type": 64,
+            "name": "1920x1080"
+          },
+          {
+            "clock": 162000,
+            "hdisplay": 1600,
+            "hsync_start": 1664,
+            "hsync_end": 1856,
+            "htotal": 2160,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1201,
+            "vsync_end": 1204,
+            "vtotal": 1250,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1600x1200"
+          },
+          {
+            "clock": 146250,
+            "hdisplay": 1680,
+            "hsync_start": 1784,
+            "hsync_end": 1960,
+            "htotal": 2240,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1059,
+            "vtotal": 1089,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1680x1050"
+          },
+          {
+            "clock": 121750,
+            "hdisplay": 1400,
+            "hsync_start": 1488,
+            "hsync_end": 1632,
+            "htotal": 1864,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1057,
+            "vtotal": 1089,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1400x1050"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1440,
+            "htotal": 1688,
+            "hskew": 0,
+            "vdisplay": 1024,
+            "vsync_start": 1025,
+            "vsync_end": 1028,
+            "vtotal": 1066,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x1024"
+          },
+          {
+            "clock": 106500,
+            "hdisplay": 1440,
+            "hsync_start": 1520,
+            "hsync_end": 1672,
+            "htotal": 1904,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 903,
+            "vsync_end": 909,
+            "vtotal": 934,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1440x900"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1280,
+            "hsync_start": 1376,
+            "hsync_end": 1488,
+            "htotal": 1800,
+            "hskew": 0,
+            "vdisplay": 960,
+            "vsync_start": 961,
+            "vsync_end": 964,
+            "vtotal": 1000,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x960"
+          },
+          {
+            "clock": 85500,
+            "hdisplay": 1360,
+            "hsync_start": 1424,
+            "hsync_end": 1536,
+            "htotal": 1792,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 777,
+            "vtotal": 795,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1360x768"
+          },
+          {
+            "clock": 79500,
+            "hdisplay": 1280,
+            "hsync_start": 1344,
+            "hsync_end": 1472,
+            "htotal": 1664,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 778,
+            "vtotal": 798,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1280x768"
+          },
+          {
+            "clock": 65000,
+            "hdisplay": 1024,
+            "hsync_start": 1048,
+            "hsync_end": 1184,
+            "htotal": 1344,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 777,
+            "vtotal": 806,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "1024x768"
+          },
+          {
+            "clock": 40000,
+            "hdisplay": 800,
+            "hsync_start": 840,
+            "hsync_end": 968,
+            "htotal": 1056,
+            "hskew": 0,
+            "vdisplay": 600,
+            "vsync_start": 601,
+            "vsync_end": 605,
+            "vtotal": 628,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "800x600"
+          },
+          {
+            "clock": 25200,
+            "hdisplay": 640,
+            "hsync_start": 656,
+            "hsync_end": 752,
+            "htotal": 800,
+            "hskew": 0,
+            "vdisplay": 480,
+            "vsync_start": 490,
+            "vsync_end": 492,
+            "vtotal": 525,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 524298,
+            "type": 64,
+            "name": "640x480"
+          },
+          {
+            "clock": 25175,
+            "hdisplay": 640,
+            "hsync_start": 656,
+            "hsync_end": 752,
+            "htotal": 800,
+            "hskew": 0,
+            "vdisplay": 480,
+            "vsync_start": 490,
+            "vsync_end": 492,
+            "vtotal": 525,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "640x480"
+          }
+        ],
+        "properties": {
+          "DPMS": {
+            "id": 2,
+            "flags": 8,
+            "type": 8,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "On",
+                "value": 0
+              },
+              {
+                "name": "Standby",
+                "value": 1
+              },
+              {
+                "name": "Suspend",
+                "value": 2
+              },
+              {
+                "name": "Off",
+                "value": 3
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "link-status": {
+            "id": 5,
+            "flags": 8,
+            "type": 8,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Good",
+                "value": 0
+              },
+              {
+                "name": "Bad",
+                "value": 1
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "non-desktop": {
+            "id": 6,
+            "flags": 6,
+            "type": 2,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 0,
+            "data": null
+          },
+          "TILE": {
+            "id": 4,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": null,
+            "value": null,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 37,
+            "spec": 3435973836,
+            "value": 37,
+            "data": null
+          },
+          "EDID": {
+            "id": 1,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 40,
+            "spec": null,
+            "value": null,
+            "data": "AP\/\/\/\/\/\/\/wBJFDQSAAAAACoYAQSlIBR4Bu6Ro1RMmSYPUFQhCADhwNHA0QCpQLMAlQCBgIFA6ikAwFEgHDBAJkRARcsQAAAYAAAA9wAKAECCACggAAAAAAAAAAAA\/QAyfR6g\/wEKICAgICAgAAAA\/ABRRU1VIE1vbml0b3IKAToCAwsARn1lYFkfYQAAABAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALw=="
+          }
+        }
+      }
+    ],
+    "encoders": [
+      {
+        "id": 39,
+        "type": 5,
+        "crtc_id": 37,
+        "possible_crtcs": 1,
+        "possible_clones": 1
+      }
+    ],
+    "crtcs": [
+      {
+        "id": 37,
+        "fb_id": 41,
+        "x": 0,
+        "y": 0,
+        "mode": {
+          "clock": 107300,
+          "hdisplay": 1280,
+          "hsync_start": 1600,
+          "hsync_end": 1638,
+          "htotal": 1728,
+          "hskew": 0,
+          "vdisplay": 800,
+          "vsync_start": 804,
+          "vsync_end": 808,
+          "vtotal": 828,
+          "vscan": 0,
+          "vrefresh": 75,
+          "flags": 10,
+          "type": 72,
+          "name": "1280x800"
+        },
+        "gamma_size": 0,
+        "properties": {
+          "ACTIVE": {
+            "id": 22,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 1,
+            "data": null
+          },
+          "MODE_ID": {
+            "id": 23,
+            "flags": 2147483664,
+            "type": 16,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 42,
+            "spec": null,
+            "value": null,
+            "data": {
+              "clock": 107300,
+              "hdisplay": 1280,
+              "hsync_start": 1600,
+              "hsync_end": 1638,
+              "htotal": 1728,
+              "hskew": 0,
+              "vdisplay": 800,
+              "vsync_start": 804,
+              "vsync_end": 808,
+              "vtotal": 828,
+              "vscan": 0,
+              "vrefresh": 75,
+              "flags": 10,
+              "type": 72,
+              "name": "1280x800"
+            }
+          },
+          "OUT_FENCE_PTR": {
+            "id": 19,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 18446744073709551615
+            },
+            "value": 0,
+            "data": null
+          },
+          "VRR_ENABLED": {
+            "id": 24,
+            "flags": 2,
+            "type": 2,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 0,
+            "data": null
+          }
+        }
+      }
+    ],
+    "planes": [
+      {
+        "id": 33,
+        "possible_crtcs": 1,
+        "crtc_id": 37,
+        "fb_id": 41,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": {
+          "id": 41,
+          "width": 1280,
+          "height": 800,
+          "format": 875713112,
+          "planes": [
+            {
+              "offset": 0,
+              "pitch": 5120
+            }
+          ]
+        },
+        "formats": [
+          875713112
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 1,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 41,
+            "spec": 4227595259,
+            "value": 41,
+            "data": {
+              "id": 41,
+              "width": 1280,
+              "height": 800,
+              "format": 875713112,
+              "planes": [
+                {
+                  "offset": 0,
+                  "pitch": 5120
+                }
+              ]
+            }
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 37,
+            "spec": 3435973836,
+            "value": 37,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 1280,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 1280,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 800,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 800,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 83886080,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 83886080,
+            "data": 1280
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 52428800,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 52428800,
+            "data": 800
+          },
+          "FB_DAMAGE_CLIPS": {
+            "id": 21,
+            "flags": 2147483664,
+            "type": 16,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 43,
+            "spec": null,
+            "value": null,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 34,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 2,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 2,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "HOTSPOT_X": {
+            "id": 35,
+            "flags": 128,
+            "type": 128,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 11,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 11,
+            "data": null
+          },
+          "HOTSPOT_Y": {
+            "id": 36,
+            "flags": 128,
+            "type": 128,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 12,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 12,
+            "data": null
+          }
+        }
+      }
+    ]
+  }
+}

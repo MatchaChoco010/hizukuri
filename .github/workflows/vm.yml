@@ -1,0 +1,173 @@
+# Runs the compositor as a DRM/KMS session in the verification VM
+# (tools/vm) and checks it with tools/vm-check.py. The runner needs KVM and
+# no GPU: the guest renders on the CPU. See docs/dev/vm-environment.md.
+#
+# The guest, QEMU and the build environment all come from flake.lock.
+#
+# Every action is pinned to a commit; the comment after it names the release.
+name: VM
+
+# A push of documentation only skips the session, except on a release
+# candidate branch: the `changes` job decides that (tools/ci-changes.sh), not
+# a paths filter on the trigger, which would apply to every branch alike.
+on:
+  push:
+    branches: [develop, release, "release-candidate/**"]
+  schedule:
+    # Every night (UTC), so that a change in what the runners provide shows
+    # up without a push.
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per commit of a ref. A group for the whole ref would let a newer
+# push replace a run that is still waiting, and when the newer push changed
+# documentation only, nothing would run the session on the older one.
+concurrency:
+  group: vm-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # Standard runners have 4 CPUs and 16 GB of memory.
+  CARGO_BUILD_JOBS: "4"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  HIZUKURI_VM_CPUS: "4"
+  HIZUKURI_VM_MEMORY: 6G
+
+jobs:
+  # Decides whether anything other than documentation changed. Schedules,
+  # manual runs and release candidate branches always run the session.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_CREATED: ${{ github.event.created }}
+        run: tools/ci-changes.sh
+
+  session:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # /dev/kvm exists on the runner but belongs to a group the runner's
+      # user is not in. `udevadm trigger` returns before the rule has been
+      # applied, so wait for the events it queued, and then for the mode of
+      # the node itself.
+      - name: Allow the runner to use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle --timeout=30
+          for _ in $(seq 1 50); do
+            if test -r /dev/kvm && test -w /dev/kvm; then
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo "::error::/dev/kvm is not readable and writable by the runner's user"
+          ls -l /dev/kvm || true
+          exit 1
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      # /nix is not cached. The dev shell, QEMU and the guest system come from
+      # cache.nixos.org and static.rust-lang.org in under a minute (the few
+      # derivations that are specific to the guest are built here), which is
+      # what restoring a cache of that size takes as well.
+      - name: Fetch the dev shell
+        run: nix develop .#ci --command true
+
+      - name: Build the guest system and fetch QEMU
+        run: tools/vm/vm build
+
+      # The cargo registry, the git dependencies and the build results. The
+      # compositor is built with the dev profile here, which the CI workflow
+      # does not build (its caches are cargo-lint-... and cargo-test-...), so
+      # this workflow keeps a cache of its own, named the same way.
+      - id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-vm-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-vm-${{ runner.os }}-${{ hashFiles('flake.lock', 'rust-toolchain.toml') }}-
+
+      - name: Build the compositor
+        run: nix develop .#ci --command cargo build -p proto-compositor -p proto-test-client
+
+      - if: github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+      # Starts the VM, runs every part that needs no GPU, stops the VM.
+      - name: Check the DRM/KMS session
+        run: |
+          nix develop .#ci --command tools/vm/vm test tools/vm-check.py \
+            --skip-build --out artifacts/vm-check/session
+
+      # The guard against taking over a real display needs a guest that
+      # looks like real hardware, which is another start of the VM.
+      - name: Check the real-hardware guard
+        if: always()
+        env:
+          HIZUKURI_VM_CPU: host,-hypervisor
+        run: |
+          nix develop .#ci --command tools/vm/vm test tools/vm-check.py \
+            --skip-build --only real-hardware --out artifacts/vm-check/real-hardware
+
+      - name: Summary
+        if: always()
+        run: |
+          for file in artifacts/vm-check/*/summary.txt; do
+            [ -f "$file" ] || continue
+            {
+              echo "### $(basename "$(dirname "$file")")"
+              echo '```'
+              cat "$file"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # Every item's detail, the compositor's logs and the screens that were
+      # read back; and the guest's serial console and QEMU's own log.
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-check
+          path: |
+            artifacts/vm-check/
+            ~/.local/state/hizukuri-vm/log/
+          if-no-files-found: ignore
+          retention-days: 14

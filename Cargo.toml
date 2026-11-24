@@ -1,0 +1,81 @@
+[workspace]
+resolver = "3"
+members = [
+    "prototype/color",
+    "prototype/wl",
+    "prototype/backend",
+    "prototype/compositor",
+    "prototype/gfx-core",
+    "prototype/gfx-lua",
+    "prototype/slangc",
+    "prototype/ocio",
+    "tools/test-client",
+    "tools/ltc-fit",
+    "tools/ltc-check",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+proto-color = { path = "prototype/color" }
+proto-wl = { path = "prototype/wl" }
+proto-backend = { path = "prototype/backend" }
+proto-test-client = { path = "tools/test-client" }
+
+# Pinned to the published vulkan-rs revision. Only proto-gfx-core may
+# depend on these directly.
+vulkan = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0", features = ["wayland"] }
+vulkan-alloc = { git = "https://github.com/MatchaChoco010/vulkan-rs", tag = "v0.3.0+vulkan-sdk-1.4.363.0" }
+
+# Pinned Smithay master revision. Only proto-wl and
+# proto-backend may depend on it.
+smithay = { git = "https://github.com/Smithay/smithay", rev = "8fd9fe0c74e5c13a1fc9b6797d3960c8381bda55", default-features = false }
+
+# The checked GPU API for scripts and its script binding.
+proto-gfx-core = { path = "prototype/gfx-core" }
+proto-gfx-lua = { path = "prototype/gfx-lua" }
+# Runs slangc, the Slang compiler, as a child process: for build scripts and
+# `build-shaders`.
+proto-slangc = { path = "prototype/slangc" }
+# OpenColorIO: a thin C++ layer over the shared library.
+proto-ocio = { path = "prototype/ocio" }
+# For tests only (a dev-dependency): writes the SPIR-V of short shaders that
+# tests give as WGSL or GLSL. Nothing built into a binary compiles shaders.
+naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "glsl-in", "spv-out"] }
+# What proto-gfx-core uses to check SPIR-V it is handed: SPIRV-Tools (the
+# validator and the graphics-robust-access pass, built from its C++ source
+# by the crate) and a SPIR-V reader for the checks and the reflection. Only
+# proto-gfx-core may depend on these.
+spirv-tools = { version = "0.13.3", default-features = false, features = ["use-compiled-tools"] }
+rspirv = "0.13.0"
+# The script language is not decided; Luau is the provisional choice.
+mlua = { version = "0.12.2", default-features = false }
+half = "2.7"
+
+calloop = "0.14.5"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The brute-force integrations that ltc-check compares a shader with.
+[profile.dev.package.proto-ltc-fit]
+opt-level = 3
+
+# The checks (tools/ci.sh) build with this profile. Most of their time goes
+# into compiling the dependencies, and the tests spend little time inside
+# them, so the dependencies are not optimized here.
+[profile.test.package."*"]
+opt-level = 0

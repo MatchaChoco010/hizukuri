@@ -1,0 +1,8 @@
+# The processes cargo starts (tests, and what they start in turn) do not
+# write into the shader caches of the drivers, which are in the home of
+# whoever runs them by default. tools/ci.sh sets these variables itself, to
+# a cache of the test run's own; values already in the environment win.
+# See docs/dev/testing-and-ci.md.
+[env]
+MESA_SHADER_CACHE_DISABLE = "true"
+__GL_SHADER_DISK_CACHE = "0"

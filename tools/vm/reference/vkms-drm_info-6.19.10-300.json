@@ -1,0 +1,4695 @@
+{
+  "\/dev\/dri\/card1": {
+    "driver": {
+      "name": "vkms",
+      "desc": "Virtual Kernel Mode Setting",
+      "version": {
+        "major": 1,
+        "minor": 0,
+        "patch": 0,
+        "date": "0"
+      },
+      "kernel": {
+        "sysname": "Linux",
+        "release": "6.19.10-300.fc44.x86_64",
+        "version": "#1 SMP PREEMPT_DYNAMIC Wed Mar 25 18:23:49 UTC 2026",
+        "tainted": 0
+      },
+      "client_caps": {
+        "STEREO_3D": true,
+        "UNIVERSAL_PLANES": true,
+        "ATOMIC": true,
+        "ASPECT_RATIO": true,
+        "WRITEBACK_CONNECTORS": true,
+        "CURSOR_PLANE_HOTSPOT": false,
+        "PLANE_COLOR_PIPELINE": true
+      },
+      "caps": {
+        "DUMB_BUFFER": 1,
+        "VBLANK_HIGH_CRTC": 1,
+        "DUMB_PREFERRED_DEPTH": 0,
+        "DUMB_PREFER_SHADOW": 0,
+        "PRIME": 3,
+        "TIMESTAMP_MONOTONIC": 1,
+        "ASYNC_PAGE_FLIP": 0,
+        "CURSOR_WIDTH": 512,
+        "CURSOR_HEIGHT": 512,
+        "ADDFB2_MODIFIERS": 1,
+        "PAGE_FLIP_TARGET": 0,
+        "CRTC_IN_VBLANK_EVENT": 1,
+        "SYNCOBJ": 0,
+        "SYNCOBJ_TIMELINE": 0,
+        "ATOMIC_ASYNC_PAGE_FLIP": 0
+      }
+    },
+    "device": {
+      "available_nodes": 1,
+      "bus_type": 4,
+      "device_data": null,
+      "bus_data": {
+        "name": "vkms"
+      }
+    },
+    "fb_size": {
+      "min_width": 10,
+      "max_width": 8192,
+      "min_height": 10,
+      "max_height": 8192
+    },
+    "connectors": [
+      {
+        "id": 85,
+        "type": 18,
+        "status": 1,
+        "phy_width": 0,
+        "phy_height": 0,
+        "subpixel": 1,
+        "encoder_id": 0,
+        "encoders": [
+          84
+        ],
+        "modes": [
+          {
+            "clock": 556744,
+            "hdisplay": 4096,
+            "hsync_start": 4104,
+            "hsync_end": 4136,
+            "htotal": 4176,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2208,
+            "vsync_end": 2216,
+            "vtotal": 2222,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "4096x2160"
+          },
+          {
+            "clock": 556188,
+            "hdisplay": 4096,
+            "hsync_start": 4104,
+            "hsync_end": 4136,
+            "htotal": 4176,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2208,
+            "vsync_end": 2216,
+            "vtotal": 2222,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "4096x2160"
+          },
+          {
+            "clock": 348500,
+            "hdisplay": 2560,
+            "hsync_start": 2752,
+            "hsync_end": 3032,
+            "htotal": 3504,
+            "hskew": 0,
+            "vdisplay": 1600,
+            "vsync_start": 1603,
+            "vsync_end": 1609,
+            "vtotal": 1658,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "2560x1600"
+          },
+          {
+            "clock": 268500,
+            "hdisplay": 2560,
+            "hsync_start": 2608,
+            "hsync_end": 2640,
+            "htotal": 2720,
+            "hskew": 0,
+            "vdisplay": 1600,
+            "vsync_start": 1603,
+            "vsync_end": 1609,
+            "vtotal": 1646,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "2560x1600"
+          },
+          {
+            "clock": 234000,
+            "hdisplay": 1920,
+            "hsync_start": 2048,
+            "hsync_end": 2256,
+            "htotal": 2600,
+            "hskew": 0,
+            "vdisplay": 1440,
+            "vsync_start": 1441,
+            "vsync_end": 1444,
+            "vtotal": 1500,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1920x1440"
+          },
+          {
+            "clock": 218250,
+            "hdisplay": 1856,
+            "hsync_start": 1952,
+            "hsync_end": 2176,
+            "htotal": 2528,
+            "hskew": 0,
+            "vdisplay": 1392,
+            "vsync_start": 1393,
+            "vsync_end": 1396,
+            "vtotal": 1439,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1856x1392"
+          },
+          {
+            "clock": 204750,
+            "hdisplay": 1792,
+            "hsync_start": 1920,
+            "hsync_end": 2120,
+            "htotal": 2448,
+            "hskew": 0,
+            "vdisplay": 1344,
+            "vsync_start": 1345,
+            "vsync_end": 1348,
+            "vtotal": 1394,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1792x1344"
+          },
+          {
+            "clock": 162000,
+            "hdisplay": 2048,
+            "hsync_start": 2074,
+            "hsync_end": 2154,
+            "htotal": 2250,
+            "hskew": 0,
+            "vdisplay": 1152,
+            "vsync_start": 1153,
+            "vsync_end": 1156,
+            "vtotal": 1200,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "2048x1152"
+          },
+          {
+            "clock": 193250,
+            "hdisplay": 1920,
+            "hsync_start": 2056,
+            "hsync_end": 2256,
+            "htotal": 2592,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1203,
+            "vsync_end": 1209,
+            "vtotal": 1245,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1920x1200"
+          },
+          {
+            "clock": 154000,
+            "hdisplay": 1920,
+            "hsync_start": 1968,
+            "hsync_end": 2000,
+            "htotal": 2080,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1203,
+            "vsync_end": 1209,
+            "vtotal": 1235,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1920x1200"
+          },
+          {
+            "clock": 148500,
+            "hdisplay": 1920,
+            "hsync_start": 2008,
+            "hsync_end": 2052,
+            "htotal": 2200,
+            "hskew": 0,
+            "vdisplay": 1080,
+            "vsync_start": 1084,
+            "vsync_end": 1089,
+            "vtotal": 1125,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "1920x1080"
+          },
+          {
+            "clock": 162000,
+            "hdisplay": 1600,
+            "hsync_start": 1664,
+            "hsync_end": 1856,
+            "htotal": 2160,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1201,
+            "vsync_end": 1204,
+            "vtotal": 1250,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1600x1200"
+          },
+          {
+            "clock": 146250,
+            "hdisplay": 1680,
+            "hsync_start": 1784,
+            "hsync_end": 1960,
+            "htotal": 2240,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1059,
+            "vtotal": 1089,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1680x1050"
+          },
+          {
+            "clock": 119000,
+            "hdisplay": 1680,
+            "hsync_start": 1728,
+            "hsync_end": 1760,
+            "htotal": 1840,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1059,
+            "vtotal": 1080,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1680x1050"
+          },
+          {
+            "clock": 121750,
+            "hdisplay": 1400,
+            "hsync_start": 1488,
+            "hsync_end": 1632,
+            "htotal": 1864,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1057,
+            "vtotal": 1089,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1400x1050"
+          },
+          {
+            "clock": 101000,
+            "hdisplay": 1400,
+            "hsync_start": 1448,
+            "hsync_end": 1480,
+            "htotal": 1560,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1057,
+            "vtotal": 1080,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1400x1050"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1600,
+            "hsync_start": 1624,
+            "hsync_end": 1704,
+            "htotal": 1800,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 901,
+            "vsync_end": 904,
+            "vtotal": 1000,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1600x900"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1440,
+            "htotal": 1688,
+            "hskew": 0,
+            "vdisplay": 1024,
+            "vsync_start": 1025,
+            "vsync_end": 1028,
+            "vtotal": 1066,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x1024"
+          },
+          {
+            "clock": 106500,
+            "hdisplay": 1440,
+            "hsync_start": 1520,
+            "hsync_end": 1672,
+            "htotal": 1904,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 903,
+            "vsync_end": 909,
+            "vtotal": 934,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1440x900"
+          },
+          {
+            "clock": 88750,
+            "hdisplay": 1440,
+            "hsync_start": 1488,
+            "hsync_end": 1520,
+            "htotal": 1600,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 903,
+            "vsync_end": 909,
+            "vtotal": 926,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1440x900"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1280,
+            "hsync_start": 1376,
+            "hsync_end": 1488,
+            "htotal": 1800,
+            "hskew": 0,
+            "vdisplay": 960,
+            "vsync_start": 961,
+            "vsync_end": 964,
+            "vtotal": 1000,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x960"
+          },
+          {
+            "clock": 85500,
+            "hdisplay": 1366,
+            "hsync_start": 1436,
+            "hsync_end": 1579,
+            "htotal": 1792,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 774,
+            "vtotal": 798,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1366x768"
+          },
+          {
+            "clock": 72000,
+            "hdisplay": 1366,
+            "hsync_start": 1380,
+            "hsync_end": 1436,
+            "htotal": 1500,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 769,
+            "vsync_end": 772,
+            "vtotal": 800,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1366x768"
+          },
+          {
+            "clock": 85500,
+            "hdisplay": 1360,
+            "hsync_start": 1424,
+            "hsync_end": 1536,
+            "htotal": 1792,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 777,
+            "vtotal": 795,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1360x768"
+          },
+          {
+            "clock": 83500,
+            "hdisplay": 1280,
+            "hsync_start": 1352,
+            "hsync_end": 1480,
+            "htotal": 1680,
+            "hskew": 0,
+            "vdisplay": 800,
+            "vsync_start": 803,
+            "vsync_end": 809,
+            "vtotal": 831,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1280x800"
+          },
+          {
+            "clock": 71000,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1360,
+            "htotal": 1440,
+            "hskew": 0,
+            "vdisplay": 800,
+            "vsync_start": 803,
+            "vsync_end": 809,
+            "vtotal": 823,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1280x800"
+          },
+          {
+            "clock": 79500,
+            "hdisplay": 1280,
+            "hsync_start": 1344,
+            "hsync_end": 1472,
+            "htotal": 1664,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 778,
+            "vtotal": 798,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1280x768"
+          },
+          {
+            "clock": 68250,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1360,
+            "htotal": 1440,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 778,
+            "vtotal": 790,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1280x768"
+          },
+          {
+            "clock": 74250,
+            "hdisplay": 1280,
+            "hsync_start": 1390,
+            "hsync_end": 1430,
+            "htotal": 1650,
+            "hskew": 0,
+            "vdisplay": 720,
+            "vsync_start": 725,
+            "vsync_end": 730,
+            "vtotal": 750,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x720"
+          },
+          {
+            "clock": 65000,
+            "hdisplay": 1024,
+            "hsync_start": 1048,
+            "hsync_end": 1184,
+            "htotal": 1344,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 777,
+            "vtotal": 806,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "1024x768"
+          },
+          {
+            "clock": 40000,
+            "hdisplay": 800,
+            "hsync_start": 840,
+            "hsync_end": 968,
+            "htotal": 1056,
+            "hskew": 0,
+            "vdisplay": 600,
+            "vsync_start": 601,
+            "vsync_end": 605,
+            "vtotal": 628,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "800x600"
+          },
+          {
+            "clock": 36000,
+            "hdisplay": 800,
+            "hsync_start": 824,
+            "hsync_end": 896,
+            "htotal": 1024,
+            "hskew": 0,
+            "vdisplay": 600,
+            "vsync_start": 601,
+            "vsync_end": 603,
+            "vtotal": 625,
+            "vscan": 0,
+            "vrefresh": 56,
+            "flags": 5,
+            "type": 64,
+            "name": "800x600"
+          },
+          {
+            "clock": 33750,
+            "hdisplay": 848,
+            "hsync_start": 864,
+            "hsync_end": 976,
+            "htotal": 1088,
+            "hskew": 0,
+            "vdisplay": 480,
+            "vsync_start": 486,
+            "vsync_end": 494,
+            "vtotal": 517,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "848x480"
+          },
+          {
+            "clock": 25175,
+            "hdisplay": 640,
+            "hsync_start": 656,
+            "hsync_end": 752,
+            "htotal": 800,
+            "hskew": 0,
+            "vdisplay": 480,
+            "vsync_start": 490,
+            "vsync_end": 492,
+            "vtotal": 525,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "640x480"
+          }
+        ],
+        "properties": {
+          "DPMS": {
+            "id": 2,
+            "flags": 8,
+            "type": 8,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 3,
+            "spec": [
+              {
+                "name": "On",
+                "value": 0
+              },
+              {
+                "name": "Standby",
+                "value": 1
+              },
+              {
+                "name": "Suspend",
+                "value": 2
+              },
+              {
+                "name": "Off",
+                "value": 3
+              }
+            ],
+            "value": 3,
+            "data": null
+          },
+          "link-status": {
+            "id": 5,
+            "flags": 8,
+            "type": 8,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Good",
+                "value": 0
+              },
+              {
+                "name": "Bad",
+                "value": 1
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "non-desktop": {
+            "id": 6,
+            "flags": 6,
+            "type": 2,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 0,
+            "data": null
+          },
+          "TILE": {
+            "id": 4,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": null,
+            "value": null,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "WRITEBACK_OUT_FENCE_PTR": {
+            "id": 88,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 18446744073709551615
+            },
+            "value": 0,
+            "data": null
+          },
+          "WRITEBACK_FB_ID": {
+            "id": 86,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "WRITEBACK_PIXEL_FORMATS": {
+            "id": 87,
+            "flags": 2147483668,
+            "type": 16,
+            "atomic": true,
+            "immutable": true,
+            "raw_value": 89,
+            "spec": null,
+            "value": null,
+            "data": [
+              875713089,
+              875713112,
+              875708993,
+              942953048,
+              942953025,
+              909199186
+            ]
+          }
+        }
+      },
+      {
+        "id": 91,
+        "type": 15,
+        "status": 1,
+        "phy_width": 0,
+        "phy_height": 0,
+        "subpixel": 1,
+        "encoder_id": 90,
+        "encoders": [
+          90
+        ],
+        "modes": [
+          {
+            "clock": 65000,
+            "hdisplay": 1024,
+            "hsync_start": 1048,
+            "hsync_end": 1184,
+            "htotal": 1344,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 777,
+            "vtotal": 806,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 72,
+            "name": "1024x768"
+          },
+          {
+            "clock": 556744,
+            "hdisplay": 4096,
+            "hsync_start": 4104,
+            "hsync_end": 4136,
+            "htotal": 4176,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2208,
+            "vsync_end": 2216,
+            "vtotal": 2222,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "4096x2160"
+          },
+          {
+            "clock": 556188,
+            "hdisplay": 4096,
+            "hsync_start": 4104,
+            "hsync_end": 4136,
+            "htotal": 4176,
+            "hskew": 0,
+            "vdisplay": 2160,
+            "vsync_start": 2208,
+            "vsync_end": 2216,
+            "vtotal": 2222,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "4096x2160"
+          },
+          {
+            "clock": 348500,
+            "hdisplay": 2560,
+            "hsync_start": 2752,
+            "hsync_end": 3032,
+            "htotal": 3504,
+            "hskew": 0,
+            "vdisplay": 1600,
+            "vsync_start": 1603,
+            "vsync_end": 1609,
+            "vtotal": 1658,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "2560x1600"
+          },
+          {
+            "clock": 268500,
+            "hdisplay": 2560,
+            "hsync_start": 2608,
+            "hsync_end": 2640,
+            "htotal": 2720,
+            "hskew": 0,
+            "vdisplay": 1600,
+            "vsync_start": 1603,
+            "vsync_end": 1609,
+            "vtotal": 1646,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "2560x1600"
+          },
+          {
+            "clock": 234000,
+            "hdisplay": 1920,
+            "hsync_start": 2048,
+            "hsync_end": 2256,
+            "htotal": 2600,
+            "hskew": 0,
+            "vdisplay": 1440,
+            "vsync_start": 1441,
+            "vsync_end": 1444,
+            "vtotal": 1500,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1920x1440"
+          },
+          {
+            "clock": 218250,
+            "hdisplay": 1856,
+            "hsync_start": 1952,
+            "hsync_end": 2176,
+            "htotal": 2528,
+            "hskew": 0,
+            "vdisplay": 1392,
+            "vsync_start": 1393,
+            "vsync_end": 1396,
+            "vtotal": 1439,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1856x1392"
+          },
+          {
+            "clock": 204750,
+            "hdisplay": 1792,
+            "hsync_start": 1920,
+            "hsync_end": 2120,
+            "htotal": 2448,
+            "hskew": 0,
+            "vdisplay": 1344,
+            "vsync_start": 1345,
+            "vsync_end": 1348,
+            "vtotal": 1394,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1792x1344"
+          },
+          {
+            "clock": 162000,
+            "hdisplay": 2048,
+            "hsync_start": 2074,
+            "hsync_end": 2154,
+            "htotal": 2250,
+            "hskew": 0,
+            "vdisplay": 1152,
+            "vsync_start": 1153,
+            "vsync_end": 1156,
+            "vtotal": 1200,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "2048x1152"
+          },
+          {
+            "clock": 193250,
+            "hdisplay": 1920,
+            "hsync_start": 2056,
+            "hsync_end": 2256,
+            "htotal": 2592,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1203,
+            "vsync_end": 1209,
+            "vtotal": 1245,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1920x1200"
+          },
+          {
+            "clock": 154000,
+            "hdisplay": 1920,
+            "hsync_start": 1968,
+            "hsync_end": 2000,
+            "htotal": 2080,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1203,
+            "vsync_end": 1209,
+            "vtotal": 1235,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1920x1200"
+          },
+          {
+            "clock": 148500,
+            "hdisplay": 1920,
+            "hsync_start": 2008,
+            "hsync_end": 2052,
+            "htotal": 2200,
+            "hskew": 0,
+            "vdisplay": 1080,
+            "vsync_start": 1084,
+            "vsync_end": 1089,
+            "vtotal": 1125,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "1920x1080"
+          },
+          {
+            "clock": 162000,
+            "hdisplay": 1600,
+            "hsync_start": 1664,
+            "hsync_end": 1856,
+            "htotal": 2160,
+            "hskew": 0,
+            "vdisplay": 1200,
+            "vsync_start": 1201,
+            "vsync_end": 1204,
+            "vtotal": 1250,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1600x1200"
+          },
+          {
+            "clock": 146250,
+            "hdisplay": 1680,
+            "hsync_start": 1784,
+            "hsync_end": 1960,
+            "htotal": 2240,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1059,
+            "vtotal": 1089,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1680x1050"
+          },
+          {
+            "clock": 119000,
+            "hdisplay": 1680,
+            "hsync_start": 1728,
+            "hsync_end": 1760,
+            "htotal": 1840,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1059,
+            "vtotal": 1080,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1680x1050"
+          },
+          {
+            "clock": 121750,
+            "hdisplay": 1400,
+            "hsync_start": 1488,
+            "hsync_end": 1632,
+            "htotal": 1864,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1057,
+            "vtotal": 1089,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1400x1050"
+          },
+          {
+            "clock": 101000,
+            "hdisplay": 1400,
+            "hsync_start": 1448,
+            "hsync_end": 1480,
+            "htotal": 1560,
+            "hskew": 0,
+            "vdisplay": 1050,
+            "vsync_start": 1053,
+            "vsync_end": 1057,
+            "vtotal": 1080,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1400x1050"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1600,
+            "hsync_start": 1624,
+            "hsync_end": 1704,
+            "htotal": 1800,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 901,
+            "vsync_end": 904,
+            "vtotal": 1000,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1600x900"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1440,
+            "htotal": 1688,
+            "hskew": 0,
+            "vdisplay": 1024,
+            "vsync_start": 1025,
+            "vsync_end": 1028,
+            "vtotal": 1066,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x1024"
+          },
+          {
+            "clock": 106500,
+            "hdisplay": 1440,
+            "hsync_start": 1520,
+            "hsync_end": 1672,
+            "htotal": 1904,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 903,
+            "vsync_end": 909,
+            "vtotal": 934,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1440x900"
+          },
+          {
+            "clock": 88750,
+            "hdisplay": 1440,
+            "hsync_start": 1488,
+            "hsync_end": 1520,
+            "htotal": 1600,
+            "hskew": 0,
+            "vdisplay": 900,
+            "vsync_start": 903,
+            "vsync_end": 909,
+            "vtotal": 926,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1440x900"
+          },
+          {
+            "clock": 108000,
+            "hdisplay": 1280,
+            "hsync_start": 1376,
+            "hsync_end": 1488,
+            "htotal": 1800,
+            "hskew": 0,
+            "vdisplay": 960,
+            "vsync_start": 961,
+            "vsync_end": 964,
+            "vtotal": 1000,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x960"
+          },
+          {
+            "clock": 85500,
+            "hdisplay": 1366,
+            "hsync_start": 1436,
+            "hsync_end": 1579,
+            "htotal": 1792,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 774,
+            "vtotal": 798,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1366x768"
+          },
+          {
+            "clock": 72000,
+            "hdisplay": 1366,
+            "hsync_start": 1380,
+            "hsync_end": 1436,
+            "htotal": 1500,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 769,
+            "vsync_end": 772,
+            "vtotal": 800,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1366x768"
+          },
+          {
+            "clock": 85500,
+            "hdisplay": 1360,
+            "hsync_start": 1424,
+            "hsync_end": 1536,
+            "htotal": 1792,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 777,
+            "vtotal": 795,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1360x768"
+          },
+          {
+            "clock": 83500,
+            "hdisplay": 1280,
+            "hsync_start": 1352,
+            "hsync_end": 1480,
+            "htotal": 1680,
+            "hskew": 0,
+            "vdisplay": 800,
+            "vsync_start": 803,
+            "vsync_end": 809,
+            "vtotal": 831,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1280x800"
+          },
+          {
+            "clock": 71000,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1360,
+            "htotal": 1440,
+            "hskew": 0,
+            "vdisplay": 800,
+            "vsync_start": 803,
+            "vsync_end": 809,
+            "vtotal": 823,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1280x800"
+          },
+          {
+            "clock": 79500,
+            "hdisplay": 1280,
+            "hsync_start": 1344,
+            "hsync_end": 1472,
+            "htotal": 1664,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 778,
+            "vtotal": 798,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 6,
+            "type": 64,
+            "name": "1280x768"
+          },
+          {
+            "clock": 68250,
+            "hdisplay": 1280,
+            "hsync_start": 1328,
+            "hsync_end": 1360,
+            "htotal": 1440,
+            "hskew": 0,
+            "vdisplay": 768,
+            "vsync_start": 771,
+            "vsync_end": 778,
+            "vtotal": 790,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 9,
+            "type": 64,
+            "name": "1280x768"
+          },
+          {
+            "clock": 74250,
+            "hdisplay": 1280,
+            "hsync_start": 1390,
+            "hsync_end": 1430,
+            "htotal": 1650,
+            "hskew": 0,
+            "vdisplay": 720,
+            "vsync_start": 725,
+            "vsync_end": 730,
+            "vtotal": 750,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "1280x720"
+          },
+          {
+            "clock": 40000,
+            "hdisplay": 800,
+            "hsync_start": 840,
+            "hsync_end": 968,
+            "htotal": 1056,
+            "hskew": 0,
+            "vdisplay": 600,
+            "vsync_start": 601,
+            "vsync_end": 605,
+            "vtotal": 628,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "800x600"
+          },
+          {
+            "clock": 36000,
+            "hdisplay": 800,
+            "hsync_start": 824,
+            "hsync_end": 896,
+            "htotal": 1024,
+            "hskew": 0,
+            "vdisplay": 600,
+            "vsync_start": 601,
+            "vsync_end": 603,
+            "vtotal": 625,
+            "vscan": 0,
+            "vrefresh": 56,
+            "flags": 5,
+            "type": 64,
+            "name": "800x600"
+          },
+          {
+            "clock": 33750,
+            "hdisplay": 848,
+            "hsync_start": 864,
+            "hsync_end": 976,
+            "htotal": 1088,
+            "hskew": 0,
+            "vdisplay": 480,
+            "vsync_start": 486,
+            "vsync_end": 494,
+            "vtotal": 517,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 5,
+            "type": 64,
+            "name": "848x480"
+          },
+          {
+            "clock": 25175,
+            "hdisplay": 640,
+            "hsync_start": 656,
+            "hsync_end": 752,
+            "htotal": 800,
+            "hskew": 0,
+            "vdisplay": 480,
+            "vsync_start": 490,
+            "vsync_end": 492,
+            "vtotal": 525,
+            "vscan": 0,
+            "vrefresh": 60,
+            "flags": 10,
+            "type": 64,
+            "name": "640x480"
+          }
+        ],
+        "properties": {
+          "DPMS": {
+            "id": 2,
+            "flags": 8,
+            "type": 8,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "On",
+                "value": 0
+              },
+              {
+                "name": "Standby",
+                "value": 1
+              },
+              {
+                "name": "Suspend",
+                "value": 2
+              },
+              {
+                "name": "Off",
+                "value": 3
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "link-status": {
+            "id": 5,
+            "flags": 8,
+            "type": 8,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Good",
+                "value": 0
+              },
+              {
+                "name": "Bad",
+                "value": 1
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "non-desktop": {
+            "id": 6,
+            "flags": 6,
+            "type": 2,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 0,
+            "data": null
+          },
+          "TILE": {
+            "id": 4,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": null,
+            "value": null,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 83,
+            "spec": 3435973836,
+            "value": 83,
+            "data": null
+          }
+        }
+      }
+    ],
+    "encoders": [
+      {
+        "id": 84,
+        "type": 5,
+        "crtc_id": 0,
+        "possible_crtcs": 1,
+        "possible_clones": 3
+      },
+      {
+        "id": 90,
+        "type": 5,
+        "crtc_id": 83,
+        "possible_crtcs": 1,
+        "possible_clones": 3
+      }
+    ],
+    "crtcs": [
+      {
+        "id": 83,
+        "fb_id": 92,
+        "x": 0,
+        "y": 0,
+        "mode": {
+          "clock": 65000,
+          "hdisplay": 1024,
+          "hsync_start": 1048,
+          "hsync_end": 1184,
+          "htotal": 1344,
+          "hskew": 0,
+          "vdisplay": 768,
+          "vsync_start": 771,
+          "vsync_end": 777,
+          "vtotal": 806,
+          "vscan": 0,
+          "vrefresh": 60,
+          "flags": 10,
+          "type": 72,
+          "name": "1024x768"
+        },
+        "gamma_size": 256,
+        "properties": {
+          "ACTIVE": {
+            "id": 22,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 1,
+            "data": null
+          },
+          "MODE_ID": {
+            "id": 23,
+            "flags": 2147483664,
+            "type": 16,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 93,
+            "spec": null,
+            "value": null,
+            "data": {
+              "clock": 65000,
+              "hdisplay": 1024,
+              "hsync_start": 1048,
+              "hsync_end": 1184,
+              "htotal": 1344,
+              "hskew": 0,
+              "vdisplay": 768,
+              "vsync_start": 771,
+              "vsync_end": 777,
+              "vtotal": 806,
+              "vscan": 0,
+              "vrefresh": 60,
+              "flags": 10,
+              "type": 72,
+              "name": "1024x768"
+            }
+          },
+          "OUT_FENCE_PTR": {
+            "id": 19,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 18446744073709551615
+            },
+            "value": 0,
+            "data": null
+          },
+          "VRR_ENABLED": {
+            "id": 24,
+            "flags": 2,
+            "type": 2,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 1
+            },
+            "value": 0,
+            "data": null
+          },
+          "GAMMA_LUT": {
+            "id": 28,
+            "flags": 16,
+            "type": 16,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": null,
+            "value": null,
+            "data": null
+          },
+          "GAMMA_LUT_SIZE": {
+            "id": 29,
+            "flags": 6,
+            "type": 2,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 256,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 256,
+            "data": null
+          }
+        }
+      }
+    ],
+    "planes": [
+      {
+        "id": 33,
+        "possible_crtcs": 1,
+        "crtc_id": 83,
+        "fb_id": 92,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": {
+          "id": 92,
+          "width": 1024,
+          "height": 768,
+          "format": 875713112,
+          "modifier": 0,
+          "planes": [
+            {
+              "offset": 0,
+              "pitch": 4096
+            }
+          ]
+        },
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 1,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 92,
+            "spec": 4227595259,
+            "value": 92,
+            "data": {
+              "id": 92,
+              "width": 1024,
+              "height": 768,
+              "format": 875713112,
+              "modifier": 0,
+              "planes": [
+                {
+                  "offset": 0,
+                  "pitch": 4096
+                }
+              ]
+            }
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 83,
+            "spec": 3435973836,
+            "value": 83,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 1024,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 1024,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 768,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 768,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 67108864,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 67108864,
+            "data": 1024
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 50331648,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 50331648,
+            "data": 768
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 34,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 35,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 38,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 39,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 40,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 43,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 44,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 45,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 48,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 49,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 50,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 53,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 54,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 55,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 58,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 59,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 60,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 63,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 64,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 65,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 68,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 69,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 70,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 73,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 0,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 0,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 74,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 75,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      },
+      {
+        "id": 78,
+        "possible_crtcs": 1,
+        "crtc_id": 0,
+        "fb_id": 0,
+        "crtc_x": 0,
+        "crtc_y": 0,
+        "x": 0,
+        "y": 0,
+        "gamma_size": 0,
+        "fb": null,
+        "formats": [
+          875713089,
+          875708993,
+          875708738,
+          875708754,
+          875713112,
+          875709016,
+          875710290,
+          875710274,
+          942953048,
+          942948952,
+          942953025,
+          942948929,
+          909199186,
+          909199170,
+          842094158,
+          909203022,
+          875714126,
+          825382478,
+          825644622,
+          842290766,
+          842093913,
+          909202777,
+          875713881,
+          842094169,
+          909203033,
+          875714137,
+          808530000,
+          842084432,
+          909193296,
+          538980690,
+          538980946,
+          538981458,
+          538982482
+        ],
+        "properties": {
+          "type": {
+            "id": 8,
+            "flags": 12,
+            "type": 8,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 2,
+            "spec": [
+              {
+                "name": "Overlay",
+                "value": 0
+              },
+              {
+                "name": "Primary",
+                "value": 1
+              },
+              {
+                "name": "Cursor",
+                "value": 2
+              }
+            ],
+            "value": 2,
+            "data": null
+          },
+          "FB_ID": {
+            "id": 17,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 4227595259,
+            "value": 0,
+            "data": null
+          },
+          "IN_FENCE_FD": {
+            "id": 18,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 18446744073709551615,
+            "spec": {
+              "min": -1,
+              "max": 2147483647
+            },
+            "value": -1,
+            "data": null
+          },
+          "CRTC_ID": {
+            "id": 20,
+            "flags": 2147483712,
+            "type": 64,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": 3435973836,
+            "value": 0,
+            "data": null
+          },
+          "CRTC_X": {
+            "id": 13,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_Y": {
+            "id": 14,
+            "flags": 2147483776,
+            "type": 128,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": -2147483648,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_W": {
+            "id": 15,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "CRTC_H": {
+            "id": 16,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 2147483647
+            },
+            "value": 0,
+            "data": null
+          },
+          "SRC_X": {
+            "id": 9,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_Y": {
+            "id": 10,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_W": {
+            "id": 11,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "SRC_H": {
+            "id": 12,
+            "flags": 2147483650,
+            "type": 2,
+            "atomic": true,
+            "immutable": false,
+            "raw_value": 0,
+            "spec": {
+              "min": 0,
+              "max": 4294967295
+            },
+            "value": 0,
+            "data": 0
+          },
+          "IN_FORMATS": {
+            "id": 30,
+            "flags": 20,
+            "type": 16,
+            "atomic": false,
+            "immutable": true,
+            "raw_value": 79,
+            "spec": null,
+            "value": null,
+            "data": [
+              {
+                "modifier": 0,
+                "formats": [
+                  875713089,
+                  875708993,
+                  875708738,
+                  875708754,
+                  875713112,
+                  875709016,
+                  875710290,
+                  875710274,
+                  942953048,
+                  942948952,
+                  942953025,
+                  942948929,
+                  909199186,
+                  909199170,
+                  842094158,
+                  909203022,
+                  875714126,
+                  825382478,
+                  825644622,
+                  842290766,
+                  842093913,
+                  909202777,
+                  875713881,
+                  842094169,
+                  909203033,
+                  875714137,
+                  808530000,
+                  842084432,
+                  909193296,
+                  538980690,
+                  538980946,
+                  538981458,
+                  538982482
+                ]
+              }
+            ]
+          },
+          "rotation": {
+            "id": 80,
+            "flags": 32,
+            "type": 32,
+            "atomic": false,
+            "immutable": false,
+            "raw_value": 1,
+            "spec": [
+              {
+                "name": "rotate-0",
+                "value": 0
+              },
+              {
+                "name": "rotate-90",
+                "value": 1
+              },
+              {
+                "name": "rotate-180",
+                "value": 2
+              },
+              {
+                "name": "rotate-270",
+                "value": 3
+              },
+              {
+                "name": "reflect-x",
+                "value": 4
+              },
+              {
+                "name": "reflect-y",
+                "value": 5
+              }
+            ],
+            "value": 1,
+            "data": null
+          }
+        }
+      }
+    ]
+  }
+}

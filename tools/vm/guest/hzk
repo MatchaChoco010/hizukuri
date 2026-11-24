@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# Runs inside the guest, from a login on a virtual terminal (the console of
+# a VM shown in a window, or `tools/vm/vm tty-run`).
+# Starts the compositor as a DRM/KMS session, opens a few applications in it,
+# and cleans up when the compositor ends.
+#
+#   hzk [lavapipe|script|project] [--seconds N] [--mode WxH] [--no-apps]
+#       [--reset-scripts]
+#
+#   lavapipe  the built-in renderer draws on the CPU, frames are copied into
+#             dumb buffers, and the core's fallback places the windows (the
+#             draw-only project in ~/hzk-draw-only). The default.
+#   script    drawing and window management by the scripts in ~/hzk-scripts,
+#             rendered on the CPU. Edit the files and press Ctrl+Alt+Shift+R
+#             to load them again.
+#   project   the script project in ~/hzk-project, sent from outside with
+#             `tools/vm/try-hizukuri --project DIR` (for example the
+#             animation example). Edit it outside, send it again, and press
+#             Ctrl+Alt+Shift+R.
+#
+#   --reset-scripts  with `script`: start again from the scripts as they were
+#                    sent (the edited ones are kept in ~/hzk-scripts.bak)
+#
+# The binaries and the scripts are sent by tools/vm/try-hizukuri, to ~/bin,
+# ~/hzk-scripts.orig, ~/hzk-draw-only and ~/hzk-project.
+set -euo pipefail
+
+path="lavapipe"
+seconds=600
+mode=""
+apps=1
+reset_scripts=0
+scripts="$HOME/hzk-scripts"
+while (($#)); do
+    case "$1" in
+        lavapipe | script | project) path="$1" ;;
+        --seconds) seconds="$2"; shift ;;
+        --mode) mode="$2"; shift ;;
+        --no-apps) apps=0 ;;
+        --reset-scripts) reset_scripts=1 ;;
+        -h | --help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "hzk: unknown argument: $1 (try --help)" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+bin="$HOME/bin"
+[[ -x "$bin/proto-compositor" ]] || {
+    echo "hzk: $bin/proto-compositor is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+    exit 1
+}
+if [[ -z "${XDG_VTNR:-}" ]]; then
+    echo "hzk: this is not a session on a virtual terminal (an SSH login has no seat)." >&2
+    echo "     Log in on the VM's console, or from outside use: tools/vm/vm tty-run -- hzk" >&2
+    exit 1
+fi
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+socket="hizukuri-0"
+control="$XDG_RUNTIME_DIR/$socket.control"
+ctl=("$bin/proto-ctl" --socket "$control")
+log="$HOME/hzk.log"
+
+# A background that differs from the terminals' own, so that windows stand out.
+args=(--backend kms --socket "$socket" --exit-after "$seconds" --background 30405c)
+args+=(--vulkan-device cpu)
+[[ -n "$mode" ]] && args+=(--kms-mode "$mode")
+# X11 applications, through xwayland-satellite, which the compositor starts
+# when the first one connects.
+if command -v xwayland-satellite >/dev/null; then
+    args+=(--xwayland-satellite xwayland-satellite
+        --xwayland-satellite-log "$HOME/xwayland-satellite.log")
+fi
+
+if [[ "$path" == "lavapipe" ]]; then
+    if [[ ! -d "$HOME/hzk-draw-only" ]]; then
+        echo "hzk: $HOME/hzk-draw-only is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+        exit 1
+    fi
+    args+=(--script "$HOME/hzk-draw-only")
+fi
+
+if [[ "$path" == "script" ]]; then
+    # The scripts are files, so that they can be edited while the session
+    # runs. The copy that was sent stays untouched next to them.
+    if [[ ! -d "$scripts.orig" ]]; then
+        echo "hzk: $scripts.orig is missing. Outside the VM, run: tools/vm/try-hizukuri" >&2
+        exit 1
+    fi
+    if ((reset_scripts)) && [[ -d "$scripts" ]]; then
+        rm -rf "$scripts.bak"
+        mv "$scripts" "$scripts.bak"
+    fi
+    [[ -d "$scripts" ]] || cp -r "$scripts.orig" "$scripts"
+    args+=(--script "$scripts")
+fi
+
+if [[ "$path" == "project" ]]; then
+    if [[ ! -f "$HOME/hzk-project/main.luau" ]]; then
+        echo "hzk: $HOME/hzk-project is missing. Outside the VM, run: tools/vm/try-hizukuri --project DIR" >&2
+        exit 1
+    fi
+    args+=(--script "$HOME/hzk-project")
+fi
+
+cat <<TEXT
+proto-compositor ($path) starts now and ends by itself after $seconds s.
+
+  Ctrl+Alt+Backspace   quit
+  Ctrl+Alt+F2          switch to another console; Ctrl+Alt+F${XDG_VTNR} comes back
+  click a window       give it the keyboard focus
+
+X11 applications run through xwayland-satellite: the terminals have DISPLAY
+set; try "xterm &".
+
+TEXT
+if [[ "$path" == "project" ]]; then
+    cat <<TEXT
+The project in ~/hzk-project draws the screen and manages the windows.
+The keys are the project's; with the animation example they are those of
+\`hzk script\` (logo+H, logo+L, logo+shift+H, logo+shift+L, logo+Q).
+
+  Ctrl+Alt+Shift+R             load the project again (after sending it anew)
+  Ctrl+Alt+Shift+F             leave the scripts: the built-in fallback draws
+
+What failed:  ~/bin/proto-ctl --socket $control state | grep -A8 last_failures
+TEXT
+elif [[ "$path" == "script" ]]; then
+    cat <<TEXT
+The scripts in $scripts draw the screen and tile the windows.
+
+  logo+H, logo+L               focus the window to the left, to the right
+  logo+shift+H, logo+shift+L   swap the focused window with its neighbour
+  logo+Q                       close the focused window
+  Ctrl+Alt+Shift+R             load the scripts again (after editing them)
+  Ctrl+Alt+Shift+F             leave the scripts: the built-in fallback draws,
+                               with a bar along the top edge
+
+Try: in a terminal, change "T.gap = 8" in $scripts/tile.luau
+(vim and nano are installed), then press Ctrl+Alt+Shift+R.
+When a script fails, the fallback takes over and the session stays usable.
+What failed:  ~/bin/proto-ctl --socket $control state | grep -A8 last_failures
+TEXT
+else
+    cat <<TEXT
+Windows cannot be moved with the mouse. From outside the VM:
+  tools/vm/vm ssh '~/bin/proto-ctl --socket $control state'
+  tools/vm/vm ssh '~/bin/proto-ctl --socket $control move-window ID X Y'
+TEXT
+fi
+echo "The log is in $log."
+sleep 2
+
+"$bin/proto-compositor" "${args[@]}" >"$log" 2>&1 &
+compositor=$!
+client_pids=()
+cleanup() {
+    for pid in "${client_pids[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+}
+trap cleanup EXIT
+
+for _ in $(seq 100); do
+    "${ctl[@]}" ping >/dev/null 2>&1 && break
+    kill -0 "$compositor" 2>/dev/null || break
+    sleep 0.1
+done
+if ! "${ctl[@]}" ping >/dev/null 2>&1; then
+    wait "$compositor" || true
+    echo "hzk: proto-compositor did not start. The end of $log:" >&2
+    tail -n 8 "$log" >&2
+    exit 1
+fi
+
+# The X11 display the compositor serves, if any. The terminals opened below
+# have it in DISPLAY.
+x11_display="$("${ctl[@]}" state 2>/dev/null | python3 -c '
+import json, sys
+print((json.load(sys.stdin).get("x11") or {}).get("display") or "")' 2>/dev/null || true)"
+if [[ -n "$x11_display" ]]; then
+    echo "X11 applications: DISPLAY=$x11_display (for example, xterm & in a terminal)." >>"$log"
+fi
+
+# Nothing when the compositor is gone (it may end while a client is still
+# being waited for).
+window_ids() {
+    "${ctl[@]}" state 2>/dev/null | python3 -c '
+import json, sys
+print(" ".join(str(w["id"]) for w in json.load(sys.stdin)["windows"]))' 2>/dev/null || true
+}
+
+# Starts one client and puts its window at X Y once it is there.
+open_at() {
+    local x="$1" y="$2" before id
+    shift 2
+    before=" $(window_ids) "
+    if [[ -n "$x11_display" ]]; then
+        env DISPLAY="$x11_display" WAYLAND_DISPLAY="$socket" "$@" >/dev/null 2>&1 &
+    else
+        env -u DISPLAY WAYLAND_DISPLAY="$socket" "$@" >/dev/null 2>&1 &
+    fi
+    client_pids+=($!)
+    for _ in $(seq 50); do
+        kill -0 "$compositor" 2>/dev/null || return 0
+        for id in $(window_ids); do
+            if [[ "$before" != *" $id "* ]]; then
+                # Where a script manages the windows, it places them.
+                if [[ "$path" == "lavapipe" ]]; then
+                    "${ctl[@]}" move-window "$id" "$x" "$y" >/dev/null 2>&1 || true
+                fi
+                return 0
+            fi
+        done
+        sleep 0.1
+    done
+    echo "hzk: no window appeared for: $*" >>"$log"
+}
+
+if ((apps)) && [[ "$path" != "lavapipe" ]]; then
+    command -v foot >/dev/null && open_at 0 0 foot
+    command -v weston-terminal >/dev/null && open_at 0 0 weston-terminal
+    command -v alacritty >/dev/null && open_at 0 0 alacritty
+elif ((apps)); then
+    # Laid out for the default 1280x800 mode: two small terminals on the left,
+    # a larger one on the right.
+    command -v foot >/dev/null && open_at 20 20 foot --window-size-pixels=430x300
+    command -v foot >/dev/null && open_at 20 360 foot --window-size-pixels=430x300 \
+        sh -c 'echo "second foot: click here, then type"; exec bash'
+    command -v weston-terminal >/dev/null && open_at 465 100 weston-terminal
+fi
+
+status=0
+wait "$compositor" || status=$?
+cleanup
+trap - EXIT
+echo "hzk: proto-compositor ended with status $status (log: $log)"
+exit "$status"

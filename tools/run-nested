@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Runs the verification compositor as a window of the Wayland compositor
+# this terminal is in (the nested backend), drawing with a hardware GPU.
+#
+# usage: tools/run-nested [PROJECT] [proto-compositor options...]
+#
+#   PROJECT   directory of a script project (with main.luau). Without it,
+#             the built-in project runs.
+#
+# It builds proto-compositor and the project's shaders in the dev shell
+# (nix develop .#ci), then starts the compositor outside the dev shell's
+# environment, so that the applications started in it get the environment
+# of this terminal. The Vulkan drivers are those of the dev shell's Mesa
+# (--vulkan-icd): the binary is linked against the dev shell's libraries
+# and cannot load the drivers installed on the system.
+#
+# The window opens in the compositor WAYLAND_DISPLAY names; pass
+# --nested-socket to choose another one. Options given here win over the
+# ones this script adds (--socket, --dmabuf, --vulkan-icd, --vulkan-device).
+#
+# Environment:
+#   HIZUKURI_TERMINAL   the command logo+Return starts in the built-in
+#                       project. Default: foot from PATH, else the dev
+#                       shell's foot.
+#
+# Inside: logo+Return starts a terminal (built-in project). From another
+# terminal, `WAYLAND_DISPLAY=<socket> <application>` opens a window in it
+# (the socket is printed at the start). Closing the window, or Ctrl+C here,
+# ends it. The log is on this terminal and in target/run-nested.log.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+
+project=""
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    project=$(cd "$1" && pwd)
+    shift
+fi
+
+# Whether an option was given on the command line.
+given() {
+    local option=$1
+    shift
+    local argument
+    for argument in "$@"; do
+        case "$argument" in "$option" | "$option"=*) return 0 ;; esac
+    done
+    return 1
+}
+
+if ! given --nested-socket "$@" && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    echo "run-nested: WAYLAND_DISPLAY is not set: there is no compositor to open a window in" >&2
+    echo "            (start this from a terminal of a Wayland session, or pass --nested-socket)" >&2
+    exit 1
+fi
+
+# Build in the dev shell, and ask it where its things are.
+echo "run-nested: building (nix develop .#ci)" >&2
+# shellcheck disable=SC2016
+facts=$(
+    cd "$root" && nix develop .#ci -c bash -c '
+        set -euo pipefail
+        cargo build -p proto-compositor --bins >&2
+        bin=$(cd "$CARGO_TARGET_DIR/debug" && pwd)
+        if [ -n "$1" ]; then
+            "$bin/proto-compositor" build-shaders "$1" >&2
+        fi
+        printf "bin=%q\nicd=%q\nshell_foot=%q\n" \
+            "$bin" "$HIZUKURI_ICD_DIRS" "$(command -v foot || true)"
+    ' run-nested "$project"
+)
+eval "$facts"
+
+options=()
+if ! given --socket "$@"; then
+    options+=(--socket hizukuri-nested)
+fi
+if ! given --vulkan-icd "$@"; then
+    options+=(--vulkan-icd "$icd")
+fi
+if ! given --vulkan-device "$@"; then
+    options+=(--vulkan-device gpu)
+fi
+# Applications inside hand over their frames as dma-bufs.
+if ! given --dmabuf "$@"; then
+    options+=(--dmabuf gpu)
+fi
+if [ -n "$project" ]; then
+    options+=(--script "$project")
+fi
+
+# Without a foot on PATH, the dev shell's stands in: as HIZUKURI_TERMINAL,
+# and at the end of PATH for projects that start `foot` by name.
+if ! command -v foot > /dev/null && [ -n "$shell_foot" ]; then
+    if [ -z "${HIZUKURI_TERMINAL:-}" ]; then
+        export HIZUKURI_TERMINAL=$shell_foot
+    fi
+    PATH=$PATH:$(dirname "$shell_foot")
+fi
+
+socket=hizukuri-nested
+previous=""
+for argument in "$@"; do
+    case "$argument" in --socket=*) socket=${argument#--socket=} ;; esac
+    if [ "$previous" = --socket ]; then socket=$argument; fi
+    previous=$argument
+done
+
+mkdir -p "$root/target"
+log="$root/target/run-nested.log"
+echo "run-nested: applications reach it with WAYLAND_DISPLAY=$socket" >&2
+echo "run-nested: control: $bin/proto-ctl --socket \"\$XDG_RUNTIME_DIR/$socket.control\" state" >&2
+echo "run-nested: log: $log" >&2
+echo "run-nested: to end it: Ctrl+C here, or close the window" >&2
+
+# The log goes to the terminal and to the file. tee ignores Ctrl+C, which
+# the compositor answers by ending cleanly, and ends when the log does.
+exec "$bin/proto-compositor" --backend nested "${options[@]}" "$@" \
+    2> >(tee -i "$log" >&2)

@@ -1,0 +1,18 @@
+[package]
+name = "proto-wl"
+description = "Wayland server side of the verification compositor (Smithay protocol layer)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+proto-color.workspace = true
+smithay = { workspace = true, features = ["wayland_frontend", "desktop"] }
+calloop.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proto-test-client.workspace = true

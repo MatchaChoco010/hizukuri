@@ -1,0 +1,148 @@
+Node: /dev/dri/card0
+├───Driver: virtio_gpu (virtio GPU) version 0.1.0
+│   ├───DRM_CLIENT_CAP_STEREO_3D supported
+│   ├───DRM_CLIENT_CAP_UNIVERSAL_PLANES supported
+│   ├───DRM_CLIENT_CAP_ATOMIC supported
+│   ├───DRM_CLIENT_CAP_ASPECT_RATIO supported
+│   ├───DRM_CLIENT_CAP_WRITEBACK_CONNECTORS supported
+│   ├───DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT supported
+│   ├───DRM_CLIENT_CAP_PLANE_COLOR_PIPELINE not supported
+│   ├───DRM_CAP_DUMB_BUFFER = 1
+│   ├───DRM_CAP_VBLANK_HIGH_CRTC = 1
+│   ├───DRM_CAP_DUMB_PREFERRED_DEPTH = 0
+│   ├───DRM_CAP_DUMB_PREFER_SHADOW = 0
+│   ├───DRM_CAP_PRIME = 3
+│   ├───DRM_CAP_TIMESTAMP_MONOTONIC = 1
+│   ├───DRM_CAP_ASYNC_PAGE_FLIP = 0
+│   ├───DRM_CAP_CURSOR_WIDTH = 64
+│   ├───DRM_CAP_CURSOR_HEIGHT = 64
+│   ├───DRM_CAP_ADDFB2_MODIFIERS = 0
+│   ├───DRM_CAP_PAGE_FLIP_TARGET = 0
+│   ├───DRM_CAP_CRTC_IN_VBLANK_EVENT = 1
+│   ├───DRM_CAP_SYNCOBJ = 1
+│   ├───DRM_CAP_SYNCOBJ_TIMELINE = 1
+│   └───DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP = 0
+├───Device: PCI 1af4:1050 Red Hat, Inc. Virtio 1.0 GPU
+│   ├───Bus: 0000:00:04.0
+│   └───Available nodes: primary, render
+├───Framebuffer size
+│   ├───Width: [32, 8192]
+│   └───Height: [32, 8192]
+├───Connectors
+│   └───Connector 0
+│       ├───Object ID: 41
+│       ├───Type: virtual
+│       ├───Status: connected
+│       ├───Physical size: 320×200 mm
+│       ├───Subpixel: unknown
+│       ├───Encoders: {0}
+│       ├───Modes
+│       │   ├───1280×800@74.99 preferred driver nhsync nvsync 
+│       │   ├───5120×2160@50.00 driver phsync pvsync 64:27 
+│       │   ├───4096×2160@50.00 driver phsync pvsync 256:135 
+│       │   ├───3840×2160@60.00 driver phsync pvsync 16:9 
+│       │   ├───3840×2160@59.94 driver phsync pvsync 16:9 
+│       │   ├───3840×2160@50.00 driver phsync pvsync 16:9 
+│       │   ├───1920×1440@60.00 driver nhsync pvsync 
+│       │   ├───2560×1080@50.00 driver phsync pvsync 64:27 
+│       │   ├───1856×1392@59.99 driver nhsync pvsync 
+│       │   ├───1792×1344@60.00 driver nhsync pvsync 
+│       │   ├───2048×1152@60.00 driver phsync pvsync 
+│       │   ├───1920×1200@59.88 driver nhsync pvsync 
+│       │   ├───1920×1080@60.00 driver nhsync nvsync 
+│       │   ├───1920×1080@50.00 driver phsync pvsync 16:9 
+│       │   ├───1600×1200@60.00 driver phsync pvsync 
+│       │   ├───1680×1050@59.95 driver nhsync pvsync 
+│       │   ├───1400×1050@59.98 driver nhsync pvsync 
+│       │   ├───1280×1024@60.02 driver phsync pvsync 
+│       │   ├───1440×900@59.89 driver nhsync pvsync 
+│       │   ├───1280×960@60.00 driver phsync pvsync 
+│       │   ├───1360×768@60.02 driver phsync pvsync 
+│       │   ├───1280×768@59.87 driver nhsync pvsync 
+│       │   ├───1024×768@60.00 driver nhsync nvsync 
+│       │   ├───800×600@60.32 driver phsync pvsync 
+│       │   ├───640×480@60.00 driver nhsync nvsync 4:3 
+│       │   └───640×480@59.94 driver nhsync nvsync 
+│       └───Properties
+│           ├───"DPMS": enum {On, Standby, Suspend, Off} = On
+│           ├───"link-status": enum {Good, Bad} = Good
+│           ├───"non-desktop" (immutable): range [0, 1] = 0
+│           ├───"TILE" (immutable): blob = 0
+│           ├───"CRTC_ID" (atomic): object CRTC = 40
+│           └───"EDID" (immutable): blob = 43
+│               ├───Manufacturer: Red Hat, Inc.
+│               ├───Model: QEMU Monitor
+│               └───Serial: Unknown
+├───Encoders
+│   └───Encoder 0
+│       ├───Object ID: 42
+│       ├───Type: virtual
+│       ├───CRTCS: {0}
+│       └───Clones: {0}
+├───CRTCs
+│   └───CRTC 0
+│       ├───Object ID: 40
+│       ├───Legacy info
+│       │   ├───Mode: 1280×800@74.99 preferred driver nhsync nvsync 
+│       │   └───Gamma size: 0
+│       └───Properties
+│           ├───"ACTIVE" (atomic): range [0, 1] = 1
+│           ├───"MODE_ID" (atomic): blob = 45
+│           │   └───1280×800@74.99 preferred driver nhsync nvsync 
+│           ├───"OUT_FENCE_PTR" (atomic): range [0, UINT64_MAX] = 0
+│           └───"VRR_ENABLED": range [0, 1] = 0
+└───Planes
+    ├───Plane 0
+    │   ├───Object ID: 35
+    │   ├───CRTCs: {0}
+    │   ├───Legacy info
+    │   │   ├───FB ID: 44
+    │   │   │   ├───Object ID: 44
+    │   │   │   ├───Size: 1280×800
+    │   │   │   ├───Format: XRGB8888 (0x34325258)
+    │   │   │   └───Planes:
+    │   │   │       └───Plane 0: offset = 0, pitch = 5120 bytes
+    │   │   └───Formats:
+    │   │       └───XRGB8888 (0x34325258)
+    │   └───Properties
+    │       ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Primary
+    │       ├───"FB_ID" (atomic): object framebuffer = 44
+    │       │   ├───Object ID: 44
+    │       │   ├───Size: 1280×800
+    │       │   ├───Format: XRGB8888 (0x34325258)
+    │       │   └───Planes:
+    │       │       └───Plane 0: offset = 0, pitch = 5120 bytes
+    │       ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+    │       ├───"CRTC_ID" (atomic): object CRTC = 40
+    │       ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+    │       ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 1280
+    │       ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 800
+    │       ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+    │       ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 1280
+    │       ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 800
+    │       └───"FB_DAMAGE_CLIPS" (atomic): blob = 46
+    └───Plane 1
+        ├───Object ID: 36
+        ├───CRTCs: {0}
+        ├───Legacy info
+        │   ├───FB ID: 0
+        │   └───Formats:
+        │       └───ARGB8888 (0x34325241)
+        └───Properties
+            ├───"type" (immutable): enum {Overlay, Primary, Cursor} = Cursor
+            ├───"FB_ID" (atomic): object framebuffer = 0
+            ├───"IN_FENCE_FD" (atomic): srange [-1, INT32_MAX] = -1
+            ├───"CRTC_ID" (atomic): object CRTC = 0
+            ├───"CRTC_X" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+            ├───"CRTC_Y" (atomic): srange [INT32_MIN, INT32_MAX] = 0
+            ├───"CRTC_W" (atomic): range [0, INT32_MAX] = 0
+            ├───"CRTC_H" (atomic): range [0, INT32_MAX] = 0
+            ├───"SRC_X" (atomic): range [0, UINT32_MAX] = 0
+            ├───"SRC_Y" (atomic): range [0, UINT32_MAX] = 0
+            ├───"SRC_W" (atomic): range [0, UINT32_MAX] = 0
+            ├───"SRC_H" (atomic): range [0, UINT32_MAX] = 0
+            ├───"HOTSPOT_X": srange [INT32_MIN, INT32_MAX] = 0
+            ├───"HOTSPOT_Y": srange [INT32_MIN, INT32_MAX] = 0
+            └───"pixel blend mode": enum {Pre-multiplied} = Pre-multiplied

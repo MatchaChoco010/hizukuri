@@ -1,0 +1,11 @@
+/target/
+# Captured frames and other verification artifacts.
+/artifacts/
+# Nix build results and direnv's cache.
+/result
+/result-*
+/.direnv/
+# Python bytecode caches.
+__pycache__/
+# What `proto-compositor build-shaders` writes into a project.
+.build/

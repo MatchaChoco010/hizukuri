@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+# Manage the verification VM for hizukuri: a QEMU/KVM guest in which the
+# compositor runs as a DRM/KMS session.
+#
+# The guest is a NixOS system described by guest.nix and built from the
+# nixpkgs commit that flake.lock pins. It has no disk: QEMU boots its kernel
+# directly, the root file system lives in memory, and /nix/store is shared
+# read-only from the machine that runs QEMU. Every start is the same guest.
+#
+# Needs: Linux with KVM (/dev/kvm) and Nix. QEMU, ssh, rsync and python come
+# from guest.nix as well. No GPU is needed.
+#
+# Everything this script creates lives under $VM_DIR (keys, logs, sockets,
+# and links to the Nix store) plus one QEMU process. It never uses sudo.
+#
+# See docs/dev/vm-environment.md.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+VM_DIR="${HIZUKURI_VM_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/hizukuri-vm}"
+VM_NAME="hizukuri-vm"
+VM_USER="hizukuri"
+
+VM_CPUS="${HIZUKURI_VM_CPUS:-4}"
+# The CPU model. `host,-hypervisor` hides the CPUID bit that tells a guest it
+# is one: software that tells real hardware from a VM by that bit then treats
+# the guest as real hardware (used to exercise hizukuri's real-hardware guard).
+VM_CPU="${HIZUKURI_VM_CPU:-host}"
+VM_MEMORY="${HIZUKURI_VM_MEMORY:-6G}"
+VM_XRES="${HIZUKURI_VM_XRES:-1280}"
+VM_YRES="${HIZUKURI_VM_YRES:-800}"
+VM_OUTPUTS="${HIZUKURI_VM_OUTPUTS:-2}"
+# Optional: another qemu-system-x86_64 than the one guest.nix provides.
+VM_QEMU="${HIZUKURI_VM_QEMU:-}"
+SSH_PORT_FIRST=22044
+SSH_PORT_LAST=22144
+
+MARKER="$VM_DIR/.hizukuri-vm"
+SYSTEM_LINK="$VM_DIR/system"
+TOOLS_LINK="$VM_DIR/host-tools"
+SSH_KEY="$VM_DIR/id_ed25519"
+KNOWN_HOSTS="$VM_DIR/known_hosts"
+RUN_DIR="$VM_DIR/run"
+LOG_DIR="$VM_DIR/log"
+SHOT_DIR="$VM_DIR/shots"
+PID_FILE="$RUN_DIR/qemu.pid"
+QMP_SOCK="$RUN_DIR/qmp.sock"
+VNC_SOCK="$RUN_DIR/vnc.sock"
+PORT_FILE="$RUN_DIR/ssh.port"
+MODE_FILE="$RUN_DIR/display.mode"
+LOCK_FILE="$VM_DIR/.lock"
+
+die() {
+    echo "vm: $*" >&2
+    exit 1
+}
+
+info() {
+    echo "vm: $*" >&2
+}
+
+usage() {
+    cat <<'EOF'
+Usage: tools/vm/vm <command> [args]
+
+Lifecycle
+  build                  Build the guest system and the tools this script runs
+                         (QEMU, ssh, rsync) with Nix, and make the SSH key of
+                         this VM. Idempotent; `start` does it as well.
+  start [--gtk]          Start the VM. Default: no window; the screen is read
+                         and input is sent through sockets. --gtk shows the
+                         guest in a window instead.
+  wait-ssh [SECONDS]     Wait until the guest accepts SSH (default 300 s).
+  status                 Show whether the VM runs, and how to reach it.
+  stop [--force]         Shut the guest down. --force skips the clean shutdown.
+  destroy [--yes]        Stop the VM and delete $VM_DIR. Without --yes it only
+                         lists what would be removed.
+  test [--keep] SCRIPT [ARGS...]
+                         One command for automated tests: start the VM if it is
+                         not running, wait for SSH, run SCRIPT on this machine
+                         (it uses the commands below through $HIZUKURI_VM),
+                         then stop the VM again if this command started it
+                         (--keep leaves it running). Exits with the script's
+                         status.
+
+Operation
+  ssh [CMD...]           Run a command in the guest (or open a shell).
+  push SRC... DEST       rsync files to the guest.
+  pull SRC DEST          rsync files from the guest.
+  tty-run [-t VT] [-e K=V]... [--seatd] [--wait] CMD...
+                         Start CMD in the guest on a virtual terminal with a real
+                         logind session (so libseat works). Returns immediately,
+                         or with --wait when CMD exits (with its exit status).
+  tty-log / tty-stop / tty-status
+                         Print the log of, stop, or inspect the tty-run unit.
+  screendump [--head N] [FILE.png]
+                         Capture the guest screen (not with --gtk).
+  pixels [--head N] X,Y...
+                         Print the RGB value of the guest screen at each point.
+  screen-size [--head N] Print the current guest mode as WIDTHxHEIGHT.
+  output HEAD on [WxH] | output HEAD off
+                         Connect or disconnect an output, as a monitor being
+                         plugged in or pulled. HEAD 0 is the first output.
+                         Outputs after the first start disconnected.
+  key KEYS...            Press key combos, e.g. `key a ctrl-alt-f2 ret`.
+  type TEXT              Type ASCII text.
+  move X Y               Move the pointer to an absolute pixel position (tablet).
+  rel DX DY              Move the pointer relatively (mouse).
+  click [left|right|middle]
+  button NAME down|up
+  scroll up|down [N]
+  qmp JSON               Send one raw QMP command and print the reply.
+
+Environment (read by `start`)
+  HIZUKURI_VM_DIR        Where keys, logs and sockets go
+                         (default $XDG_STATE_HOME/hizukuri-vm)
+  HIZUKURI_VM_OUTPUTS    Number of outputs of the virtual GPU (default 2)
+  HIZUKURI_VM_CPU        CPU model (default host; host,-hypervisor makes the
+                         guest look like real hardware to software that asks)
+  HIZUKURI_VM_CPUS, HIZUKURI_VM_MEMORY, HIZUKURI_VM_XRES, HIZUKURI_VM_YRES
+  HIZUKURI_VM_QEMU       Another qemu-system-x86_64 than the one of guest.nix
+EOF
+}
+
+# Print the PID of our QEMU if it is alive, verifying that the process really
+# is ours (it must carry our pidfile path on its command line). This guards
+# against stale pidfiles and, above all, against ever touching another VM.
+running_pid() {
+    local pid
+    [[ -f "$PID_FILE" ]] || return 1
+    pid="$(<"$PID_FILE")"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [[ -r "/proc/$pid/cmdline" ]] || return 1
+    tr '\0' '\n' <"/proc/$pid/cmdline" | grep -qxF -- "$PID_FILE" || return 1
+    echo "$pid"
+}
+
+# The tools of guest.nix come first on PATH, so that the same versions run
+# everywhere.
+use_host_tools() {
+    [[ -e "$TOOLS_LINK/bin" ]] || die "not built yet. Run: tools/vm/vm build"
+    case ":$PATH:" in
+        *":$TOOLS_LINK/bin:"*) ;;
+        *) PATH="$TOOLS_LINK/bin:$PATH" ;;
+    esac
+}
+
+ssh_port() {
+    [[ -f "$PORT_FILE" ]] || die "no SSH port recorded; is the VM running?"
+    cat "$PORT_FILE"
+}
+
+SSH_OPTS=()
+build_ssh_opts() {
+    # -F /dev/null: never read or depend on ~/.ssh/config.
+    SSH_OPTS=(
+        -F /dev/null
+        -i "$SSH_KEY"
+        -o IdentitiesOnly=yes
+        -o IdentityAgent=none
+        -o UserKnownHostsFile="$KNOWN_HOSTS"
+        -o GlobalKnownHostsFile=/dev/null
+        -o StrictHostKeyChecking=accept-new
+        -o PasswordAuthentication=no
+        -o ControlMaster=no
+        -o ControlPath=none
+        -o LogLevel=ERROR
+        -o ConnectTimeout=5
+        -o ServerAliveInterval=15
+    )
+}
+
+guest_ssh() {
+    use_host_tools
+    build_ssh_opts
+    ssh "${SSH_OPTS[@]}" -p "$(ssh_port)" "$VM_USER@127.0.0.1" "$@"
+}
+
+qmp() {
+    use_host_tools
+    [[ -S "$QMP_SOCK" ]] || die "no QMP socket; is the VM running?"
+    python3 -I "$SCRIPT_DIR/qmp.py" --socket "$QMP_SOCK" "$@"
+}
+
+free_port() {
+    local port
+    for ((port = SSH_PORT_FIRST; port <= SSH_PORT_LAST; port++)); do
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+            echo "$port"
+            return 0
+        fi
+    done
+    die "no free TCP port in $SSH_PORT_FIRST-$SSH_PORT_LAST"
+}
+
+cmd_build() {
+    command -v nix-build >/dev/null || die "Nix is needed (nix-build is not on PATH)"
+    mkdir -p "$VM_DIR"
+    chmod 700 "$VM_DIR"
+    mkdir -p "$RUN_DIR" "$LOG_DIR" "$SHOT_DIR"
+    : >>"$MARKER"
+
+    # The links keep the results from being garbage collected. What is not in
+    # the store yet is fetched from the binary cache; only the pieces that
+    # are specific to this guest are built here.
+    nix-build "$SCRIPT_DIR/guest.nix" -A hostTools --out-link "$TOOLS_LINK" >/dev/null
+    nix-build "$SCRIPT_DIR/guest.nix" -A system --out-link "$SYSTEM_LINK" >/dev/null
+    use_host_tools
+
+    # An SSH key used only for this VM. The guest receives the public half
+    # when it starts.
+    if [[ ! -f "$SSH_KEY" ]]; then
+        ssh-keygen -q -t ed25519 -N '' -C "$VM_NAME" -f "$SSH_KEY"
+    fi
+}
+
+cmd_start() {
+    local mode="headless" pid port display video system store
+    while (($#)); do
+        case "$1" in
+            --gtk) mode="gtk" ;;
+            --headless) mode="headless" ;;
+            *) die "unknown option for start: $1" ;;
+        esac
+        shift
+    done
+    mkdir -p "$VM_DIR"
+
+    # Serialize concurrent starts.
+    exec 9>"$LOCK_FILE"
+    flock -n 9 || die "another vm command holds the lock"
+
+    if pid="$(running_pid)"; then
+        info "already running (pid $pid, display $(cat "$MODE_FILE" 2>/dev/null || echo '?'))"
+        return 0
+    fi
+    [[ -r /dev/kvm && -w /dev/kvm ]] || die "KVM is not usable: /dev/kvm is missing or not writable for this user"
+
+    cmd_build
+    rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE"
+    # The guest makes a new host key every time it boots.
+    rm -f "$KNOWN_HOSTS"
+
+    system="$(readlink -f "$SYSTEM_LINK")"
+    store="$(dirname "$system")"
+    [[ "$store" == /nix/store ]] || die "the Nix store is at $store; the guest expects /nix/store"
+
+    port="$(free_port)"
+    local -a vnc_args=()
+    # virtio-gpu as a display only: the guest renders on the CPU (lavapipe).
+    video="virtio-vga,id=video0,xres=$VM_XRES,yres=$VM_YRES,max_outputs=$VM_OUTPUTS"
+
+    if [[ "$mode" == "gtk" ]]; then
+        display="gtk,show-cursor=on"
+    else
+        # The screen is read through a VNC server on a Unix socket; no TCP
+        # port is opened.
+        display="none"
+        vnc_args=(-vnc "unix:$VNC_SOCK")
+        # One more VNC server per additional output: it is how that output's
+        # screen is read, and how the output is connected (`vm output`). An
+        # output without a display attached stays disconnected in the guest.
+        local head
+        for ((head = 1; head < VM_OUTPUTS; head++)); do
+            vnc_args+=(-vnc "unix:$RUN_DIR/vnc-$head.sock,id=vnc$head,display=video0,head=$head")
+        done
+    fi
+
+    local -a args=(
+        -name "$VM_NAME"
+        -machine "q35,accel=kvm"
+        -cpu "$VM_CPU"
+        -smp "$VM_CPUS"
+        -m "$VM_MEMORY"
+        # No disk and no boot loader: the kernel and the initrd of the guest
+        # system are loaded directly, and the system is found in the store.
+        -kernel "$system/kernel"
+        -initrd "$system/initrd"
+        -append "init=$system/init console=ttyS0 $(<"$system/kernel-params")"
+        -virtfs "local,path=$store,security_model=none,readonly=on,mount_tag=nix-store"
+        -fw_cfg "name=opt/hizukuri/authorized_keys,file=$SSH_KEY.pub"
+        -vga none
+        -device "$video"
+        -display "$display"
+        "${vnc_args[@]}"
+        -device virtio-keyboard-pci
+        -device virtio-tablet-pci
+        -device virtio-mouse-pci
+        -device virtio-rng-pci
+        -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$port-:22"
+        -qmp "unix:$QMP_SOCK,server=on,wait=off"
+        -monitor none
+        -parallel none
+        -serial "file:$LOG_DIR/serial.log"
+        -D "$LOG_DIR/qemu.log"
+        -pidfile "$PID_FILE"
+        -daemonize
+    )
+
+    info "starting ($mode, ssh port $port)"
+    # 9>&-: the daemonized qemu must not inherit (and keep) the start lock.
+    if ! "${VM_QEMU:-qemu-system-x86_64}" "${args[@]}" 2>>"$LOG_DIR/qemu-stderr.log" 9>&-; then
+        tail -n 20 "$LOG_DIR/qemu-stderr.log" >&2 || true
+        die "qemu failed to start (see $LOG_DIR/qemu-stderr.log)"
+    fi
+    echo "$port" >"$PORT_FILE"
+    echo "$mode" >"$MODE_FILE"
+    pid="$(running_pid)" || die "qemu exited right after starting (see $LOG_DIR/qemu-stderr.log)"
+    info "running (pid $pid)"
+}
+
+cmd_wait_ssh() {
+    local timeout="${1:-300}" deadline
+    running_pid >/dev/null || die "the VM is not running"
+    deadline=$((SECONDS + timeout))
+    while ((SECONDS < deadline)); do
+        if guest_ssh true 2>/dev/null; then
+            info "ssh is up"
+            return 0
+        fi
+        running_pid >/dev/null || die "the VM stopped while waiting for ssh"
+        sleep 1
+    done
+    die "ssh did not come up within $timeout s (see $LOG_DIR/serial.log)"
+}
+
+cmd_status() {
+    local pid
+    if [[ ! -f "$MARKER" ]]; then
+        echo "state: not built ($VM_DIR)"
+        return 0
+    fi
+    if pid="$(running_pid)"; then
+        echo "state: running"
+        echo "pid: $pid"
+        echo "display: $(cat "$MODE_FILE" 2>/dev/null || echo '?')"
+        echo "ssh: $VM_USER@127.0.0.1 port $(cat "$PORT_FILE" 2>/dev/null || echo '?')"
+        echo "qmp: $QMP_SOCK"
+    else
+        echo "state: stopped"
+    fi
+    echo "dir: $VM_DIR"
+    if [[ -e "$SYSTEM_LINK" ]]; then
+        echo "system: $(readlink -f "$SYSTEM_LINK")"
+    fi
+}
+
+cmd_stop() {
+    local force=0 pid i
+    [[ "${1:-}" == "--force" ]] && force=1
+    if ! pid="$(running_pid)"; then
+        info "not running"
+        rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE"
+        return 0
+    fi
+    if ((force == 0)); then
+        info "asking the guest to power off"
+        guest_ssh sudo systemctl poweroff 2>/dev/null \
+            || qmp raw '{"execute":"system_powerdown"}' >/dev/null 2>&1 || true
+        for ((i = 0; i < 60; i++)); do
+            running_pid >/dev/null || break
+            sleep 1
+        done
+    fi
+    if running_pid >/dev/null; then
+        info "quitting qemu through QMP"
+        qmp raw '{"execute":"quit"}' >/dev/null 2>&1 || true
+        for ((i = 0; i < 10; i++)); do
+            running_pid >/dev/null || break
+            sleep 1
+        done
+    fi
+    if pid="$(running_pid)"; then
+        info "killing qemu (pid $pid)"
+        kill "$pid" || true
+        sleep 2
+        if pid="$(running_pid)"; then
+            kill -KILL "$pid" || true
+        fi
+    fi
+    rm -f "$PID_FILE" "$QMP_SOCK" "$VNC_SOCK" "$RUN_DIR"/vnc-*.sock "$PORT_FILE" "$MODE_FILE"
+    info "stopped"
+}
+
+cmd_destroy() {
+    local confirmed=0
+    [[ "${1:-}" == "--yes" ]] && confirmed=1
+    if [[ ! -e "$VM_DIR" ]]; then
+        info "nothing to destroy ($VM_DIR does not exist)"
+        return 0
+    fi
+    # Refuse to delete a directory this script did not create.
+    [[ -f "$MARKER" ]] || die "$VM_DIR has no marker file; refusing to delete it"
+    [[ "$VM_DIR" == /*/* && "$VM_DIR" != "$HOME" ]] || die "refusing to delete $VM_DIR"
+
+    echo "This will stop the VM and delete:"
+    echo "  $VM_DIR ($(du -sh "$VM_DIR" 2>/dev/null | cut -f1))"
+    find "$VM_DIR" -mindepth 1 -maxdepth 1 -printf '    %f\n' | sort
+    if ((confirmed == 0)); then
+        echo "Nothing was deleted. Re-run with: tools/vm/vm destroy --yes"
+        return 0
+    fi
+    cmd_stop --force
+    rm -rf -- "$VM_DIR"
+    info "deleted $VM_DIR (what was built stays in the Nix store until it is garbage collected)"
+}
+
+cmd_ssh() {
+    if (($# == 0)); then
+        guest_ssh
+    else
+        guest_ssh -- "$@"
+    fi
+}
+
+rsync_rsh() {
+    build_ssh_opts
+    local rsh="ssh -p $(ssh_port)" opt
+    for opt in "${SSH_OPTS[@]}"; do
+        rsh+=" $(printf '%q' "$opt")"
+    done
+    echo "$rsh"
+}
+
+cmd_push() {
+    use_host_tools
+    (($# >= 2)) || die "usage: push SRC... DEST"
+    local dest="${*: -1}"
+    local -a srcs=("${@:1:$#-1}")
+    rsync -a --info=stats0 -e "$(rsync_rsh)" -- "${srcs[@]}" "$VM_USER@127.0.0.1:$dest"
+}
+
+cmd_pull() {
+    use_host_tools
+    (($# == 2)) || die "usage: pull SRC DEST"
+    rsync -a --info=stats0 -e "$(rsync_rsh)" -- "$VM_USER@127.0.0.1:$1" "$2"
+}
+
+cmd_tty_run() {
+    local -a quoted=()
+    local arg
+    for arg in "$@"; do
+        quoted+=("$(printf '%q' "$arg")")
+    done
+    guest_ssh "tty-run ${quoted[*]}"
+}
+
+# The output (head) the screen commands talk to; set by `--head N`.
+VNC_HEAD=0
+
+vnc() {
+    use_host_tools
+    local sock="$VNC_SOCK"
+    ((VNC_HEAD > 0)) && sock="$RUN_DIR/vnc-$VNC_HEAD.sock"
+    [[ -S "$sock" ]] || die "no VNC socket for output $VNC_HEAD. The screen can be read when the \
+VM runs without a window, and for outputs below HIZUKURI_VM_OUTPUTS \
+(the VM is running with: $(cat "$MODE_FILE" 2>/dev/null || echo 'nothing'))"
+    python3 -I "$SCRIPT_DIR/vnc.py" --socket "$sock" "$@"
+}
+
+# Connects or disconnects an output as seen by the guest: a hotplug.
+cmd_output() {
+    (($# >= 2)) || die "usage: output HEAD on [WIDTHxHEIGHT] | output HEAD off"
+    VNC_HEAD="$1"
+    case "$2" in
+        on) vnc resize "${3:-${VM_XRES}x${VM_YRES}}" ;;
+        off) vnc resize 0x0 ;;
+        *) die "usage: output HEAD on [WIDTHxHEIGHT] | output HEAD off" ;;
+    esac
+}
+
+cmd_test() {
+    local keep=0 started=0 status=0
+    if [[ "${1:-}" == "--keep" ]]; then
+        keep=1
+        shift
+    fi
+    (($#)) || die "usage: test [--keep] SCRIPT [ARGS...]"
+    if ! running_pid >/dev/null; then
+        cmd_start
+        started=1
+    fi
+    cmd_wait_ssh 300
+
+    HIZUKURI_VM="$SCRIPT_DIR/vm" "$@" || status=$?
+
+    if ((started == 1 && keep == 0)); then
+        cmd_stop
+    fi
+    return "$status"
+}
+
+cmd_screendump() {
+    local out="${1:-$SHOT_DIR/shot-$(date +%Y%m%d-%H%M%S).png}"
+    mkdir -p "$(dirname "$out")"
+    out="$(realpath "$out")"
+    vnc shot "$out"
+    echo "$out"
+}
+
+cmd_move() {
+    (($# == 2)) || die "usage: move X Y"
+    # Absolute positions are scaled to the current guest mode.
+    qmp move --screen "$(vnc size)" "$1" "$2"
+}
+
+main() {
+    local cmd="${1:-}"
+    (($#)) && shift
+    case "$cmd" in
+        screendump | pixels | screen-size)
+            if [[ "${1:-}" == "--head" ]]; then
+                VNC_HEAD="$2"
+                shift 2
+            fi
+            ;;
+    esac
+    case "$cmd" in
+        build) cmd_build "$@" ;;
+        start) cmd_start "$@" ;;
+        wait-ssh) cmd_wait_ssh "$@" ;;
+        status) cmd_status "$@" ;;
+        stop) cmd_stop "$@" ;;
+        destroy) cmd_destroy "$@" ;;
+        test) cmd_test "$@" ;;
+        ssh) cmd_ssh "$@" ;;
+        push) cmd_push "$@" ;;
+        pull) cmd_pull "$@" ;;
+        tty-run) cmd_tty_run "$@" ;;
+        tty-log) guest_ssh 'tty-run --log' ;;
+        tty-stop) guest_ssh 'tty-run --stop' ;;
+        tty-status) guest_ssh 'tty-run --status' ;;
+        screendump) cmd_screendump "$@" ;;
+        pixels) vnc pixels "$@" ;;
+        screen-size) vnc size ;;
+        output) cmd_output "$@" ;;
+        move) cmd_move "$@" ;;
+        key | type | rel | click | button | scroll) qmp "$cmd" "$@" ;;
+        qmp) qmp raw "$@" ;;
+        "" | -h | --help | help) usage ;;
+        *) die "unknown command: $cmd (try --help)" ;;
+    esac
+}
+
+main "$@"

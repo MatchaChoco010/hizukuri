@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Gets the compositor into the verification VM, ready to be started by hand:
+# builds it, makes sure the VM runs, and sends the binaries, the built-in
+# scripts and the draw-only project to the guest.
+#
+#   tools/vm/try-hizukuri          VM without a window (SSH and QMP)
+#   tools/vm/try-hizukuri --gtk    VM in a window
+#   tools/vm/try-hizukuri --project DIR
+#                                  also send the script project in DIR (for
+#                                  example prototype/compositor/projects/animation),
+#                                  which `hzk project` runs. Again with
+#                                  --skip-build after editing it, then reload.
+#
+# Run it in the Nix development shell (`nix develop`): the guest has the
+# libraries of that shell, and a binary built against other libraries does
+# not start there.
+#
+# Then, in the guest: log in as hizukuri / hizukuri and run `hzk`.
+# See docs/dev/vm-environment.md.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+vm="$here/vm"
+
+display="headless"
+build=1
+project=""
+while (($#)); do
+    case "$1" in
+        --gtk) display="gtk" ;;
+        --skip-build) build=0 ;;
+        --project)
+            [[ $# -ge 2 ]] || { echo "try-hizukuri: --project needs a directory" >&2; exit 2; }
+            project="$2"
+            shift
+            ;;
+        -h | --help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "try-hizukuri: unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+if [[ -n "$project" && ! -f "$project/main.luau" ]]; then
+    echo "try-hizukuri: $project is not a script project (it has no main.luau)" >&2
+    exit 2
+fi
+
+target="${CARGO_TARGET_DIR:-$root/target}/debug"
+if ((build)); then
+    (cd "$root" && cargo build -j "${CARGO_BUILD_JOBS:-8}" -p proto-compositor -p proto-test-client)
+fi
+for name in proto-compositor proto-ctl proto-test-client; do
+    [[ -x "$target/$name" ]] || { echo "try-hizukuri: $target/$name is missing" >&2; exit 1; }
+done
+
+status="$("$vm" status)"
+# The display cannot be changed while the VM runs: restart it if it differs.
+if [[ "$status" == *"state: running"* && "$status" != *"display: $display"* ]]; then
+    "$vm" stop
+    status="state: stopped"
+fi
+if [[ "$status" != *"state: running"* ]]; then
+    if [[ "$display" == "gtk" ]]; then
+        "$vm" start --gtk
+    else
+        "$vm" start
+    fi
+fi
+"$vm" wait-ssh
+"$vm" ssh 'mkdir -p ~/bin'
+"$vm" push "$target/proto-compositor" "$target/proto-ctl" "$target/proto-test-client" bin/
+if ! "$vm" ssh '~/bin/proto-compositor --version' >/dev/null 2>&1; then
+    echo "try-hizukuri: the binary does not start in the guest. Build it in the Nix" >&2
+    echo "              development shell: nix develop --command tools/vm/try-hizukuri" >&2
+    exit 1
+fi
+# The projects' shaders, as SPIR-V in each project's .build/: the guest has
+# no Slang compiler, and the compositor reads only SPIR-V.
+shader_projects=("$root/prototype/compositor/scripts" "$root/prototype/compositor/projects/draw-only")
+if [[ -n "$project" ]]; then
+    shader_projects+=("$project")
+fi
+for dir in "${shader_projects[@]}"; do
+    "$target/proto-compositor" build-shaders "$dir"
+done
+# The built-in scripts as files, for `hzk script`. This copy is replaced
+# every time; the one that is edited in the guest (~/hzk-scripts) is made from
+# it by `hzk script` and is left alone here.
+"$vm" ssh 'rm -rf ~/hzk-scripts.orig && mkdir -p ~/hzk-scripts.orig'
+"$vm" push "$root/prototype/compositor/scripts/" hzk-scripts.orig/
+# The project `hzk` runs by default: the built-in renderer, without window
+# management, so that the core's fallback places the windows.
+"$vm" ssh 'rm -rf ~/hzk-draw-only && mkdir -p ~/hzk-draw-only'
+"$vm" push "$root/prototype/compositor/projects/draw-only/" hzk-draw-only/
+# A project of one's own, for `hzk project`. Replaced every time it is sent:
+# it is edited here, not in the guest.
+if [[ -n "$project" ]]; then
+    "$vm" ssh 'rm -rf ~/hzk-project && mkdir -p ~/hzk-project'
+    "$vm" push "${project%/}/" hzk-project/
+fi
+
+cat <<TEXT
+
+The VM runs ($display) and has the binaries. In the guest:
+  1. log in on the console: user hizukuri, password hizukuri
+  2. run:  hzk            (drawn on the CPU, copied into dumb buffers)
+     or:   hzk script     (drawing and tiling by the scripts in ~/hzk-scripts,
+                           which can be edited and reloaded while it runs)
+TEXT
+if [[ -n "$project" ]]; then
+    cat <<TEXT
+     or:   hzk project    (the project sent from $project)
+           After editing it here, send it again and reload it:
+             tools/vm/try-hizukuri --skip-build --project $project
+             tools/vm/vm ssh '~/bin/proto-ctl --socket /run/user/1000/hizukuri-0.control script-reload'
+           (or press Ctrl+Alt+Shift+R in the session)
+TEXT
+fi
+cat <<TEXT
+  3. Ctrl+Alt+Backspace quits. \`hzk --help\` lists the options.
+Stop the VM with: tools/vm/vm stop
+TEXT
+if [[ "$display" == "headless" ]]; then
+    echo "Without a window, the same thing: tools/vm/vm tty-run -- hzk"
+fi

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Runs inside the guest. Loads vkms (the virtual KMS driver) with every plane
+# type and the writeback connector, and prints its device node.
+#
+# vkms needs no VT and no seat: a user in the `video` group can open the node
+# and become DRM master, so KMS tests can run over plain SSH.
+set -euo pipefail
+
+if ! grep -qsx vkms /sys/kernel/debug/dri/*/name 2>/dev/null && ! lsmod | grep -q '^vkms '; then
+    # enable_plane_pipeline (per-plane color pipeline) exists on newer kernels only.
+    sudo modprobe vkms enable_cursor=1 enable_writeback=1 enable_overlay=1 enable_plane_pipeline=1 \
+        2>/dev/null \
+        || sudo modprobe vkms enable_cursor=1 enable_writeback=1 enable_overlay=1
+fi
+
+for name in /sys/class/drm/card*; do
+    [[ "$name" == *-* ]] && continue # connectors, not cards
+    if sudo grep -qs '^vkms' "/sys/kernel/debug/dri/${name##*card}/name"; then
+        udevadm settle
+        echo "/dev/dri/${name##*/}"
+        exit 0
+    fi
+done
+echo "vkms-load: no vkms card found" >&2
+exit 1
